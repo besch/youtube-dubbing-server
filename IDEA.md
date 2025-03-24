@@ -125,6 +125,8 @@ make this app efficient regarding resources and costs.I
 app ux/ui should be simple and clean, impeccable and very easy to use.
 app should work properly on all android and ios devices.
 in app settings user should be able to choose language and voice.
+if e.g. diarization output with have e.g. two speakers, e.g. male and female, I want to generate audio accordingly
+make code modular and reusable. I might want to replace openai tts with azure tts in the future(add azure tts, but dont use it)
 user should be able to see watched history.
 user should be able to to add video to favorites. if added to favorites keep generated audio files for 30 days along with transcriptions.
 give me a complete schema.sql file for supabase.
