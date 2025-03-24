@@ -1,5 +1,6 @@
 import Replicate from "replicate";
 import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
 import fs from "fs";
 import { PassThrough } from "stream";
 import { config } from "@/config";
@@ -16,6 +17,11 @@ const replicate = new Replicate({
 
 const openai = new OpenAI({
   apiKey: config.openai.apiKey,
+});
+
+// Initialize Anthropic client for translations
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
 // Azure TTS setup (not used by default but available if needed)
@@ -51,6 +57,71 @@ export async function transcribeAudio(
     console.error("Error transcribing audio:", error);
     throw appErrors.TRANSCRIPTION_ERROR;
   }
+}
+
+// Translate text using Anthropic's Claude API
+export async function translateText(
+  text: string,
+  sourceLanguage: string,
+  targetLanguage: string
+): Promise<string> {
+  try {
+    // Get language names instead of codes
+    const sourceLangName = getLanguageName(sourceLanguage);
+    const targetLangName = getLanguageName(targetLanguage);
+
+    const response = await anthropic.messages.create({
+      model: "claude-3-haiku-20240307",
+      max_tokens: 2000,
+      messages: [
+        {
+          role: "user",
+          content: `Translate the following text from ${sourceLangName} to ${targetLangName}. 
+            Maintain the natural flow and meaning of the original text.
+            Preserve any speaker indicators or contextual information.
+            Keep the translation concise and suitable for voice dubbing.
+            
+            ${text}`,
+        },
+      ],
+      temperature: 0.3,
+    });
+
+    // Extract the text content from response
+    if (
+      response.content &&
+      response.content.length > 0 &&
+      "text" in response.content[0]
+    ) {
+      return response.content[0].text;
+    }
+
+    throw new Error("Invalid response format from translation API");
+  } catch (error) {
+    console.error("Error translating text:", error);
+    throw appErrors.TRANSLATION_ERROR;
+  }
+}
+
+// Helper to get language name from code
+function getLanguageName(code: string): string {
+  const languages: Record<string, string> = {
+    en: "English",
+    es: "Spanish",
+    fr: "French",
+    de: "German",
+    it: "Italian",
+    pt: "Portuguese",
+    ru: "Russian",
+    ja: "Japanese",
+    zh: "Chinese",
+    ko: "Korean",
+    ar: "Arabic",
+    pl: "Polish",
+    // Add more languages as needed
+  };
+
+  return languages[code] || code;
 }
 
 // Generate speech using OpenAI TTS

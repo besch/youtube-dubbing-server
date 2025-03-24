@@ -37,6 +37,10 @@ export const appErrors = {
     code: "TRANSCRIPTION_ERROR",
     message: "Error transcribing video",
   },
+  TRANSLATION_ERROR: {
+    code: "TRANSLATION_ERROR",
+    message: "Error translating content",
+  },
   TTS_ERROR: {
     code: "TTS_ERROR",
     message: "Error generating speech",

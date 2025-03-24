@@ -12,7 +12,11 @@ import {
   isValidYoutubeUrl,
 } from "@/lib/youtube";
 import { config } from "@/config";
-import { generateAndUploadSpeech, transcribeAudio } from "@/lib/ai-services";
+import {
+  generateAndUploadSpeech,
+  transcribeAudio,
+  translateText,
+} from "@/lib/ai-services";
 import { Voice } from "@/types";
 import { randomUUID } from "crypto";
 
@@ -289,9 +293,28 @@ export const getAudioChunk = action
       }
 
       // Generate a combined text from all segments
-      const combinedText = relevantSegments
+      let combinedText = relevantSegments
         .map((segment: any) => segment.text)
         .join(" ");
+
+      // Translate text if target language is different from transcription language
+      // We assume transcription is in the original video language, typically English
+      const transcriptionLanguage = "en"; // Default language for transcription
+      if (language !== transcriptionLanguage) {
+        try {
+          console.log(
+            `Translating from ${transcriptionLanguage} to ${language}`
+          );
+          combinedText = await translateText(
+            combinedText,
+            transcriptionLanguage,
+            language
+          );
+        } catch (error) {
+          console.error("Translation error:", error);
+          // Continue with original text if translation fails
+        }
+      }
 
       // Generate and upload the audio
       const storagePath = await generateAndUploadSpeech(
