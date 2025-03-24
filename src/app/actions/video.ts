@@ -8,9 +8,9 @@ import { createAdminClient, createServerClient } from "@/lib/supabase";
 import {
   downloadAudio,
   extractYoutubeId,
-  getVideoInfo,
   isValidYoutubeUrl,
 } from "@/lib/youtube";
+import { getVideoDetails } from "@/lib/youtube-api";
 import { config } from "@/config";
 import {
   generateAndUploadSpeech,
@@ -69,8 +69,8 @@ export const processYoutubeUrl = action
       if (existingVideo) {
         dbVideoId = existingVideo.id;
       } else {
-        // Get video info from YouTube
-        const videoInfo = await getVideoInfo(videoId);
+        // Get video info from YouTube Data API
+        const videoInfo = await getVideoDetails(videoId);
 
         // Insert into the database
         const { data: newVideo, error } = await adminClient
