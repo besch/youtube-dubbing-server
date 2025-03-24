@@ -129,3 +129,4 @@ user should be able to see watched history.
 user should be able to to add video to favorites. if added to favorites keep generated audio files for 30 days along with transcriptions.
 give me a complete schema.sql file for supabase.
 think about edge cases that I forget to mention.
+now complete all tasks above till the end.
