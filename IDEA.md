@@ -1,4 +1,4 @@
-I have two folders "mobile" and "server".
+I have two folders "mobile" and "server". I already created nextjs project and react-native project.
 
 We're gonna create mobile app that uses react-native and expo to create a youtube dubbing app. Server using nextjs and supabase.
 
