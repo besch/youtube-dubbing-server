@@ -5,7 +5,7 @@ import { google } from "npm:googleapis";
 // Create a YouTube client
 const youtube = google.youtube({
   version: "v3",
-  auth: Deno.env.get("AIzaSyDZTAJWyiwHAAvXVmhFaSTNu0FnwOuRPck"),
+  auth: Deno.env.get("YOUTUBE_API_KEY"),
 });
 
 // Convert ISO 8601 duration format to seconds
