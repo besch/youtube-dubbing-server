@@ -3,7 +3,6 @@ import { promisify } from "util";
 import fs from "fs";
 import path from "path";
 import os from "os";
-import { createWriteStream } from "fs";
 import { YoutubeVideoInfo } from "@/types";
 import { appErrors } from "@/types/actions";
 

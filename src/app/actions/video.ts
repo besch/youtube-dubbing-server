@@ -2,23 +2,20 @@
 
 import { createSafeActionClient } from "next-safe-action";
 import { z } from "zod";
-import type { ActionResponse } from "@/types/actions";
 import { appErrors } from "@/types/actions";
-import { createAdminClient, createServerClient } from "@/lib/supabase";
 import {
-  downloadAudio,
   extractYoutubeId,
   isValidYoutubeUrl,
+  getVideoInfo,
+  downloadAudio,
 } from "@/lib/youtube";
-import { getVideoDetails } from "@/lib/youtube-api";
-import { config } from "@/config";
+import { createAdminClient, createServerClient } from "@/lib/supabase";
 import {
-  generateAndUploadSpeech,
   transcribeAudio,
   translateText,
+  generateAndUploadSpeech,
 } from "@/lib/ai-services";
-import { Voice } from "@/types";
-import { randomUUID } from "crypto";
+import { Voice, TranscriptionSegment } from "@/types";
 
 const action = createSafeActionClient();
 
@@ -70,7 +67,7 @@ export const processYoutubeUrl = action
         dbVideoId = existingVideo.id;
       } else {
         // Get video info from YouTube Data API
-        const videoInfo = await getVideoDetails(videoId);
+        const videoInfo = await getVideoInfo(videoId);
 
         // Insert into the database
         const { data: newVideo, error } = await adminClient
@@ -191,7 +188,7 @@ export const getAudioChunk = action
         .gte("chunk_end", endTime)
         .single();
 
-      let transcriptionData: any;
+      let transcriptionData: TranscriptionSegment[];
 
       if (existingTranscription) {
         // Use existing transcription
@@ -228,7 +225,7 @@ export const getAudioChunk = action
       // Filter segments that are within our time range
       const relevantSegments = Array.isArray(transcriptionData)
         ? transcriptionData.filter(
-            (segment: any) =>
+            (segment: TranscriptionSegment) =>
               segment.start >= startTime && segment.end <= endTime
           )
         : [];
@@ -261,7 +258,11 @@ export const getAudioChunk = action
       // Map speakers to voices if multiple speakers
       if (relevantSegments.length > 0) {
         const speakers = [
-          ...new Set(relevantSegments.map((segment: any) => segment.speaker)),
+          ...new Set(
+            relevantSegments.map(
+              (segment: TranscriptionSegment) => segment.speaker
+            )
+          ),
         ];
 
         if (speakers.length > 1) {
@@ -294,7 +295,7 @@ export const getAudioChunk = action
 
       // Generate a combined text from all segments
       let combinedText = relevantSegments
-        .map((segment: any) => segment.text)
+        .map((segment: TranscriptionSegment) => segment.text)
         .join(" ");
 
       // Translate text if target language is different from transcription language

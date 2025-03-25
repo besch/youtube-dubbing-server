@@ -2,13 +2,11 @@ import Replicate from "replicate";
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import fs from "fs";
-import { PassThrough } from "stream";
 import { config } from "@/config";
 import { TranscriptionSegment, Voice } from "@/types";
 import { appErrors } from "@/types/actions";
 import { createAdminClient } from "./supabase";
-import { createHash } from "crypto";
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 
 // Set up clients
 const replicate = new Replicate({
@@ -23,10 +21,6 @@ const openai = new OpenAI({
 const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
-
-// Azure TTS setup (not used by default but available if needed)
-const azureSpeechKey = process.env.AZURE_SPEECH_KEY;
-const azureSpeechRegion = process.env.AZURE_SPEECH_REGION;
 
 // Transcribe and diarize audio using Replicate
 export async function transcribeAudio(

@@ -5,7 +5,7 @@ export interface AppError {
 }
 
 // Response type for server actions
-export interface ActionResponse<T = any> {
+export interface ActionResponse<T = unknown> {
   success: boolean;
   data?: T;
   error?: AppError;

@@ -2,7 +2,6 @@
 
 import { createSafeActionClient } from "next-safe-action";
 import { z } from "zod";
-import type { ActionResponse } from "@/types/actions";
 import { appErrors } from "@/types/actions";
 import { searchYoutubeVideos } from "@/lib/youtube-api";
 
