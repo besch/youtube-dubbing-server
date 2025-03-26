@@ -6,22 +6,13 @@ import { extractYoutubeAudio } from "@/lib/aws-services";
 
 export async function POST(request: Request) {
   try {
-    // Check authentication
+    // Create supabase clients
     const supabase = createServerClient();
-    const { data: session } = await supabase.auth.getSession();
+    const adminClient = createAdminClient();
 
-    if (!session?.session) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: {
-            code: "AUTHENTICATION_ERROR",
-            message: "You must be logged in to perform this action",
-          },
-        },
-        { status: 401 }
-      );
-    }
+    // Check if user is authenticated (but don't require it)
+    const { data: session } = await supabase.auth.getSession();
+    const userId = session?.session?.user.id;
 
     // Parse request body
     const { url, language, voice } = await request.json();
@@ -70,7 +61,6 @@ export async function POST(request: Request) {
     }
 
     // Get or create video info
-    const adminClient = createAdminClient();
     const { data: existingVideo } = await adminClient
       .from("videos")
       .select("*")
@@ -124,15 +114,17 @@ export async function POST(request: Request) {
       dbVideoId = newVideo.id;
     }
 
-    // Add to user's history
-    await adminClient.from("history").upsert({
-      user_id: session.session.user.id,
-      video_id: dbVideoId,
-      language,
-      voice,
-      watched_at: new Date().toISOString(),
-      last_position: 0,
-    });
+    // Add to user's history if authenticated
+    if (userId) {
+      await adminClient.from("history").upsert({
+        user_id: userId,
+        video_id: dbVideoId,
+        language,
+        voice,
+        watched_at: new Date().toISOString(),
+        last_position: 0,
+      });
+    }
 
     return NextResponse.json({
       success: true,

@@ -12,49 +12,6 @@ serve(async (req) => {
     // Create supabase client
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Get the user from the request (Supabase Auth)
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
-      return new Response(
-        JSON.stringify({
-          success: false,
-          error: {
-            code: "UNAUTHORIZED",
-            message: "Unauthorized request",
-          },
-        }),
-        {
-          status: 401,
-          headers: { "Content-Type": "application/json" },
-        }
-      );
-    }
-
-    // Extract the JWT token
-    const token = authHeader.replace("Bearer ", "");
-
-    // Verify the user
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser(token);
-
-    if (userError || !user) {
-      return new Response(
-        JSON.stringify({
-          success: false,
-          error: {
-            code: "UNAUTHORIZED",
-            message: "Invalid authentication token",
-          },
-        }),
-        {
-          status: 401,
-          headers: { "Content-Type": "application/json" },
-        }
-      );
-    }
-
     // Get request body
     const { videoId, dbVideoId, startTime, endTime, language, voice } =
       await req.json();
@@ -82,12 +39,16 @@ serve(async (req) => {
       );
     }
 
+    // Get auth token if available, but don't require it
+    const authHeader = req.headers.get("Authorization");
+    const token = authHeader ? authHeader.replace("Bearer ", "") : null;
+
     // Forward request to the Next.js API
     const response = await fetch(`${nextjsApiUrl}/api/youtube/audio-chunk`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
+        ...(token && { Authorization: `Bearer ${token}` }),
       },
       body: JSON.stringify({
         videoId,

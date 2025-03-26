@@ -10,22 +10,13 @@ import {
 
 export async function POST(request: Request) {
   try {
-    // Check authentication
+    // Create Supabase clients
     const supabase = createServerClient();
-    const { data: session } = await supabase.auth.getSession();
+    const adminClient = createAdminClient();
 
-    if (!session?.session) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: {
-            code: "AUTHENTICATION_ERROR",
-            message: "You must be logged in to perform this action",
-          },
-        },
-        { status: 401 }
-      );
-    }
+    // Check if user is authenticated (but don't require it)
+    const { data: session } = await supabase.auth.getSession();
+    const userId = session?.session?.user.id;
 
     // Parse request body
     const { videoId, dbVideoId, startTime, endTime, language, voice } =
@@ -52,7 +43,6 @@ export async function POST(request: Request) {
     }
 
     // Check if we already have this audio chunk
-    const adminClient = createAdminClient();
     const { data: existingChunk } = await adminClient
       .from("audio_chunks")
       .select("*")
@@ -169,17 +159,20 @@ export async function POST(request: Request) {
       );
     }
 
-    // Check if the user has favorited this video
-    const { data: favorite } = await adminClient
-      .from("favorites")
-      .select("*")
-      .eq("user_id", session.session.user.id)
-      .eq("video_id", dbVideoId)
-      .eq("language", language)
-      .eq("voice", voice)
-      .single();
+    // Check if the user has favorited this video (if authenticated)
+    let isFavorite = false;
+    if (userId) {
+      const { data: favorite } = await adminClient
+        .from("favorites")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("video_id", dbVideoId)
+        .eq("language", language)
+        .eq("voice", voice)
+        .single();
 
-    const isFavorite = !!favorite;
+      isFavorite = !!favorite;
+    }
 
     // Generate a combined text from all segments
     let combinedText = relevantSegments
