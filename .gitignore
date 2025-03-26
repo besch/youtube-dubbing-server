@@ -43,3 +43,5 @@ next-env.d.ts
 # supabase
 .deno-dir
 supabase/.temp
+
+/lambda/youtube-extractor/node_modules

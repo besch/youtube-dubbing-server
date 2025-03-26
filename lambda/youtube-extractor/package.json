@@ -1,0 +1,12 @@
+{
+  "name": "youtube-extractor",
+  "version": "1.0.0",
+  "description": "AWS Lambda function to extract audio from YouTube videos",
+  "main": "index.js",
+  "dependencies": {
+    "aws-sdk": "^2.1463.0",
+    "uuid": "^9.0.0"
+  },
+  "author": "",
+  "license": "MIT"
+}

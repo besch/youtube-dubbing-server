@@ -7,6 +7,14 @@ import { TranscriptionSegment, Voice } from "@/types";
 import { appErrors } from "@/types/actions";
 import { createAdminClient } from "./supabase";
 import { createHash, randomUUID } from "crypto";
+import axios from "axios";
+import stream from "stream";
+import { promisify } from "util";
+import path from "path";
+import { getAudioUrl } from "./youtube";
+import { checkS3ObjectExists } from "./aws-services";
+
+const pipeline = promisify(stream.pipeline);
 
 // Set up clients
 const replicate = new Replicate({
@@ -22,16 +30,47 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
+// Helper function to download a file from a URL
+async function downloadFile(url: string, outputPath: string): Promise<void> {
+  const response = await axios({
+    method: "GET",
+    url: url,
+    responseType: "stream",
+  });
+
+  await pipeline(response.data, fs.createWriteStream(outputPath));
+}
+
 // Transcribe and diarize audio using Replicate
 export async function transcribeAudio(
-  audioPath: string,
+  audioSource: string,
   language = "en",
   numSpeakers = 2
 ): Promise<TranscriptionSegment[]> {
   try {
-    // Read audio file as base64
-    const audioBuffer = await fs.promises.readFile(audioPath);
-    const base64Audio = audioBuffer.toString("base64");
+    let base64Audio: string;
+    let tempFilePath: string | null = null;
+
+    // Check if audioSource is a S3 key
+    if (audioSource.startsWith("youtube-audio/")) {
+      // It's an S3 key, we need to download it first
+      const exists = await checkS3ObjectExists(audioSource);
+      if (!exists) {
+        throw new Error("Audio file does not exist in S3");
+      }
+
+      const audioUrl = await getAudioUrl(audioSource);
+      tempFilePath = `/tmp/${randomUUID()}.mp3`;
+      await downloadFile(audioUrl, tempFilePath);
+
+      // Read the downloaded file
+      const audioBuffer = await fs.promises.readFile(tempFilePath);
+      base64Audio = audioBuffer.toString("base64");
+    } else {
+      // It's a local file path
+      const audioBuffer = await fs.promises.readFile(audioSource);
+      base64Audio = audioBuffer.toString("base64");
+    }
 
     // Call Replicate API
     const output = await replicate.run(
@@ -45,6 +84,11 @@ export async function transcribeAudio(
         },
       }
     );
+
+    // Clean up the temp file if we created one
+    if (tempFilePath && fs.existsSync(tempFilePath)) {
+      await fs.promises.unlink(tempFilePath);
+    }
 
     return output as TranscriptionSegment[];
   } catch (error) {

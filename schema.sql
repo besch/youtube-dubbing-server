@@ -149,6 +149,26 @@ create policy "Audio chunks are accessible to everyone"
   on storage.objects for select
   using ( bucket_id = 'audio_chunks' );
 
+-- Audio extracts from S3
+create table public.audio_extracts (
+  id uuid default gen_random_uuid() primary key,
+  youtube_id text not null,
+  start_time float not null,
+  end_time float not null,
+  s3_key text not null,
+  created_at timestamp with time zone default now() not null,
+  expiry_at timestamp with time zone default now() + interval '7 days' not null,
+  unique(youtube_id, s3_key)
+);
+
+-- Enable RLS
+alter table public.audio_extracts enable row level security;
+
+-- Secure the table
+create policy "Audio extracts are viewable by everyone" 
+  on audio_extracts for select 
+  using ( true );
+
 -- Function to clean up expired audio chunks and transcriptions
 create or replace function cleanup_expired_resources()
 returns void as $$
@@ -163,6 +183,9 @@ begin
   
   -- Delete expired transcriptions
   delete from public.transcriptions where expiry_at < now() and is_favorite = false;
+  
+  -- Delete expired audio extracts
+  delete from public.audio_extracts where expiry_at < now();
 end;
 $$ language plpgsql security definer;
 

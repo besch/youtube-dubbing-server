@@ -5,6 +5,8 @@ import path from "path";
 import os from "os";
 import { YoutubeVideoInfo } from "@/types";
 import { appErrors } from "@/types/actions";
+import { extractYoutubeAudio, getS3PreSignedUrl } from "./aws-services";
+import { createAdminClient } from "./supabase";
 
 const execAsync = promisify(exec);
 
@@ -36,65 +38,75 @@ export async function ensureTempDir() {
   return tempDir;
 }
 
-// Get video info from YouTube
+// Get video info from YouTube using YouTube API
+// We now use YouTube API instead of yt-dlp
 export async function getVideoInfo(videoId: string): Promise<YoutubeVideoInfo> {
-  const tempDir = await ensureTempDir();
-  const outputPath = path.join(tempDir, `${videoId}-info.json`);
-
   try {
-    // Use yt-dlp to get video info
-    await execAsync(
-      `yt-dlp -J "https://www.youtube.com/watch?v=${videoId}" > "${outputPath}"`
-    );
-
-    // Read and parse the info
-    const infoData = await fs.promises.readFile(outputPath, "utf-8");
-    const info = JSON.parse(infoData);
-
-    return {
-      id: videoId,
-      title: info.title,
-      description: info.description,
-      thumbnail_url: info.thumbnail,
-      duration: info.duration,
-    };
+    // Use YouTube API from youtube-api.ts
+    const { getVideoDetails } = await import("./youtube-api");
+    return await getVideoDetails(videoId);
   } catch (error) {
     console.error("Error getting video info:", error);
     throw appErrors.VIDEO_NOT_FOUND;
-  } finally {
-    // Clean up the info file
-    try {
-      if (fs.existsSync(outputPath)) {
-        await fs.promises.unlink(outputPath);
-      }
-    } catch (error) {
-      console.error("Error cleaning up info file:", error);
-    }
   }
 }
 
-// Download audio from YouTube video
+// Download audio from YouTube video using AWS Lambda
 export async function downloadAudio(
   videoId: string,
   startTime: number,
   endTime: number
 ): Promise<string> {
-  const tempDir = await ensureTempDir();
-  const outputPath = path.join(
-    tempDir,
-    `${videoId}-${startTime}-${endTime}.mp3`
-  );
-
   try {
-    // Use yt-dlp to download the specified portion of the video as audio
-    await execAsync(
-      `yt-dlp -x --audio-format mp3 --postprocessor-args "-ss ${startTime} -to ${endTime}" -o "${outputPath}" "https://www.youtube.com/watch?v=${videoId}"`
+    // Check if we already have this audio chunk in Supabase storage
+    const adminClient = createAdminClient();
+    const { data: existingChunk } = await adminClient
+      .from("audio_extracts")
+      .select("*")
+      .eq("youtube_id", videoId)
+      .gte("start_time", startTime - 1) // Allow for small variations
+      .lte("end_time", endTime + 1)
+      .single();
+
+    if (existingChunk) {
+      // We already have this chunk
+      return existingChunk.s3_key;
+    }
+
+    // Otherwise, extract audio using AWS Lambda
+    const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const { success, s3Key, error } = await extractYoutubeAudio(
+      youtubeUrl,
+      videoId
     );
 
-    return outputPath;
+    if (!success || !s3Key) {
+      console.error("Error extracting audio:", error);
+      throw appErrors.DOWNLOAD_ERROR;
+    }
+
+    // Save the audio extract info in database
+    await adminClient.from("audio_extracts").insert({
+      youtube_id: videoId,
+      start_time: startTime,
+      end_time: endTime,
+      s3_key: s3Key,
+    });
+
+    return s3Key;
   } catch (error) {
     console.error("Error downloading audio:", error);
     throw appErrors.DOWNLOAD_ERROR;
+  }
+}
+
+// Get a signed URL for a S3 audio file
+export async function getAudioUrl(s3Key: string): Promise<string> {
+  try {
+    return await getS3PreSignedUrl(s3Key);
+  } catch (error) {
+    console.error("Error getting audio URL:", error);
+    throw appErrors.UNEXPECTED_ERROR;
   }
 }
 
