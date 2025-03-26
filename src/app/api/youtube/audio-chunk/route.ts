@@ -11,18 +11,55 @@ import {
 export async function POST(request: Request) {
   try {
     console.log("Getting audio chunk", request);
+
     // Create Supabase clients
+    console.log("Creating Supabase clients");
     const supabase = createServerClient();
     const adminClient = createAdminClient();
 
     // Check if user is authenticated (but don't require it)
+    console.log("Checking authentication");
     const { data: session } = await supabase.auth.getSession();
     const userId = session?.session?.user.id;
+    console.log(
+      "Authentication check complete, userId:",
+      userId ? "authenticated" : "none"
+    );
 
     // Parse request body
-    const { videoId, dbVideoId, startTime, endTime, language, voice } =
-      await request.json();
+    console.log("Parsing request body");
+    let body;
+    try {
+      body = await request.json();
+      console.log("Request body:", JSON.stringify(body));
+    } catch (e) {
+      console.error("Error parsing request body:", e);
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: "INVALID_JSON",
+            message: "Invalid JSON in request body",
+          },
+        },
+        { status: 400 }
+      );
+    }
 
+    const { videoId, dbVideoId, startTime, endTime, language, voice } = body;
+
+    // TEMPORARY: Return a mock response for testing
+    console.log("Returning mock response for testing");
+    return NextResponse.json({
+      success: true,
+      data: {
+        url: "https://assets.mixkit.co/sfx/preview/mixkit-simple-countdown-922.mp3", // Public sample audio URL
+        startTime: startTime || 0,
+        endTime: endTime || 30,
+      },
+    });
+
+    // Parameter validation
     if (
       !videoId ||
       !dbVideoId ||
@@ -31,6 +68,7 @@ export async function POST(request: Request) {
       !language ||
       !voice
     ) {
+      console.log("Missing required parameters");
       return NextResponse.json(
         {
           success: false,
@@ -44,6 +82,7 @@ export async function POST(request: Request) {
     }
 
     // Check if we already have this audio chunk
+    console.log("Checking for existing audio chunk");
     const { data: existingChunk } = await adminClient
       .from("audio_chunks")
       .select("*")
@@ -56,6 +95,7 @@ export async function POST(request: Request) {
 
     if (existingChunk) {
       // We already have this chunk, return the URL
+      console.log("Found existing audio chunk");
       const {
         data: { publicUrl },
       } = adminClient.storage
@@ -73,6 +113,7 @@ export async function POST(request: Request) {
     }
 
     // Check if we have a transcription for this time range
+    console.log("Checking for existing transcription");
     const { data: existingTranscription } = await adminClient
       .from("transcriptions")
       .select("*")
@@ -85,9 +126,11 @@ export async function POST(request: Request) {
 
     if (existingTranscription) {
       // Use existing transcription
+      console.log("Using existing transcription");
       transcriptionData = existingTranscription.content;
     } else {
       // We need to find the audio extract for this video
+      console.log("Looking for audio extract");
       const { data: audioExtract } = await adminClient
         .from("audio_extracts")
         .select("*")
@@ -98,6 +141,7 @@ export async function POST(request: Request) {
         .single();
 
       if (!audioExtract) {
+        console.log("Audio extract not found");
         return NextResponse.json(
           {
             success: false,
@@ -112,12 +156,14 @@ export async function POST(request: Request) {
       }
 
       // Transcribe the audio
+      console.log("Transcribing audio");
       const transcription = await transcribeAudio(
         audioExtract.s3_key,
         language
       );
 
       // Save the transcription
+      console.log("Saving transcription");
       const expiryAt = new Date();
       expiryAt.setDate(expiryAt.getDate() + 1); // 24 hours by default
 
@@ -140,6 +186,7 @@ export async function POST(request: Request) {
 
     // Generate text to speak based on the transcription
     // Filter segments that are within our time range
+    console.log("Filtering relevant segments");
     const relevantSegments = Array.isArray(transcriptionData)
       ? transcriptionData.filter(
           (segment: TranscriptionSegment) =>
@@ -148,6 +195,7 @@ export async function POST(request: Request) {
       : [];
 
     if (relevantSegments.length === 0) {
+      console.log("No speech content found");
       return NextResponse.json(
         {
           success: false,
@@ -161,6 +209,7 @@ export async function POST(request: Request) {
     }
 
     // Check if the user has favorited this video (if authenticated)
+    console.log("Checking favorite status");
     let isFavorite = false;
     if (userId) {
       const { data: favorite } = await adminClient
@@ -176,6 +225,7 @@ export async function POST(request: Request) {
     }
 
     // Generate a combined text from all segments
+    console.log("Generating combined text");
     let combinedText = relevantSegments
       .map((segment: TranscriptionSegment) => segment.text)
       .join(" ");
@@ -198,6 +248,7 @@ export async function POST(request: Request) {
     }
 
     // Generate and upload the audio
+    console.log("Generating and uploading speech");
     const storagePath = await generateAndUploadSpeech(
       combinedText,
       voice as Voice,
@@ -209,6 +260,7 @@ export async function POST(request: Request) {
     );
 
     // Get the public URL
+    console.log("Getting public URL");
     const {
       data: { publicUrl },
     } = adminClient.storage.from("audio_chunks").getPublicUrl(storagePath);
