@@ -48,14 +48,29 @@ export async function POST(request: Request) {
 
     const { videoId, dbVideoId, startTime, endTime, language, voice } = body;
 
-    // TEMPORARY: Return a mock response for testing
-    console.log("Returning mock response for testing");
+    // TEMPORARY: Return a mock response using our local MP3 file
+    console.log("Returning response with local MP3 file");
+
+    // Get the base URL from the request
+    const protocol = request.headers.get("x-forwarded-proto") || "https";
+    const host =
+      request.headers.get("x-forwarded-host") ||
+      request.headers.get("host") ||
+      "localhost:3000";
+    const baseUrl = `${protocol}://${host}`;
+
+    // Path to our local MP3 file
+    const audioUrl = `${baseUrl}/audio/mixkit-tech-house-vibes-130.mp3`;
+
+    console.log("Audio URL:", audioUrl);
+
     return NextResponse.json({
       success: true,
       data: {
-        url: "https://assets.mixkit.co/sfx/preview/mixkit-simple-countdown-922.mp3", // Public sample audio URL
+        url: audioUrl,
         startTime: startTime || 0,
         endTime: endTime || 30,
+        isLocalFile: true,
       },
     });
 
