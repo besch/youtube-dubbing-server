@@ -10,6 +10,7 @@ import {
 
 export async function POST(request: Request) {
   try {
+    console.log("Getting audio chunk", request);
     // Create Supabase clients
     const supabase = createServerClient();
     const adminClient = createAdminClient();
