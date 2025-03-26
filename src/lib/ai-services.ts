@@ -10,7 +10,6 @@ import { createHash, randomUUID } from "crypto";
 import axios from "axios";
 import stream from "stream";
 import { promisify } from "util";
-import path from "path";
 import { getAudioUrl } from "./youtube";
 import { checkS3ObjectExists } from "./aws-services";
 

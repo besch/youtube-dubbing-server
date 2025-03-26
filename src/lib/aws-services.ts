@@ -1,4 +1,8 @@
-import { S3Client, GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
+import {
+  S3Client,
+  GetObjectCommand,
+  HeadObjectCommand,
+} from "@aws-sdk/client-s3";
 import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
 import { config } from "@/config";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -55,9 +59,7 @@ export async function extractYoutubeAudio(youtubeUrl: string, videoId: string) {
     });
 
     const { Payload } = await lambdaClient.send(command);
-    const result = JSON.parse(
-      new TextDecoder().decode(Payload as Uint8Array)
-    );
+    const result = JSON.parse(new TextDecoder().decode(Payload as Uint8Array));
     const body = JSON.parse(result.body);
 
     if (!body.success) {
@@ -82,6 +84,7 @@ export async function checkS3ObjectExists(s3Key: string): Promise<boolean> {
     await s3Client.send(command);
     return true;
   } catch (error) {
+    console.log(error);
     return false;
   }
 }
@@ -102,4 +105,4 @@ export async function getS3PreSignedUrl(
   });
 
   return await getSignedUrl(s3Client, command, { expiresIn });
-} 
+}
