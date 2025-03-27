@@ -7,6 +7,7 @@ import { LambdaClient, InvokeCommand } from "@aws-sdk/client-lambda";
 import { config } from "@/config";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import fetch from "node-fetch";
+import { createAdminClient } from "./supabase";
 
 const s3Client = new S3Client({
   region: config.aws.region,
@@ -23,6 +24,8 @@ const lambdaClient = new LambdaClient({
  * @returns The S3 key and URL of the extracted audio file
  */
 export async function extractYoutubeAudio(youtubeUrl: string, videoId: string) {
+  let result;
+
   if (config.aws.apiGatewayUrl) {
     // If API Gateway URL is provided, use it
     const response = await fetch(config.aws.apiGatewayUrl, {
@@ -43,7 +46,7 @@ export async function extractYoutubeAudio(youtubeUrl: string, videoId: string) {
       );
     }
 
-    return await response.json();
+    result = await response.json();
   } else {
     // Otherwise, invoke Lambda directly
     const payload = JSON.stringify({
@@ -59,15 +62,32 @@ export async function extractYoutubeAudio(youtubeUrl: string, videoId: string) {
     });
 
     const { Payload } = await lambdaClient.send(command);
-    const result = JSON.parse(new TextDecoder().decode(Payload as Uint8Array));
-    const body = JSON.parse(result.body);
+    const lambdaResult = JSON.parse(
+      new TextDecoder().decode(Payload as Uint8Array)
+    );
+    result = JSON.parse(lambdaResult.body);
 
-    if (!body.success) {
-      throw new Error(`Failed to extract audio: ${body.error}`);
+    if (!result.success) {
+      throw new Error(`Failed to extract audio: ${result.error}`);
     }
-
-    return body;
   }
+
+  // Store the audio extract information in the database
+  const supabase = createAdminClient();
+  const { error } = await supabase.from("audio_extracts").insert({
+    youtube_id: videoId,
+    start_time: 0, // Assume the extract starts at the beginning
+    end_time: 3600, // Assume the extract is up to 1 hour long (this is a placeholder)
+    s3_key: result.s3Key,
+    expiry_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), // 7 days from now
+  });
+
+  if (error) {
+    console.error("Error storing audio extract info:", error);
+    // Continue even if there's an error storing the info
+  }
+
+  return result;
 }
 
 /**

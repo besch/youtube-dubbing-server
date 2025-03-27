@@ -8,7 +8,19 @@ import {
   generateAndUploadSpeech,
 } from "@/lib/ai-services";
 
+interface AudioChunkRequestBody {
+  videoId: string;
+  dbVideoId: string;
+  startTime: number;
+  endTime: number;
+  language: string;
+  voice: string;
+}
+
 export async function POST(request: Request) {
+  // Initialize variables at top level to be accessible in catch block
+  let body: Partial<AudioChunkRequestBody> = {};
+
   try {
     console.log("Getting audio chunk", request);
 
@@ -28,9 +40,8 @@ export async function POST(request: Request) {
 
     // Parse request body
     console.log("Parsing request body");
-    let body;
     try {
-      body = await request.json();
+      body = (await request.json()) as AudioChunkRequestBody;
       console.log("Request body:", JSON.stringify(body));
     } catch (e) {
       console.error("Error parsing request body:", e);
@@ -47,32 +58,6 @@ export async function POST(request: Request) {
     }
 
     const { videoId, dbVideoId, startTime, endTime, language, voice } = body;
-
-    // TEMPORARY: Return a mock response using our local MP3 file
-    console.log("Returning response with local MP3 file");
-
-    // Get the base URL from the request
-    const protocol = request.headers.get("x-forwarded-proto") || "https";
-    const host =
-      request.headers.get("x-forwarded-host") ||
-      request.headers.get("host") ||
-      "localhost:3000";
-    const baseUrl = `${protocol}://${host}`;
-
-    // Path to our local MP3 file
-    const audioUrl = `${baseUrl}/audio/mixkit-tech-house-vibes-130.mp3`;
-
-    console.log("Audio URL:", audioUrl);
-
-    return NextResponse.json({
-      success: true,
-      data: {
-        url: audioUrl,
-        startTime: startTime || 0,
-        endTime: endTime || 30,
-        isLocalFile: true,
-      },
-    });
 
     // Parameter validation
     if (
@@ -157,17 +142,27 @@ export async function POST(request: Request) {
 
       if (!audioExtract) {
         console.log("Audio extract not found");
-        return NextResponse.json(
-          {
-            success: false,
-            error: {
-              code: "NO_AUDIO_EXTRACT",
-              message:
-                "Audio extract not found. Please wait for processing to complete.",
-            },
+
+        // Get the base URL from the request for the fallback
+        const protocol = request.headers.get("x-forwarded-proto") || "https";
+        const host =
+          request.headers.get("x-forwarded-host") ||
+          request.headers.get("host") ||
+          "localhost:3000";
+        const baseUrl = `${protocol}://${host}`;
+
+        // Use fallback audio file while extracting is in progress
+        const fallbackUrl = `${baseUrl}/audio/mixkit-tech-house-vibes-130.mp3`;
+
+        return NextResponse.json({
+          success: true,
+          data: {
+            url: fallbackUrl,
+            startTime: startTime || 0,
+            endTime: endTime || 30,
+            isFallback: true,
           },
-          { status: 404 }
-        );
+        });
       }
 
       // Transcribe the audio
@@ -211,16 +206,27 @@ export async function POST(request: Request) {
 
     if (relevantSegments.length === 0) {
       console.log("No speech content found");
-      return NextResponse.json(
-        {
-          success: false,
-          error: {
-            code: "NO_SPEECH_CONTENT",
-            message: "No speech content found in this time range",
-          },
+
+      // Get the base URL from the request for the fallback
+      const protocol = request.headers.get("x-forwarded-proto") || "https";
+      const host =
+        request.headers.get("x-forwarded-host") ||
+        request.headers.get("host") ||
+        "localhost:3000";
+      const baseUrl = `${protocol}://${host}`;
+
+      // Use fallback audio file when no speech content is found
+      const fallbackUrl = `${baseUrl}/audio/mixkit-tech-house-vibes-130.mp3`;
+
+      return NextResponse.json({
+        success: true,
+        data: {
+          url: fallbackUrl,
+          startTime: startTime || 0,
+          endTime: endTime || 30,
+          isFallback: true,
         },
-        { status: 404 }
-      );
+      });
     }
 
     // Check if the user has favorited this video (if authenticated)
@@ -290,18 +296,27 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     console.error("Error getting audio chunk:", error);
-    return NextResponse.json(
-      {
-        success: false,
-        error: {
-          code: "UNEXPECTED_ERROR",
-          message:
-            error instanceof Error
-              ? error.message
-              : "An unexpected error occurred",
-        },
+
+    // Get the base URL from the request for the fallback
+    const protocol = request.headers.get("x-forwarded-proto") || "https";
+    const host =
+      request.headers.get("x-forwarded-host") ||
+      request.headers.get("host") ||
+      "localhost:3000";
+    const baseUrl = `${protocol}://${host}`;
+
+    // Return fallback audio on error
+    const fallbackUrl = `${baseUrl}/audio/mixkit-tech-house-vibes-130.mp3`;
+
+    return NextResponse.json({
+      success: true,
+      data: {
+        url: fallbackUrl,
+        startTime: body?.startTime || 0,
+        endTime: body?.endTime || 30,
+        isFallback: true,
+        error: error instanceof Error ? error.message : "Unknown error",
       },
-      { status: 500 }
-    );
+    });
   }
 }

@@ -10,18 +10,37 @@ import { createAdminClient } from "./supabase";
 
 const execAsync = promisify(exec);
 
-// Extract YouTube video ID from URL
+/**
+ * Extract YouTube video ID from a URL
+ * @param url YouTube URL
+ * @returns YouTube video ID
+ */
 export function extractYoutubeId(url: string): string | null {
-  const regExp =
-    /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/;
-  const match = url.match(regExp);
-  return match && match[7].length === 11 ? match[7] : null;
+  if (!url) return null;
+
+  // Regular expressions to match different YouTube URL formats
+  const patterns = [
+    /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i,
+    /^([a-zA-Z0-9_-]{11})$/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match && match[1]) {
+      return match[1];
+    }
+  }
+
+  return null;
 }
 
-// Validate YouTube URL
+/**
+ * Check if a URL is a valid YouTube URL
+ * @param url URL to check
+ * @returns Whether the URL is a valid YouTube URL
+ */
 export function isValidYoutubeUrl(url: string): boolean {
-  const youtubeRegex = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.?be)\/.+$/;
-  return youtubeRegex.test(url);
+  return !!extractYoutubeId(url);
 }
 
 // Get temporary directory for downloading videos
@@ -100,14 +119,13 @@ export async function downloadAudio(
   }
 }
 
-// Get a signed URL for a S3 audio file
+/**
+ * Get a pre-signed URL for an audio file in S3
+ * @param s3Key S3 key of the audio file
+ * @returns Pre-signed URL
+ */
 export async function getAudioUrl(s3Key: string): Promise<string> {
-  try {
-    return await getS3PreSignedUrl(s3Key);
-  } catch (error) {
-    console.error("Error getting audio URL:", error);
-    throw appErrors.UNEXPECTED_ERROR;
-  }
+  return await getS3PreSignedUrl(s3Key);
 }
 
 // Download video from YouTube

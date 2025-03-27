@@ -45,7 +45,7 @@ cd lambda/youtube-extractor
 npm install
 ```
 
-2. Follow the deployment instructions in the `lambda/youtube-extractor/README.md` file to build and deploy the Docker image to AWS Lambda.
+2. Build and push the Docker image to ECR (follow the README.md in the lambda directory).
 
 3. Create an S3 bucket for storing audio:
 
@@ -53,12 +53,82 @@ npm install
 aws s3 mb s3://youtube-dubbing-audio
 ```
 
-4. Configure IAM permissions for the Lambda function:
+4. Set up API Gateway to expose the Lambda function:
 
-   - S3 access for uploading audio files
-   - CloudWatch Logs for logging
+```
+# Create a resource for the YouTube endpoint
+aws apigateway create-resource \
+  --rest-api-id <API_ID> \
+  --parent-id <PARENT_ID> \
+  --path-part youtube
 
-5. Update your `.env.local` file with the AWS configuration variables.
+# Set up a POST method
+aws apigateway put-method \
+  --rest-api-id <API_ID> \
+  --resource-id <RESOURCE_ID> \
+  --http-method POST \
+  --authorization-type NONE
+
+# Connect the method to the Lambda function
+aws apigateway put-integration \
+  --rest-api-id <API_ID> \
+  --resource-id <RESOURCE_ID> \
+  --http-method POST \
+  --type AWS_PROXY \
+  --integration-http-method POST \
+  --uri arn:aws:apigateway:<REGION>:lambda:path/2015-03-31/functions/arn:aws:lambda:<REGION>:<ACCOUNT_ID>:function:youtube-extractor/invocations
+
+# Deploy the API
+aws apigateway create-deployment \
+  --rest-api-id <API_ID> \
+  --stage-name prod
+
+# Grant API Gateway permission to invoke the Lambda function
+aws lambda add-permission \
+  --function-name youtube-extractor \
+  --statement-id apigateway-test \
+  --action lambda:InvokeFunction \
+  --principal apigateway.amazonaws.com \
+  --source-arn "arn:aws:execute-api:<REGION>:<ACCOUNT_ID>:<API_ID>/*/POST/youtube"
+```
+
+5. Update your `.env.local` file with the AWS configuration variables:
+
+```
+AWS_REGION=us-east-1
+AWS_LAMBDA_FUNCTION_NAME=youtube-extractor
+S3_BUCKET_NAME=youtube-dubbing-audio
+AWS_API_GATEWAY_URL=https://<API_ID>.execute-api.<REGION>.amazonaws.com/prod/youtube
+```
+
+## YouTube Dubbing System Architecture
+
+The application uses the following workflow for dubbing YouTube videos:
+
+1. User selects a video in the mobile app
+2. Server extracts audio using AWS Lambda and stores it in S3
+3. Video audio is transcribed using Replicate's Whisper model
+4. Transcription is optionally translated to target language using Anthropic Claude
+5. Audio is generated with OpenAI TTS in the selected voice/language
+6. Audio chunks are stored in Supabase storage for streaming
+7. Mobile app plays the dubbed audio in sync with the YouTube video
+
+### Audio Chunking
+
+For better performance, the system:
+
+- Extracts full audio from the video upfront
+- Transcribes in real-time as the user watches
+- Generates audio in 30-second chunks as needed
+- Caches chunks for reuse and better performance
+
+### Handling Missing Audio
+
+The system uses a fallback audio file in cases where:
+
+- Audio extraction is still in progress
+- No speech content is found in the time range
+- An unexpected error occurs during processing
 
 ## Supabase Setup
 
