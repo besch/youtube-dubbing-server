@@ -143,6 +143,28 @@ export async function POST(request: Request) {
       if (!audioExtract) {
         console.log("Audio extract not found");
 
+        // Try to initiate audio extraction
+        try {
+          console.log("Initiating audio extraction for video:", videoId);
+          const { extractYoutubeAudio } = await import("@/lib/aws-services");
+
+          // Start extraction process in the background
+          extractYoutubeAudio(
+            `https://www.youtube.com/watch?v=${videoId}`,
+            videoId
+          )
+            .then((result) => {
+              console.log("Audio extraction initiated successfully:", result);
+            })
+            .catch((error) => {
+              console.error("Failed to initiate audio extraction:", error);
+            });
+
+          console.log("Audio extraction process started in background");
+        } catch (extractionError) {
+          console.error("Error initiating audio extraction:", extractionError);
+        }
+
         // Get the base URL from the request for the fallback
         const protocol = request.headers.get("x-forwarded-proto") || "https";
         const host =
@@ -161,6 +183,8 @@ export async function POST(request: Request) {
             startTime: startTime || 0,
             endTime: endTime || 30,
             isFallback: true,
+            message:
+              "Audio extraction in progress, please try again in a moment",
           },
         });
       }

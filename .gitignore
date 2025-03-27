@@ -45,3 +45,4 @@ next-env.d.ts
 supabase/.temp
 
 /lambda/youtube-extractor/node_modules
+.vercel
