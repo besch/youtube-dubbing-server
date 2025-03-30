@@ -5,7 +5,6 @@ import path from "path";
 import os from "os";
 import { YoutubeVideoInfo } from "@/types";
 import { appErrors } from "@/types/actions";
-import { extractYoutubeAudio, getS3PreSignedUrl } from "./aws-services";
 import { createAdminClient } from "./supabase";
 
 const execAsync = promisify(exec);
@@ -80,7 +79,7 @@ export async function downloadAudio(
     // Check if we already have this audio chunk in Supabase storage
     const adminClient = createAdminClient();
     const { data: existingChunk } = await adminClient
-      .from("audio_extracts")
+      .from("yotube-audio")
       .select("*")
       .eq("youtube_id", videoId)
       .gte("start_time", startTime - 1) // Allow for small variations
@@ -94,38 +93,17 @@ export async function downloadAudio(
 
     // Otherwise, extract audio using AWS Lambda
     const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
-    const { success, s3Key, error } = await extractYoutubeAudio(
-      youtubeUrl,
-      videoId
-    );
-
-    if (!success || !s3Key) {
-      console.error("Error extracting audio:", error);
-      throw appErrors.DOWNLOAD_ERROR;
-    }
 
     // Save the audio extract info in database
-    await adminClient.from("audio_extracts").insert({
+    await adminClient.from("yotube-audio").insert({
       youtube_id: videoId,
       start_time: startTime,
       end_time: endTime,
-      s3_key: s3Key,
     });
-
-    return s3Key;
   } catch (error) {
     console.error("Error downloading audio:", error);
     throw appErrors.DOWNLOAD_ERROR;
   }
-}
-
-/**
- * Get a pre-signed URL for an audio file in S3
- * @param s3Key S3 key of the audio file
- * @returns Pre-signed URL
- */
-export async function getAudioUrl(s3Key: string): Promise<string> {
-  return await getS3PreSignedUrl(s3Key);
 }
 
 // Download video from YouTube

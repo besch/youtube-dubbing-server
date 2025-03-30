@@ -132,7 +132,7 @@ export async function POST(request: Request) {
       // We need to find the audio extract for this video
       console.log("Looking for audio extract");
       const { data: audioExtract } = await adminClient
-        .from("audio_extracts")
+        .from("youtube_audio")
         .select("*")
         .eq("youtube_id", videoId)
         .gte("end_time", endTime)

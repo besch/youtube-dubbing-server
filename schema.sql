@@ -101,28 +101,6 @@ create policy "Users can delete their own favorites"
   on favorites for delete 
   using ( auth.uid() = user_id );
 
--- Audio chunks
-create table public.audio_chunks (
-  id uuid default gen_random_uuid() primary key,
-  video_id uuid references public.videos(id) on delete cascade not null,
-  language text not null,
-  voice text not null,
-  start_time float not null,
-  end_time float not null,
-  storage_path text not null,
-  created_at timestamp with time zone default now() not null,
-  expiry_at timestamp with time zone not null,
-  is_favorite boolean default false not null
-);
-
--- Enable RLS
-alter table public.audio_chunks enable row level security;
-
--- Secure the tables
-create policy "Audio chunks are viewable by everyone" 
-  on audio_chunks for select 
-  using ( true );
-
 -- Transcriptions
 create table public.transcriptions (
   id uuid default gen_random_uuid() primary key,
@@ -143,49 +121,33 @@ create policy "Transcriptions are viewable by everyone"
   on transcriptions for select 
   using ( true );
 
--- Setup storage
-insert into storage.buckets (id, name, public) values ('audio_chunks', 'audio_chunks', true);
-create policy "Audio chunks are accessible to everyone"
-  on storage.objects for select
-  using ( bucket_id = 'audio_chunks' );
-
 -- Audio extracts from S3
-create table public.audio_extracts (
+create table public.youtube_audio (
   id uuid default gen_random_uuid() primary key,
   youtube_id text not null,
-  start_time float not null,
-  end_time float not null,
-  s3_key text not null,
   created_at timestamp with time zone default now() not null,
   expiry_at timestamp with time zone default now() + interval '7 days' not null,
-  unique(youtube_id, s3_key)
+  unique(youtube_id)
 );
 
 -- Enable RLS
-alter table public.audio_extracts enable row level security;
+alter table public.youtube_audio enable row level security;
 
 -- Secure the table
 create policy "Audio extracts are viewable by everyone" 
-  on audio_extracts for select 
+  on youtube_audio for select 
   using ( true );
 
 -- Function to clean up expired audio chunks and transcriptions
 create or replace function cleanup_expired_resources()
 returns void as $$
 begin
-  -- Delete expired audio chunks from storage
-  delete from storage.objects
-  where bucket_id = 'audio_chunks' and
-        path in (select storage_path from public.audio_chunks where expiry_at < now());
-  
-  -- Delete expired audio chunks records
-  delete from public.audio_chunks where expiry_at < now() and is_favorite = false;
   
   -- Delete expired transcriptions
   delete from public.transcriptions where expiry_at < now() and is_favorite = false;
   
   -- Delete expired audio extracts
-  delete from public.audio_extracts where expiry_at < now();
+  delete from public.youtube_audio where expiry_at < now();
 end;
 $$ language plpgsql security definer;
 

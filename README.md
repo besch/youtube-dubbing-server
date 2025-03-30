@@ -150,7 +150,7 @@ supabase secrets set NEXTJS_API_URL=https://your-vercel-deployment-url
 ## API Routes
 
 - `POST /api/youtube/process` - Process a YouTube URL
-- `POST /api/youtube/audio-chunk` - Get an audio chunk for a specific time range
+- `POST /api/youtube/yotube-audio` - Get an audio chunk for a specific time range
 - `POST /api/update-history` - Update watch history
 - `POST /api/toggle-favorite` - Toggle favorite status for a video
 

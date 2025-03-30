@@ -11,14 +11,6 @@ export const config = {
     anonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY as string,
     serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY as string,
   },
-  aws: {
-    region: process.env.AWS_REGION || "us-east-1",
-    lambdaFunctionName:
-      process.env.AWS_LAMBDA_FUNCTION_NAME || "youtube-extractor",
-    s3BucketName: process.env.S3_BUCKET_NAME || "youtube-dubbing-audio",
-    apiGatewayUrl: process.env.AWS_API_GATEWAY_URL,
-  },
-
   // YouTube processing
   youtube: {
     chunkDuration: 5 * 60, // 5 minutes in seconds
