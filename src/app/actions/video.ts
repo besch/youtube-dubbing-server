@@ -9,6 +9,7 @@ import type { ActionResponse } from "@/types/actions";
 import { appErrors, AppErrorCode } from "@/types/actions";
 import { supabaseServerClient } from "@/lib/supabase/server";
 import type { Database } from "@/types/supabase";
+import { openai, translateTextOpenAI } from "@/lib/openai";
 
 const action = createSafeActionClient();
 
@@ -597,6 +598,284 @@ export const startTranscription = action
             );
           }
         }
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        return {
+          success: false,
+          error: { ...appErrors.UNEXPECTED_ERROR, details: errorMessage },
+        };
+      }
+    }
+  );
+
+// --- Types for Replicate Output ---
+interface TranscriptionSegment {
+  start: number;
+  end: number;
+  text: string;
+  speaker?: string;
+}
+
+// --- generateAudioChunk Action --- //
+
+type OpenAiTtsVoice = "alloy" | "echo" | "fable" | "onyx" | "nova" | "shimmer";
+// Use a tuple for Zod enum
+const OPENAI_TTS_VOICES: [OpenAiTtsVoice, ...OpenAiTtsVoice[]] = [
+  "alloy",
+  "echo",
+  "fable",
+  "onyx",
+  "nova",
+  "shimmer",
+];
+
+const generateAudioChunkSchema = z.object({
+  videoId: z.string().uuid(),
+  language: z.string(),
+  voice: z.enum(OPENAI_TTS_VOICES), // Use the tuple here
+  // Fix Zod enum usage in record value
+  speakerVoiceMap: z.record(z.enum(OPENAI_TTS_VOICES)).optional(),
+  startTime: z.number().min(0),
+  endTime: z.number().min(0),
+  originalLanguage: z.string().optional().default("en"),
+});
+
+type GenerateAudioChunkInput = z.infer<typeof generateAudioChunkSchema>;
+type GenerateAudioChunkOutput = {
+  storagePath: string;
+  publicUrl: string;
+  startTime: number;
+  endTime: number;
+};
+
+export const generateAudioChunk = action
+  .schema(generateAudioChunkSchema)
+  .action(
+    async ({
+      parsedInput,
+    }): Promise<ActionResponse<GenerateAudioChunkOutput>> => {
+      const {
+        videoId,
+        language,
+        voice,
+        speakerVoiceMap,
+        startTime,
+        endTime,
+        originalLanguage,
+      } = parsedInput;
+
+      try {
+        // 1. Fetch Completed Transcription Content
+        const { data: transcription, error: transcriptionError } =
+          await supabaseServerClient
+            .from("transcriptions")
+            .select("content, is_favorite")
+            .eq("video_id", videoId)
+            .eq("status", "completed")
+            .single();
+
+        if (transcriptionError || !transcription?.content) {
+          console.error(
+            `Completed transcription not found or content missing for video ${videoId}:`,
+            transcriptionError
+          );
+          return {
+            success: false,
+            error: {
+              ...appErrors.NOT_FOUND,
+              message: "Completed transcription not found.",
+            },
+          };
+        }
+
+        // Use safer type assertion for JSON content
+        const allSegments =
+          transcription.content as unknown as TranscriptionSegment[];
+        const isVideoFavorite = transcription.is_favorite ?? false;
+
+        // 2. Filter Relevant Segments
+        const relevantSegments = allSegments.filter(
+          (segment) => segment.end > startTime && segment.start < endTime
+        );
+
+        if (relevantSegments.length === 0) {
+          console.log(
+            `No transcription segments found between ${startTime}s and ${endTime}s for video ${videoId}.`
+          );
+          return {
+            success: false,
+            error: {
+              code: AppErrorCode.NOT_FOUND,
+              message: "No text content found for the requested time range.",
+            },
+          };
+        }
+
+        // 3. Combine Text and Handle Translation
+        const combinedText = relevantSegments
+          .map((seg) => seg.text)
+          .join(" ")
+          .trim();
+
+        if (!combinedText) {
+          console.log(
+            `Combined text is empty for range ${startTime}-${endTime} in video ${videoId}.`
+          );
+          return {
+            success: false,
+            error: {
+              code: AppErrorCode.NOT_FOUND,
+              message: "No text content found for the requested time range.",
+            },
+          };
+        }
+
+        let textToSpeak = combinedText;
+        if (language !== originalLanguage) {
+          const translated = await translateTextOpenAI(
+            combinedText,
+            originalLanguage,
+            language
+          );
+          if (translated === null) {
+            return {
+              success: false,
+              error: {
+                ...appErrors.OPENAI_ERROR,
+                message: "Translation failed.",
+              },
+            };
+          }
+          textToSpeak = translated;
+        }
+
+        // 4. Generate TTS using OpenAI
+        const chosenVoice: OpenAiTtsVoice = voice;
+
+        if (!openai.apiKey) {
+          return {
+            success: false,
+            error: {
+              ...appErrors.OPENAI_ERROR,
+              message: "OpenAI API key not configured.",
+            },
+          };
+        }
+
+        let audioBuffer: Buffer;
+        try {
+          const mp3 = await openai.audio.speech.create({
+            model: "tts-1",
+            voice: chosenVoice,
+            input: textToSpeak,
+            response_format: "mp3",
+          });
+          audioBuffer = Buffer.from(await mp3.arrayBuffer());
+        } catch (ttsError) {
+          console.error(
+            `OpenAI TTS generation failed for video ${videoId} range ${startTime}-${endTime}:`,
+            ttsError
+          );
+          const errorMessage =
+            ttsError instanceof Error ? ttsError.message : String(ttsError);
+          return {
+            success: false,
+            error: { ...appErrors.OPENAI_ERROR, details: errorMessage },
+          };
+        }
+
+        // 5. Upload Audio Chunk to Supabase Storage
+        const storageBucket = "translated-audio";
+        const storageFileName = `${videoId}/${language}/${chosenVoice}/${startTime.toFixed(
+          2
+        )}_${endTime.toFixed(2)}.mp3`;
+
+        try {
+          const { error: uploadError } = await supabaseServerClient.storage
+            .from(storageBucket)
+            .upload(storageFileName, audioBuffer, {
+              contentType: "audio/mpeg",
+              upsert: true,
+            });
+
+          if (uploadError) {
+            throw uploadError;
+          }
+          console.log(
+            `Uploaded audio chunk to ${storageBucket}/${storageFileName}`
+          );
+        } catch (storageError) {
+          console.error(
+            `Failed to upload audio chunk ${storageFileName} to Supabase Storage:`,
+            storageError
+          );
+          const errorMessage =
+            storageError instanceof Error
+              ? storageError.message
+              : String(storageError);
+          return {
+            success: false,
+            error: {
+              ...appErrors.SUPABASE_STORAGE_ERROR,
+              details: errorMessage,
+            },
+          };
+        }
+
+        // 6. Create Record in translated_audio_chunks Table
+        const chunkData = {
+          video_id: videoId,
+          language: language,
+          voice: chosenVoice, // This assignment is type-safe
+          chunk_start: startTime,
+          chunk_end: endTime,
+          storage_path: `${storageBucket}/${storageFileName}`,
+          is_favorite: isVideoFavorite,
+          expiry_at: isVideoFavorite
+            ? null
+            : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        };
+
+        const { error: dbInsertError } = await supabaseServerClient
+          .from("translated_audio_chunks")
+          .upsert(chunkData, {
+            onConflict: "video_id, language, voice, chunk_start, chunk_end",
+          });
+
+        if (dbInsertError) {
+          console.error(
+            `Error saving translated audio chunk record for video ${videoId}:`,
+            dbInsertError
+          );
+          return {
+            success: false,
+            error: {
+              ...appErrors.DATABASE_ERROR,
+              details: dbInsertError.message,
+            },
+          };
+        }
+
+        // 7. Get Public URL
+        const { data: urlData } = supabaseServerClient.storage
+          .from(storageBucket)
+          .getPublicUrl(storageFileName);
+
+        console.log(
+          `Generated audio chunk for video ${videoId}, range ${startTime}-${endTime}, lang ${language}, voice ${chosenVoice}.`
+        );
+
+        return {
+          success: true,
+          data: {
+            storagePath: `${storageBucket}/${storageFileName}`,
+            publicUrl: urlData?.publicUrl || "",
+            startTime: startTime,
+            endTime: endTime,
+          },
+        };
+      } catch (error) {
+        console.error("Unexpected error in generateAudioChunk:", error);
         const errorMessage =
           error instanceof Error ? error.message : String(error);
         return {
