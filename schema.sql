@@ -90,10 +90,10 @@ create table public.transcriptions (
   id uuid default gen_random_uuid() primary key,
   video_id uuid references public.videos(id) on delete cascade not null unique, -- One transcription per video
   job_id uuid references public.download_jobs(id) on delete set null, -- Link to the job that generated it
-  replicate_prediction_id text, -- Store the ID from Replicate API
   status public.job_status default 'pending' not null, -- Track transcription status
   content jsonb, -- Store the full JSON output from Replicate (including words, speakers, timestamps)
   error_message text,
+  replicate_prediction_id text, -- Store the prediction ID from Replicate
   is_favorite boolean default false not null, -- Mark if part of a favorited item
   created_at timestamp with time zone default now() not null,
   updated_at timestamp with time zone default now() not null,
