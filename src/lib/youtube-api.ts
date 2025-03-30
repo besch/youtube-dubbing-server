@@ -1,6 +1,6 @@
 import { google } from "googleapis";
 import { YoutubeVideoInfo } from "@/types";
-import { appErrors } from "@/types/actions";
+import { appErrors } from "@/app/actions/actions";
 
 const youtube = google.youtube({
   version: "v3",

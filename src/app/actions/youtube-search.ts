@@ -2,7 +2,7 @@
 
 import { createSafeActionClient } from "next-safe-action";
 import { z } from "zod";
-import { appErrors } from "@/types/actions";
+import { appErrors } from "@/app/actions/actions";
 import { searchYoutubeVideos } from "@/lib/youtube-api";
 
 const action = createSafeActionClient();

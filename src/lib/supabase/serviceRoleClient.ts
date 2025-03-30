@@ -11,30 +11,27 @@ if (!supabaseServiceRoleKey) {
   // In production, service role key should always be present.
   // Log an error or throw depending on your error handling strategy.
   console.error(
-    "Missing env.SUPABASE_SERVICE_ROLE_KEY - Client-side operations may be limited."
+    "Missing env.SUPABASE_SERVICE_ROLE_KEY - operations requiring service role will fail."
   );
-  // For server-side actions, this should likely be a hard error:
+  // For server-side actions requiring elevated privileges, this should likely be a hard error:
   throw new Error(
-    "Missing env.SUPABASE_SERVICE_ROLE_KEY required for server client"
+    "Missing env.SUPABASE_SERVICE_ROLE_KEY required for service role client"
   );
 }
 
-// Note: This client uses the SERVICE ROLE KEY and should only be used on the server.
+// Note: This client uses the SERVICE ROLE KEY and should only be used on the server
+// for operations requiring elevated privileges or bypassing RLS (e.g., internal jobs,
+// accessing private storage buckets, specific table updates).
 // Never expose this key in client-side code.
-export const supabaseServerClient = createClient<Database>(
+export const supabaseServiceRoleClient = createClient<Database>(
   supabaseUrl,
   supabaseServiceRoleKey,
   {
     auth: {
-      // Suitable for server-side operations like server components, API routes, server actions
+      // Suitable for server-side operations like cron jobs, specific API routes
       autoRefreshToken: false,
       persistSession: false,
       // detectSessionInUrl: false // Generally not needed for server client
     },
   }
 );
-
-// You might also want a client for user-specific server actions that respects RLS
-// This requires passing the user's JWT or using the auth helper
-// For now, the service role client covers administrative tasks like storage uploads
-// and table updates where RLS might be bypassed intentionally.

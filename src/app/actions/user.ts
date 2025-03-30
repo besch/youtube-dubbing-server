@@ -2,7 +2,7 @@
 
 import { createSafeActionClient } from "next-safe-action";
 import { z } from "zod";
-import { appErrors } from "@/types/actions";
+import { appErrors } from "@/app/actions/actions";
 import { createAdminClient, createServerClient } from "@/lib/supabase";
 
 const action = createSafeActionClient();
@@ -17,7 +17,7 @@ export const getUserProfile = action.action(async () => {
     } = await supabase.auth.getSession();
 
     if (!session?.user) {
-      return { success: false, error: appErrors.AUTHENTICATION_ERROR };
+      return { success: false, error: appErrors.UNAUTHENTICATED };
     }
 
     // Get user profile
@@ -78,7 +78,7 @@ export const updateUserSettings = action
       } = await supabase.auth.getSession();
 
       if (!session?.user) {
-        return { success: false, error: appErrors.AUTHENTICATION_ERROR };
+        return { success: false, error: appErrors.UNAUTHENTICATED };
       }
 
       // Update user settings
@@ -124,7 +124,7 @@ export const getUserHistory = action.action(async () => {
     } = await supabase.auth.getSession();
 
     if (!session?.user) {
-      return { success: false, error: appErrors.AUTHENTICATION_ERROR };
+      return { success: false, error: appErrors.UNAUTHENTICATED };
     }
 
     // Get user history
@@ -174,7 +174,7 @@ export const getUserFavorites = action.action(async () => {
     } = await supabase.auth.getSession();
 
     if (!session?.user) {
-      return { success: false, error: appErrors.AUTHENTICATION_ERROR };
+      return { success: false, error: appErrors.UNAUTHENTICATED };
     }
 
     // Get user favorites

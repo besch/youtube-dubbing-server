@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { supabaseServerClient } from "@/lib/supabase/server";
-import type { Database } from "@/types/supabase";
+import { supabaseServiceRoleClient } from "@/lib/supabase/serviceRoleClient";
+import type { Database, Json } from "@/types/supabase";
+import type { TranscriptionSegment } from "@/app/actions/video";
 
 // Define expected Replicate webhook payload structure (adjust based on actual output)
 interface ReplicateWebhookPayload {
@@ -11,12 +12,14 @@ interface ReplicateWebhookPayload {
     file_url?: string;
     // ... other inputs
   };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   output?: any; // Transcription result (structure depends on the model)
   error?: string; // Error message if status is failed
   logs?: string;
   metrics?: {
     predict_time?: number;
   };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   webhook_context?: any; // Context if provided during creation (we don't use it here)
   created_at: string;
   started_at?: string;
@@ -60,8 +63,8 @@ export async function POST(request: Request) {
     > = {};
 
     if (payload.status === "succeeded") {
-      // TODO: Validate payload.output structure based on whisper-diarization model
-      if (!payload.output) {
+      const output = payload.output as TranscriptionSegment[];
+      if (!output) {
         console.error(
           `Replicate webhook: Prediction ${payload.id} succeeded but output is missing.`
         );
@@ -74,13 +77,11 @@ export async function POST(request: Request) {
         console.log(
           `Replicate prediction ${payload.id} succeeded. Saving output.`
         );
-        // Assuming payload.output is the JSON array of segments
         updateData = {
           status: "completed",
-          content: payload.output, // Store the full output
+          content: output as unknown as Json,
           error_message: null,
           updated_at: new Date().toISOString(),
-          // Optionally update replicate_prediction_id again for verification?
           replicate_prediction_id: payload.id,
         };
       }
@@ -105,7 +106,7 @@ export async function POST(request: Request) {
     }
 
     // Update the transcription record in Supabase
-    const { error: updateError } = await supabaseServerClient
+    const { error: updateError } = await supabaseServiceRoleClient
       .from("transcriptions")
       .update(updateData)
       .eq("id", transcriptionId);
@@ -142,9 +143,10 @@ export async function POST(request: Request) {
   }
 }
 
-// Optional: Implement GET for simple verification if needed
-export async function GET(request: Request) {
-  return NextResponse.json({
-    message: "Replicate webhook endpoint is active. Use POST.",
-  });
+// Handle GET requests (e.g., for verification or testing)
+export async function GET() {
+  console.log("Received GET request on /api/webhooks/replicate");
+  // You might want to implement a challenge-response verification here
+  // if Replicate requires webhook verification via GET.
+  return NextResponse.json({ message: "Webhook endpoint active." });
 }
