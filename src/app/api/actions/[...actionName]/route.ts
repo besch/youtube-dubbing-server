@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { startVideoProcessing } from "@/app/actions/video"; // Import specific actions
+import {
+  startVideoProcessing,
+  startTranscription,
+  generateAudioChunk,
+} from "@/app/actions/video"; // Import specific actions
 // Import other actions as they are created
 // import { toggleFavorite } from '@/app/actions/userVideoData'
 
@@ -18,8 +22,8 @@ const actionRegistry: Record<string, ActionFunction> = {
   // video actions
   // Cast action functions to 'any' to satisfy the ActionFunction type for now
   "video/startVideoProcessing": startVideoProcessing as any, // eslint-disable-line @typescript-eslint/no-explicit-any
-  // 'video/startTranscription': startTranscription as any, // Add when implemented
-  // 'video/generateAudioChunk': generateAudioChunk as any, // Add when implemented
+  "video/startTranscription": startTranscription as any, // eslint-disable-line @typescript-eslint/no-explicit-any
+  "video/generateAudioChunk": generateAudioChunk as any, // eslint-disable-line @typescript-eslint/no-explicit-any
 
   // user/favorites actions
   // 'user/toggleFavorite': toggleFavorite as any, // Add when implemented
@@ -29,113 +33,42 @@ const actionRegistry: Record<string, ActionFunction> = {
   // 'user/updateHistory': updateHistory as any, // Add when implemented
 };
 
-export async function POST(req: NextRequest) {
+export async function POST(
+  request: NextRequest,
+  { params }: { params: { actionName: string[] } }
+) {
   try {
-    const urlPath = req.nextUrl.pathname;
-    // Extract action name, e.g., "/api/actions/video/startVideoProcessing" -> "video/startVideoProcessing"
-    const actionSegments = urlPath.split("/api/actions/")[1]?.split("/");
-    if (
-      !actionSegments ||
-      actionSegments.length === 0 ||
-      actionSegments.includes("")
-    ) {
-      console.error("Invalid action path:", urlPath);
+    const actionName = params.actionName[0];
+    const action = actionRegistry[actionName as keyof typeof actionRegistry];
+
+    if (!action) {
+      console.error(`Action not found: ${actionName}`);
       return NextResponse.json(
         {
           success: false,
-          error: new AppError(
-            AppErrorCode.INVALID_INPUT,
-            "Invalid action path."
-          ).toJSON(),
-        },
-        { status: 400 }
-      );
-    }
-    const actionName = actionSegments.join("/");
-    console.log(`API route received request for action: ${actionName}`);
-
-    // Find the action function in the registry
-    const actionFunction = actionRegistry[actionName];
-
-    if (!actionFunction) {
-      console.error(`Action not found in registry: ${actionName}`);
-      return NextResponse.json(
-        {
-          success: false,
-          error: new AppError(
-            AppErrorCode.RECORD_NOT_FOUND,
-            `Action '${actionName}' not found.`
-          ).toJSON(),
+          error: new AppError(AppErrorCode.INVALID_INPUT, "Action not found"),
         },
         { status: 404 }
       );
     }
 
-    // Parse the request body
-    let input: Record<string, unknown>;
-    try {
-      input = await req.json();
-      console.log(`Action [${actionName}] received input:`, input);
-    } catch (error) {
-      console.error(
-        `Error parsing JSON body for action [${actionName}]:`,
-        error
-      );
-      return NextResponse.json(
-        {
-          success: false,
-          error: new AppError(
-            AppErrorCode.INVALID_INPUT,
-            "Invalid JSON request body."
-          ).toJSON(),
-        },
-        { status: 400 }
-      );
-    }
+    const body = await request.json();
+    const result = await action(body);
 
-    // Execute the server action
-    // next-safe-action handles input validation and internal error catching
-    const result = await actionFunction(input);
-
-    // Return the result
-    if (!result.success) {
-      console.error(`Action [${actionName}] failed:`, result.error);
-      // Determine appropriate status code based on error type
-      let statusCode = 500; // Default to internal server error
-      if (result.error instanceof AppError) {
-        switch (result.error.code) {
-          case AppErrorCode.VALIDATION_ERROR:
-          case AppErrorCode.INVALID_INPUT:
-            statusCode = 400; // Bad Request
-            break;
-          case AppErrorCode.UNAUTHENTICATED:
-          case AppErrorCode.UNAUTHORIZED:
-            statusCode = 401; // Unauthorized (or 403 Forbidden)
-            break;
-          case AppErrorCode.RECORD_NOT_FOUND:
-            statusCode = 404; // Not Found
-            break;
-          // Add other specific error codes if needed
-        }
-        return NextResponse.json(
-          { success: false, error: result.error.toJSON() },
-          { status: statusCode }
-        );
-      }
-      // For unexpected errors not caught as AppError (should be rare with safe-action client)
-      return NextResponse.json(
-        { success: false, error: appErrors.UNEXPECTED_ERROR.toJSON() },
-        { status: 500 }
-      );
-    }
-
-    console.log(`Action [${actionName}] executed successfully.`);
-    return NextResponse.json(result, { status: 200 });
+    return NextResponse.json(result);
   } catch (error) {
-    // Catch any completely unexpected errors during route handling itself
-    console.error("[API Actions Route Handler] Unexpected error:", error);
+    console.error("Action error:", error);
     return NextResponse.json(
-      { success: false, error: appErrors.UNEXPECTED_ERROR.toJSON() },
+      {
+        success: false,
+        error:
+          error instanceof AppError
+            ? error
+            : new AppError(
+                AppErrorCode.UNEXPECTED_ERROR,
+                "Internal server error"
+              ),
+      },
       { status: 500 }
     );
   }

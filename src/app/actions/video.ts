@@ -6,9 +6,9 @@ import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
 import OpenAI from "openai"; // Import OpenAI class
 import { Buffer } from "buffer"; // Import Buffer if not already globally available
-// Remove unused Replicate import if client isn't used yet
-// import Replicate from "replicate";
+import Replicate from "replicate";
 import type { User } from "@supabase/supabase-js"; // Re-import User type for assertion
+import { translateText } from "@/lib/translation";
 
 // Remove unused Database type import
 // import type { Database } from "@/types/supabase";
@@ -305,318 +305,306 @@ export const startVideoProcessing = protectedAction
     }
   );
 
-// Replicate Client
-// const replicate = new Replicate({
-//   auth: process.env.REPLICATE_API_TOKEN,
-// });
-
 // Webhook URL
-// const REPLICATE_WEBHOOK_URL =
-//   process.env.REPLICATE_WEBHOOK_URL ||
-//   `${
-//     process.env.NEXT_PUBLIC_VERCEL_URL || "http://localhost:3000"
-//   }/api/webhooks/replicate`;
+const REPLICATE_WEBHOOK_URL =
+  process.env.REPLICATE_WEBHOOK_URL ||
+  `${
+    process.env.NEXT_PUBLIC_VERCEL_URL || "http://localhost:3000"
+  }/api/webhooks/replicate`;
 
 // Zod schema for starting transcription
-// const startTranscriptionSchema = z.object({
-//   jobId: z.string().uuid(), // The ID of the completed download job
-//   numSpeakers: z.number().int().min(1).optional(),
-//   sourceLanguageHint: z.string().optional(),
-//   transcriptionPrompt: z.string().optional(),
-// });
+const startTranscriptionSchema = z.object({
+  jobId: z.string().uuid(), // The ID of the completed download job
+  numSpeakers: z.number().int().min(1).optional(),
+  sourceLanguageHint: z.string().optional(),
+  transcriptionPrompt: z.string().optional(),
+});
 
-// type StartTranscriptionInput = z.infer<typeof startTranscriptionSchema>;
-// type StartTranscriptionOutput = {
-//   transcriptionRecordId: string;
-//   replicatePredictionId: string;
-// };
+type StartTranscriptionInput = z.infer<typeof startTranscriptionSchema>;
+type StartTranscriptionOutput = {
+  transcriptionRecordId: string;
+  replicatePredictionId: string;
+};
 
-// export const startTranscription = action
-//   .schema(startTranscriptionSchema)
-//   .action(
-//     async ({
-//       parsedInput,
-//     }): Promise<ActionResponse<StartTranscriptionOutput>> => {
-//       const { jobId, numSpeakers, sourceLanguageHint, transcriptionPrompt } =
-//         parsedInput;
-//       let transcriptionRecordId: string | null = null;
+export const startTranscription = protectedAction
+  .schema(startTranscriptionSchema)
+  .action(
+    async ({
+      parsedInput,
+    }): Promise<ActionResponse<StartTranscriptionOutput>> => {
+      const { jobId, numSpeakers, sourceLanguageHint, transcriptionPrompt } =
+        parsedInput;
+      let transcriptionRecordId: string | null = null;
 
-//       try {
-//         // 1. Verify Download Job Status and Get Audio Path
-//         const { data: downloadJob, error: jobError } =
-//           await supabaseServiceRoleClient // Use service role client
-//             .from("download_jobs")
-//             .select("id, video_id, status, storage_path")
-//             .eq("id", jobId)
-//             .single();
+      try {
+        // 1. Verify Download Job Status and Get Audio Path
+        const { data: downloadJob, error: jobError } =
+          await supabaseServiceRoleClient // Use service role client
+            .from("download_jobs")
+            .select("id, video_id, status, storage_path")
+            .eq("id", jobId)
+            .single();
 
-//         if (jobError || !downloadJob) {
-//           console.error(
-//             `Download job ${jobId} not found or error fetching:`,
-//             jobError
-//           );
-//           return {
-//             success: false,
-//             error: new AppError(
-//               AppErrorCode.RECORD_NOT_FOUND,
-//               `Download job ${jobId} not found.`
-//             ),
-//           };
-//         }
+        if (jobError || !downloadJob) {
+          console.error(
+            `Download job ${jobId} not found or error fetching:`,
+            jobError
+          );
+          return {
+            success: false,
+            error: new AppError(
+              AppErrorCode.RECORD_NOT_FOUND,
+              `Download job ${jobId} not found.`
+            ),
+          };
+        }
 
-//         const jobStatus = downloadJob.status;
+        const jobStatus = downloadJob.status;
 
-//         if (jobStatus !== "completed" || !downloadJob.storage_path) {
-//           console.warn(
-//             `Download job ${jobId} is not completed or missing storage path (status: ${jobStatus}).`
-//           );
-//           return {
-//             success: false,
-//             error: new AppError(
-//               AppErrorCode.INVALID_INPUT,
-//               "Download job is not ready for transcription."
-//             ),
-//           };
-//         }
+        if (jobStatus !== "completed" || !downloadJob.storage_path) {
+          console.warn(
+            `Download job ${jobId} is not completed or missing storage path (status: ${jobStatus}).`
+          );
+          return {
+            success: false,
+            error: new AppError(
+              AppErrorCode.INVALID_INPUT,
+              "Download job is not ready for transcription."
+            ),
+          };
+        }
 
-//         const videoId = downloadJob.video_id;
-//         const audioStoragePath = downloadJob.storage_path;
+        const videoId = downloadJob.video_id;
+        const audioStoragePath = downloadJob.storage_path;
 
-//         // 2. Check if transcription already exists or is in progress
-//         const { data: existingTranscription, error: transSelectError } =
-//           await supabaseServiceRoleClient
-//             .from("transcriptions")
-//             .select("id, status, replicate_prediction_id")
-//             .eq("video_id", videoId)
-//             .maybeSingle();
+        // 2. Check if transcription already exists or is in progress
+        const { data: existingTranscription, error: transSelectError } =
+          await supabaseServiceRoleClient
+            .from("transcriptions")
+            .select("id, status, replicate_prediction_id")
+            .eq("video_id", videoId)
+            .maybeSingle();
 
-//         if (transSelectError) {
-//           console.error(
-//             `Error checking for existing transcription for video ${videoId}:`,
-//             transSelectError
-//           );
-//           throw new AppError(
-//             AppErrorCode.DATABASE_ERROR,
-//             transSelectError.message
-//           );
-//         }
+        if (transSelectError) {
+          console.error(
+            `Error checking for existing transcription for video ${videoId}:`,
+            transSelectError
+          );
+          throw new AppError(
+            AppErrorCode.DATABASE_ERROR,
+            transSelectError.message
+          );
+        }
 
-//         if (existingTranscription) {
-//           const existingStatus = existingTranscription.status;
-//           if (
-//             existingStatus === "completed" ||
-//             (existingStatus === "processing" &&
-//               existingTranscription.replicate_prediction_id)
-//           ) {
-//             console.log(
-//               `Transcription for video ${videoId} already exists or is processing (status: ${existingStatus}).`
-//             );
-//             return {
-//               success: true,
-//               data: {
-//                 transcriptionRecordId: existingTranscription.id,
-//                 replicatePredictionId:
-//                   existingTranscription.replicate_prediction_id || "N/A",
-//               },
-//             };
-//           } else {
-//             transcriptionRecordId = existingTranscription.id;
-//             console.log(
-//               `Reusing existing transcription record ${transcriptionRecordId} for video ${videoId}.`
-//             );
-//           }
-//         }
+        if (existingTranscription) {
+          const existingStatus = existingTranscription.status;
+          if (
+            existingStatus === "completed" ||
+            (existingStatus === "processing" &&
+              existingTranscription.replicate_prediction_id)
+          ) {
+            console.log(
+              `Transcription for video ${videoId} already exists or is processing (status: ${existingStatus}).`
+            );
+            return {
+              success: true,
+              data: {
+                transcriptionRecordId: existingTranscription.id,
+                replicatePredictionId:
+                  existingTranscription.replicate_prediction_id || "N/A",
+              },
+            };
+          } else {
+            transcriptionRecordId = existingTranscription.id;
+            console.log(
+              `Reusing existing transcription record ${transcriptionRecordId} for video ${videoId}.`
+            );
+          }
+        }
 
-//         // 3. Get Signed URL for the Audio File
-//         const bucketAndPath = audioStoragePath.split("/");
-//         if (bucketAndPath.length < 1) {
-//           // Check if path exists
-//           console.error(`Invalid storage path format: ${audioStoragePath}`);
-//           throw new AppError(
-//             AppErrorCode.UNEXPECTED_ERROR,
-//             "Invalid audio storage path format."
-//           );
-//         }
-//         // Assuming path is just the filename in the bucket
-//         const bucketName = "youtube-audio"; // Hardcoded for now, should match downloader
-//         const filePath = audioStoragePath;
+        // 3. Get Signed URL for the Audio File
+        const bucketAndPath = audioStoragePath.split("/");
+        if (bucketAndPath.length < 1) {
+          console.error(`Invalid storage path format: ${audioStoragePath}`);
+          throw new AppError(
+            AppErrorCode.UNEXPECTED_ERROR,
+            "Invalid audio storage path format."
+          );
+        }
+        const bucketName = "youtube-audio";
+        const filePath = audioStoragePath;
 
-//         const { data: signedUrlData, error: urlError } =
-//           await supabaseServiceRoleClient.storage
-//             .from(bucketName)
-//             .createSignedUrl(filePath, 60 * 5); // 5 minutes validity
+        const { data: signedUrlData, error: urlError } =
+          await supabaseServiceRoleClient.storage
+            .from(bucketName)
+            .createSignedUrl(filePath, 60 * 5); // 5 minutes validity
 
-//         if (urlError || !signedUrlData?.signedUrl) {
-//           console.error(
-//             `Error creating signed URL for ${filePath} in bucket ${bucketName}:`,
-//             urlError
-//           );
-//           if (transcriptionRecordId) {
-//             await supabaseServiceRoleClient
-//               .from("transcriptions")
-//               .update({
-//                 status: "failed",
-//                 error_message: "Failed to get audio URL for Replicate",
-//               })
-//               .eq("id", transcriptionRecordId);
-//           }
-//           throw new AppError(
-//             AppErrorCode.SUPABASE_STORAGE_ERROR,
-//             urlError?.message || "Failed to create signed URL."
-//           );
-//         }
+        if (urlError || !signedUrlData?.signedUrl) {
+          console.error(
+            `Error creating signed URL for ${filePath} in bucket ${bucketName}:`,
+            urlError
+          );
+          if (transcriptionRecordId) {
+            await supabaseServiceRoleClient
+              .from("transcriptions")
+              .update({
+                status: "failed",
+                error_message: "Failed to get audio URL for Replicate",
+              })
+              .eq("id", transcriptionRecordId);
+          }
+          throw new AppError(
+            AppErrorCode.SUPABASE_STORAGE_ERROR,
+            urlError?.message || "Failed to create signed URL."
+          );
+        }
 
-//         const audioFileUrl = signedUrlData.signedUrl;
-//         console.log(
-//           `Generated temporary signed URL for Replicate: ${audioFileUrl}`
-//         );
+        const audioFileUrl = signedUrlData.signedUrl;
+        console.log(
+          `Generated temporary signed URL for Replicate: ${audioFileUrl}`
+        );
 
-//         // 4. Create or Update Transcription Record
-//         let predictionId: string | null = null;
+        // 4. Create or Update Transcription Record
+        let predictionId: string | null = null;
 
-//         if (!transcriptionRecordId) {
-//           // Create new record
-//           const { data: newTranscription, error: transInsertError } =
-//             await supabaseServiceRoleClient
-//               .from("transcriptions")
-//               .insert({
-//                 video_id: videoId,
-//                 job_id: jobId,
-//                 status: "processing" as const,
-//               })
-//               .select("id")
-//               .single();
+        if (!transcriptionRecordId) {
+          const { data: newTranscription, error: transInsertError } =
+            await supabaseServiceRoleClient
+              .from("transcriptions")
+              .insert({
+                video_id: videoId,
+                job_id: jobId,
+                status: "processing" as const,
+              })
+              .select("id")
+              .single();
 
-//           if (transInsertError || !newTranscription) {
-//             console.error(
-//               `Error creating transcription record for video ${videoId}:`,
-//               transInsertError
-//             );
-//             throw new AppError(
-//               AppErrorCode.DATABASE_ERROR,
-//               transInsertError?.message ||
-//                 "Failed to create transcription record."
-//             );
-//           }
-//           transcriptionRecordId = newTranscription.id;
-//           console.log(
-//             `Created new transcription record ${transcriptionRecordId} for video ${videoId}.`
-//           );
-//         } else {
-//           // Update existing record to processing status again
-//           const { error: transUpdateError } = await supabaseServiceRoleClient
-//             .from("transcriptions")
-//             .update({
-//               status: "processing" as const,
-//               error_message: null,
-//               replicate_prediction_id: null,
-//             })
-//             .eq("id", transcriptionRecordId);
+          if (transInsertError || !newTranscription) {
+            console.error(
+              `Error creating transcription record for video ${videoId}:`,
+              transInsertError
+            );
+            throw new AppError(
+              AppErrorCode.DATABASE_ERROR,
+              transInsertError?.message ||
+                "Failed to create transcription record."
+            );
+          }
+          transcriptionRecordId = newTranscription.id;
+          console.log(
+            `Created new transcription record ${transcriptionRecordId} for video ${videoId}.`
+          );
+        } else {
+          const { error: transUpdateError } = await supabaseServiceRoleClient
+            .from("transcriptions")
+            .update({
+              status: "processing" as const,
+              error_message: null,
+              replicate_prediction_id: null,
+            })
+            .eq("id", transcriptionRecordId);
 
-//           if (transUpdateError) {
-//             console.warn(
-//               `Error updating transcription record ${transcriptionRecordId} status:`,
-//               transUpdateError
-//             );
-//             // Log warning but continue
-//           }
-//         }
+          if (transUpdateError) {
+            console.warn(
+              `Error updating transcription record ${transcriptionRecordId} status:`,
+              transUpdateError
+            );
+          }
+        }
 
-//         // 5. Start Replicate Prediction
-//         try {
-//           if (!process.env.REPLICATE_API_KEY) {
-//             throw new AppError(
-//               AppErrorCode.REPLICATE_API_ERROR,
-//               "Replicate API key not configured."
-//             );
-//           }
-//           const replicateClient = new Replicate({
-//             auth: process.env.REPLICATE_API_KEY,
-//           });
-//           const prediction = await replicateClient.predictions.create({
-//             version:
-//               "d8bc5908738ebd84a9bb7d77d94b9c5e5a3d867886791d7171ddb60455b4c6af", // thomasmol/whisper-diarization
-//             input: {
-//               file_url: audioFileUrl,
-//               num_speakers: numSpeakers || undefined,
-//               language: sourceLanguageHint || undefined,
-//               prompt: transcriptionPrompt || undefined,
-//               webhook_events_filter: ["completed"],
-//             },
-//             webhook: `${REPLICATE_WEBHOOK_URL}?transcription_id=${transcriptionRecordId}`, // Pass ID
-//           });
+        // 5. Start Replicate Prediction
+        try {
+          if (!process.env.REPLICATE_API_KEY) {
+            throw new AppError(
+              AppErrorCode.REPLICATE_API_ERROR,
+              "Replicate API key not configured."
+            );
+          }
+          const replicateClient = new Replicate({
+            auth: process.env.REPLICATE_API_KEY,
+          });
+          const prediction = await replicateClient.predictions.create({
+            version:
+              "d8bc5908738ebd84a9bb7d77d94b9c5e5a3d867886791d7171ddb60455b4c6af", // thomasmol/whisper-diarization
+            input: {
+              file_url: audioFileUrl,
+              num_speakers: numSpeakers || undefined,
+              language: sourceLanguageHint || undefined,
+              prompt: transcriptionPrompt || undefined,
+              webhook_events_filter: ["completed"],
+            },
+            webhook: `${REPLICATE_WEBHOOK_URL}?transcription_id=${transcriptionRecordId}`, // Pass ID
+          });
 
-//           predictionId = prediction.id;
-//           console.log(
-//             `Started Replicate prediction ${predictionId} for transcription ${transcriptionRecordId}.`
-//           );
+          predictionId = prediction.id;
+          console.log(
+            `Started Replicate prediction ${predictionId} for transcription ${transcriptionRecordId}.`
+          );
 
-//           // 6. Update Transcription Record with Prediction ID
-//           const { error: predictionIdUpdateError } =
-//             await supabaseServiceRoleClient
-//               .from("transcriptions")
-//               .update({
-//                 replicate_prediction_id: predictionId,
-//                 status: "processing" as const,
-//               })
-//               .eq("id", transcriptionRecordId);
+          // 6. Update Transcription Record with Prediction ID
+          const { error: predictionIdUpdateError } =
+            await supabaseServiceRoleClient
+              .from("transcriptions")
+              .update({
+                replicate_prediction_id: predictionId,
+                status: "processing" as const,
+              })
+              .eq("id", transcriptionRecordId);
 
-//           if (predictionIdUpdateError) {
-//             console.error(
-//               `Failed to update transcription record ${transcriptionRecordId} with prediction ID ${predictionId}:`,
-//               predictionIdUpdateError
-//             );
-//             // Log error but don't necessarily fail the action here
-//           }
+          if (predictionIdUpdateError) {
+            console.error(
+              `Failed to update transcription record ${transcriptionRecordId} with prediction ID ${predictionId}:`,
+              predictionIdUpdateError
+            );
+          }
 
-//           return {
-//             success: true,
-//             data: {
-//               transcriptionRecordId: transcriptionRecordId,
-//               replicatePredictionId: predictionId,
-//             },
-//           };
-//         } catch (replicateError) {
-//           console.error(
-//             `Error starting Replicate prediction for transcription ${transcriptionRecordId}:`,
-//             replicateError
-//           );
-//           await supabaseServiceRoleClient
-//             .from("transcriptions")
-//             .update({
-//               status: "failed",
-//               error_message: `Replicate API error: ${String(replicateError)}`,
-//             })
-//             .eq("id", transcriptionRecordId);
+          return {
+            success: true,
+            data: {
+              transcriptionRecordId: transcriptionRecordId,
+              replicatePredictionId: predictionId,
+            },
+          };
+        } catch (replicateError) {
+          console.error(
+            `Error starting Replicate prediction for transcription ${transcriptionRecordId}:`,
+            replicateError
+          );
+          await supabaseServiceRoleClient
+            .from("transcriptions")
+            .update({
+              status: "failed",
+              error_message: `Replicate API error: ${String(replicateError)}`,
+            })
+            .eq("id", transcriptionRecordId);
 
-//           throw new AppError(
-//             AppErrorCode.REPLICATE_API_ERROR,
-//             String(replicateError)
-//           );
-//         }
-//       } catch (error) {
-//         console.error("Unexpected error in startTranscription:", error);
-//         if (transcriptionRecordId) {
-//           try {
-//             await supabaseServiceRoleClient
-//               .from("transcriptions")
-//               .update({
-//                 status: "failed",
-//                 error_message: "Unexpected server action error.",
-//               })
-//               .eq("id", transcriptionRecordId);
-//           } catch (updateError) {
-//             console.error(
-//               "Secondary error updating transcription status:",
-//               updateError
-//             );
-//           }
-//         }
-//         // Throw the error for the safe action client to handle
-//         throw error;
-//       }
-//     }
-//   );
+          throw new AppError(
+            AppErrorCode.REPLICATE_API_ERROR,
+            String(replicateError)
+          );
+        }
+      } catch (error) {
+        console.error("Unexpected error in startTranscription:", error);
+        if (transcriptionRecordId) {
+          try {
+            await supabaseServiceRoleClient
+              .from("transcriptions")
+              .update({
+                status: "failed",
+                error_message: "Unexpected server action error.",
+              })
+              .eq("id", transcriptionRecordId);
+          } catch (updateError) {
+            console.error(
+              "Secondary error updating transcription status:",
+              updateError
+            );
+          }
+        }
+        throw error;
+      }
+    }
+  );
 
 // --- Types for Replicate Output ---
 interface TranscriptionWord {
@@ -650,11 +638,11 @@ const OPENAI_TTS_VOICES: [OpenAiTtsVoice, ...OpenAiTtsVoice[]] = [
 const generateAudioChunkSchema = z.object({
   videoId: z.string().uuid(),
   language: z.string(),
-  voice: z.enum(OPENAI_TTS_VOICES), // Default voice for segments without specific speaker mapping
-  speakerVoiceMap: z.record(z.enum(OPENAI_TTS_VOICES)).optional(), // Map speaker ID (e.g., SPEAKER_00) to voice
+  voice: z.enum(OPENAI_TTS_VOICES),
+  speakerVoiceMap: z.record(z.enum(OPENAI_TTS_VOICES)).optional(),
   startTime: z.number().min(0),
   endTime: z.number().min(0),
-  // originalLanguage: z.string().optional().default("en"), // Translation handled separately if needed
+  sourceLanguage: z.string().optional(),
 });
 
 type GenerateAudioChunkOutput = {
@@ -664,7 +652,7 @@ type GenerateAudioChunkOutput = {
   endTime: number; // Echo back end time
 };
 
-export const generateAudioChunk = protectedAction // Should use protectedAction
+export const generateAudioChunk = protectedAction
   .schema(generateAudioChunkSchema)
   .action(
     async ({
@@ -674,16 +662,16 @@ export const generateAudioChunk = protectedAction // Should use protectedAction
         videoId,
         language,
         voice,
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        speakerVoiceMap: _speakerVoiceMap, // Ensure disable comment is here
+        speakerVoiceMap: _speakerVoiceMap,
         startTime,
         endTime,
+        sourceLanguage,
       } = parsedInput;
 
       try {
         // 1. Fetch Completed Transcription Content
         const { data: transcription, error: transcriptionError } =
-          await supabaseServiceRoleClient // Use service role client
+          await supabaseServiceRoleClient
             .from("transcriptions")
             .select("content, is_favorite")
             .eq("video_id", videoId)
@@ -704,7 +692,6 @@ export const generateAudioChunk = protectedAction // Should use protectedAction
           };
         }
 
-        // Use safer type assertion for JSON content
         const allSegments =
           transcription.content as unknown as TranscriptionSegment[];
         const isVideoFavorite = transcription.is_favorite ?? false;
@@ -727,13 +714,13 @@ export const generateAudioChunk = protectedAction // Should use protectedAction
           };
         }
 
-        // 3. Combine Text (Translation logic removed - assume text is already in target language or handle upstream)
-        const combinedText = relevantSegments
+        // 3. Combine Text and Translate if needed
+        let textToSpeak = relevantSegments
           .map((seg) => seg.text)
           .join(" ")
           .trim();
 
-        if (!combinedText) {
+        if (!textToSpeak) {
           console.log(
             `Combined text is empty for range ${startTime}-${endTime} in video ${videoId}.`
           );
@@ -746,10 +733,34 @@ export const generateAudioChunk = protectedAction // Should use protectedAction
           };
         }
 
+        // Translate text if source language is different from target language
+        if (sourceLanguage && sourceLanguage !== language) {
+          try {
+            textToSpeak = await translateText(textToSpeak, {
+              sourceLanguage,
+              targetLanguage: language,
+              preserveFormatting: true,
+            });
+          } catch (translationError) {
+            console.error(
+              `Translation failed for chunk ${startTime}-${endTime}:`,
+              translationError
+            );
+            return {
+              success: false,
+              error:
+                translationError instanceof AppError
+                  ? translationError
+                  : new AppError(
+                      AppErrorCode.OPENAI_API_ERROR,
+                      "Failed to translate text"
+                    ),
+            };
+          }
+        }
+
         // TODO: Handle speaker-specific voice generation if speakerVoiceMap is provided
-        // For now, use the single provided `voice`
         const chosenVoice: OpenAiTtsVoice = voice;
-        const textToSpeak = combinedText;
 
         // 4. Check if chunk already exists in DB/Storage
         const uniqueChunkId = `${videoId}_${language}_${chosenVoice}_${startTime.toFixed(
@@ -777,14 +788,12 @@ export const generateAudioChunk = protectedAction // Should use protectedAction
             `Error checking for existing audio chunk ${uniqueChunkId}:`,
             chunkCheckError
           );
-          // Log error but proceed with generation
         }
 
         if (existingChunk) {
           console.log(
             `Audio chunk ${uniqueChunkId} already exists. Returning existing.`
           );
-          // Get public URL for existing chunk
           const { data: urlData } = supabaseServiceRoleClient.storage
             .from(storageBucket)
             .getPublicUrl(storageFileName);
@@ -837,7 +846,7 @@ export const generateAudioChunk = protectedAction // Should use protectedAction
             .from(storageBucket)
             .upload(storageFileName, audioBuffer, {
               contentType: "audio/mpeg",
-              upsert: true, // Allow overwriting if it failed previously
+              upsert: true,
             });
 
           if (uploadError) {
@@ -862,17 +871,17 @@ export const generateAudioChunk = protectedAction // Should use protectedAction
           voice: chosenVoice,
           chunk_start: startTime,
           chunk_end: endTime,
-          storage_path: storageFileName, // Store only the path within the bucket
+          storage_path: storageFileName,
           is_favorite: isVideoFavorite,
           expiry_at: isVideoFavorite
             ? null
-            : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), // 7-day expiry for non-favorites
+            : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
         };
 
         const { error: dbInsertError } = await supabaseServiceRoleClient
           .from("translated_audio_chunks")
           .upsert(chunkData, {
-            onConflict: "video_id, language, voice, chunk_start, chunk_end", // Ensure correct constraint name
+            onConflict: "video_id, language, voice, chunk_start, chunk_end",
           });
 
         if (dbInsertError) {
@@ -880,10 +889,7 @@ export const generateAudioChunk = protectedAction // Should use protectedAction
             `Error saving translated audio chunk record for ${uniqueChunkId}:`,
             dbInsertError
           );
-          // Don't necessarily fail the whole operation if DB insert fails after upload
-          // Log error, but return success as the audio exists in storage
           console.warn("Audio chunk uploaded, but failed to save DB record.");
-          // throw new AppError(AppErrorCode.DATABASE_ERROR, dbInsertError.message);
         }
 
         // 8. Get Public URL for the newly uploaded chunk
@@ -904,7 +910,7 @@ export const generateAudioChunk = protectedAction // Should use protectedAction
         };
       } catch (error) {
         console.error("Unexpected error in generateAudioChunk:", error);
-        throw error; // Re-throw for safe-action client handler
+        throw error;
       }
     }
   );
