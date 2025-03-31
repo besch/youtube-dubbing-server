@@ -20,13 +20,26 @@ export const publicAction = createSafeActionClient({
   // },
   // Transform server errors before returning to the client
   handleServerError(e: unknown) {
-    if (e instanceof AppError || e instanceof ActionError) {
-      return e;
+    if (e instanceof AppError) {
+      // Return the plain object representation of the AppError
+      return e.toJSON();
+    }
+    if (e instanceof ActionError) {
+      // Handle ActionError specifically if needed, or return a generic error object
+      console.error("ActionError caught:", e);
+      // Returning a generic error object ensures consistency
+      return new AppError(
+        AppErrorCode.UNEXPECTED_ERROR,
+        e.message || GENERIC_SERVER_ERROR
+      ).toJSON();
     }
     // Log the actual error on the server
     console.error("Unexpected server error in public action:", e);
-    // Return a generic AppError to the client
-    return new AppError(AppErrorCode.UNEXPECTED_ERROR, GENERIC_SERVER_ERROR);
+    // Return a generic AppError plain object to the client
+    return new AppError(
+      AppErrorCode.UNEXPECTED_ERROR,
+      GENERIC_SERVER_ERROR
+    ).toJSON();
   },
 });
 
@@ -38,13 +51,26 @@ const baseClient = createSafeActionClient({
   // },
   // Transform server errors before returning to the client
   handleServerError(e: unknown) {
-    if (e instanceof AppError || e instanceof ActionError) {
-      return e;
+    if (e instanceof AppError) {
+      // Return the plain object representation of the AppError
+      return e.toJSON();
+    }
+    if (e instanceof ActionError) {
+      // Handle ActionError specifically if needed, or return a generic error object
+      console.error("ActionError caught:", e);
+      // Returning a generic error object ensures consistency
+      return new AppError(
+        AppErrorCode.UNEXPECTED_ERROR,
+        e.message || GENERIC_SERVER_ERROR
+      ).toJSON();
     }
     // Log the actual error on the server
     console.error("Unexpected server error:", e);
-    // Return a generic AppError to the client
-    return new AppError(AppErrorCode.UNEXPECTED_ERROR, GENERIC_SERVER_ERROR);
+    // Return a generic AppError plain object to the client
+    return new AppError(
+      AppErrorCode.UNEXPECTED_ERROR,
+      GENERIC_SERVER_ERROR
+    ).toJSON();
   },
 });
 
