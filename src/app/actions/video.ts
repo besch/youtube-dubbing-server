@@ -300,7 +300,13 @@ export const startVideoProcessing = protectedAction
         };
       } catch (error) {
         console.error("Error caught in startVideoProcessing action:", error);
-        throw error;
+        // Ensure thrown errors are AppError instances or handle appropriately
+        if (error instanceof AppError) {
+          // Re-throw the AppError to be handled by safe-action's handleServerError
+          throw error;
+        }
+        // Wrap unexpected errors in a generic AppError
+        throw appErrors.UNEXPECTED_ERROR;
       }
     }
   );
