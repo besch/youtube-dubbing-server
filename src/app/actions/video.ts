@@ -662,7 +662,7 @@ export const generateAudioChunk = protectedAction
         videoId,
         language,
         voice,
-        speakerVoiceMap: _speakerVoiceMap,
+        // speakerVoiceMap: _speakerVoiceMap,
         startTime,
         endTime,
         sourceLanguage,

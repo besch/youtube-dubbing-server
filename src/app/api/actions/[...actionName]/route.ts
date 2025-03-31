@@ -9,13 +9,12 @@ import {
 
 import { ActionResponse, AppError, AppErrorCode } from "@/app/actions/actions";
 
-// Define the shape of the action functions we expect (simplified for registry)
+// Define the shape of the action functions we expect
 type ActionFunction = (input: unknown) => Promise<ActionResponse<unknown>>;
 
-// Map action names (derived from URL path) to the actual server action functions
+// Map action names to the actual server action functions
 const actionRegistry: Record<string, ActionFunction> = {
   // video actions
-  // Cast action functions to 'any' to satisfy the ActionFunction type for now
   "video/startVideoProcessing": startVideoProcessing as any, // eslint-disable-line @typescript-eslint/no-explicit-any
   "video/startTranscription": startTranscription as any, // eslint-disable-line @typescript-eslint/no-explicit-any
   "video/generateAudioChunk": generateAudioChunk as any, // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -28,16 +27,35 @@ const actionRegistry: Record<string, ActionFunction> = {
   // 'user/updateHistory': updateHistory as any, // Add when implemented
 };
 
-export async function POST(
-  request: NextRequest,
-  { params }: { params: { actionName: string[] } }
-) {
+export async function POST(request: NextRequest) {
   try {
-    const actionName = params.actionName[0];
-    const action = actionRegistry[actionName as keyof typeof actionRegistry];
+    // Extract action name from URL path
+    const url = new URL(request.url);
+    const pathSegments = url.pathname.split("/");
+
+    // Find the segments after /api/actions/
+    const actionSegments = pathSegments.slice(
+      pathSegments.indexOf("actions") + 1
+    );
+    const actionPath = actionSegments.join("/");
+
+    if (!actionPath) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: new AppError(
+            AppErrorCode.INVALID_INPUT,
+            "Invalid action path"
+          ),
+        },
+        { status: 400 }
+      );
+    }
+
+    const action = actionRegistry[actionPath];
 
     if (!action) {
-      console.error(`Action not found: ${actionName}`);
+      console.error(`Action not found: ${actionPath}`);
       return NextResponse.json(
         {
           success: false,
