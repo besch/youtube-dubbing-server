@@ -98,7 +98,8 @@ create table public.transcriptions (
   created_at timestamp with time zone default now() not null,
   updated_at timestamp with time zone default now() not null,
   -- Expiry is primarily handled by the favorite status and cleanup job
-  expiry_at timestamp with time zone -- Can be set when unfavorited
+  expiry_at timestamp with time zone, -- Can be set when unfavorited
+  completed_at timestamp with time zone -- Add this column for when the transcription finishes
 );
 
 -- Enable RLS
