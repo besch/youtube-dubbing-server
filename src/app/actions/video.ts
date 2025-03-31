@@ -23,6 +23,9 @@ import { ActionResponse, AppError, AppErrorCode, appErrors } from "./actions";
 // Comment out unused OpenAI client for now
 // import { openai, translateTextOpenAI } from "@/lib/openai";
 
+// Define REPLICATE_WEBHOOK_URL at the top level for easier access
+const REPLICATE_WEBHOOK_URL = process.env.REPLICATE_WEBHOOK_URL;
+
 // Comment out unused variable
 // const DOWNLOAD_SERVICE_URL =
 //   process.env.DOWNLOADER_SERVICE_URL || "http://83.27.167.60:1777/process";
@@ -316,12 +319,6 @@ export const startVideoProcessing = protectedAction
   );
 
 // Webhook URL
-const REPLICATE_WEBHOOK_URL =
-  process.env.REPLICATE_WEBHOOK_URL ||
-  `${
-    process.env.NEXT_PUBLIC_VERCEL_URL || "http://localhost:3000"
-  }/api/webhooks/replicate`;
-
 // Zod schema for starting transcription
 const startTranscriptionSchema = z.object({
   jobId: z.string().uuid(), // The ID of the completed download job
