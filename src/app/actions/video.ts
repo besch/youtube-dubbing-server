@@ -320,7 +320,7 @@ const startTranscriptionSchema = z.object({
   transcriptionPrompt: z.string().optional(),
 });
 
-type StartTranscriptionInput = z.infer<typeof startTranscriptionSchema>;
+// type StartTranscriptionInput = z.infer<typeof startTranscriptionSchema>;
 type StartTranscriptionOutput = {
   transcriptionRecordId: string;
   replicatePredictionId: string;

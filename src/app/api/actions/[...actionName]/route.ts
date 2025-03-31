@@ -7,12 +7,7 @@ import {
 // Import other actions as they are created
 // import { toggleFavorite } from '@/app/actions/userVideoData'
 
-import {
-  ActionResponse,
-  AppError,
-  AppErrorCode,
-  appErrors,
-} from "@/app/actions/actions";
+import { ActionResponse, AppError, AppErrorCode } from "@/app/actions/actions";
 
 // Define the shape of the action functions we expect (simplified for registry)
 type ActionFunction = (input: unknown) => Promise<ActionResponse<unknown>>;

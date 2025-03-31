@@ -3,27 +3,27 @@ import { supabaseServiceRoleClient } from "@/lib/supabase/serviceRoleClient";
 import { AppError, AppErrorCode } from "@/app/actions/actions";
 
 // Define expected Replicate webhook payload structure (adjust based on actual output)
-interface ReplicateWebhookPayload {
-  id: string; // Prediction ID
-  version: string;
-  status: "succeeded" | "failed" | "canceled";
-  input: {
-    file_url?: string;
-    // ... other inputs
-  };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  output?: any; // Transcription result (structure depends on the model)
-  error?: string; // Error message if status is failed
-  logs?: string;
-  metrics?: {
-    predict_time?: number;
-  };
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  webhook_context?: any; // Context if provided during creation (we don't use it here)
-  created_at: string;
-  started_at?: string;
-  completed_at?: string;
-}
+// interface ReplicateWebhookPayload {
+//   id: string; // Prediction ID
+//   version: string;
+//   status: "succeeded" | "failed" | "canceled";
+//   input: {
+//     file_url?: string;
+//     // ... other inputs
+//   };
+//   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+//   output?: any; // Transcription result (structure depends on the model)
+//   error?: string; // Error message if status is failed
+//   logs?: string;
+//   metrics?: {
+//     predict_time?: number;
+//   };
+//   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+//   webhook_context?: any; // Context if provided during creation (we don't use it here)
+//   created_at: string;
+//   started_at?: string;
+//   completed_at?: string;
+// }
 
 export async function POST(request: NextRequest) {
   try {
