@@ -920,3 +920,188 @@ export const generateAudioChunk = protectedAction
       }
     }
   );
+
+// --- Update History Action --- //
+
+const updateHistorySchema = z.object({
+  dbVideoId: z.string().uuid(),
+  position: z.number().min(0),
+  language: z.string(),
+  voice: z.enum(OPENAI_TTS_VOICES), // Assuming voice comes from the same set
+  // userId is inferred from context
+});
+
+export const updateHistory = protectedAction
+  .schema(updateHistorySchema)
+  .action(async ({ parsedInput, ctx }): Promise<ActionResponse<null>> => {
+    const userId = ctx.user.id;
+    const { dbVideoId, position, language, voice } = parsedInput;
+
+    try {
+      const { error } = await supabaseServiceRoleClient.from("history").upsert(
+        {
+          user_id: userId,
+          video_id: dbVideoId,
+          language: language,
+          voice: voice,
+          last_position: position,
+          watched_at: new Date().toISOString(),
+        },
+        {
+          onConflict: "user_id, video_id, language, voice",
+        }
+      );
+
+      if (error) {
+        console.error(
+          `Error upserting watch history for user ${userId}, video ${dbVideoId}:`,
+          error
+        );
+        throw appErrors.DATABASE_ERROR;
+      }
+
+      console.log(
+        `Updated history for user ${userId}, video ${dbVideoId} to position ${position}`
+      );
+      return { success: true, data: null };
+    } catch (error) {
+      console.error("Error in updateHistory action:", error);
+      throw error; // Let handleServerError manage it
+    }
+  });
+
+// --- Toggle Favorite Action --- //
+
+const toggleFavoriteSchema = z.object({
+  dbVideoId: z.string().uuid(),
+  language: z.string(),
+  voice: z.enum(OPENAI_TTS_VOICES),
+  // userId inferred from context
+});
+
+type ToggleFavoriteOutput = {
+  isFavorite: boolean;
+};
+
+export const toggleFavorite = protectedAction
+  .schema(toggleFavoriteSchema)
+  .action(
+    async ({
+      parsedInput,
+      ctx,
+    }): Promise<ActionResponse<ToggleFavoriteOutput>> => {
+      const userId = ctx.user.id;
+      const { dbVideoId, language, voice } = parsedInput;
+
+      try {
+        // Check if favorite already exists
+        const { data: existingFavorite, error: checkError } =
+          await supabaseServiceRoleClient
+            .from("favorites")
+            .select("id")
+            .eq("user_id", userId)
+            .eq("video_id", dbVideoId)
+            .eq("language", language)
+            .eq("voice", voice)
+            .maybeSingle();
+
+        if (checkError) {
+          console.error("Error checking favorite status:", checkError);
+          throw appErrors.DATABASE_ERROR;
+        }
+
+        let isNowFavorite: boolean;
+
+        if (existingFavorite) {
+          // Exists, so delete it (unfavorite)
+          console.log(`Unfavoriting video ${dbVideoId} for user ${userId}`);
+          const { error: deleteError } = await supabaseServiceRoleClient
+            .from("favorites")
+            .delete()
+            .match({ id: existingFavorite.id });
+
+          if (deleteError) {
+            console.error("Error deleting favorite:", deleteError);
+            throw appErrors.DATABASE_ERROR;
+          }
+          isNowFavorite = false;
+        } else {
+          // Does not exist, so insert it (favorite)
+          console.log(`Favoriting video ${dbVideoId} for user ${userId}`);
+          const { error: insertError } = await supabaseServiceRoleClient
+            .from("favorites")
+            .insert({
+              user_id: userId,
+              video_id: dbVideoId,
+              language: language,
+              voice: voice,
+            });
+
+          if (insertError) {
+            console.error("Error inserting favorite:", insertError);
+            throw appErrors.DATABASE_ERROR;
+          }
+          isNowFavorite = true;
+        }
+
+        return { success: true, data: { isFavorite: isNowFavorite } };
+      } catch (error) {
+        console.error("Error in toggleFavorite action:", error);
+        throw error; // Let handleServerError manage it
+      }
+    }
+  );
+
+// --- Get Favorite Status Action --- //
+
+const getFavoriteStatusSchema = z.object({
+  dbVideoId: z.string().uuid(),
+  language: z.string(),
+  voice: z.enum(OPENAI_TTS_VOICES),
+  // userId inferred from context
+});
+
+// Output type is the same as ToggleFavoriteOutput
+type GetFavoriteStatusOutput = ToggleFavoriteOutput;
+
+export const getFavoriteStatus = protectedAction
+  .schema(getFavoriteStatusSchema)
+  .action(
+    async ({
+      parsedInput,
+      ctx,
+    }): Promise<ActionResponse<GetFavoriteStatusOutput>> => {
+      const userId = ctx.user.id;
+      const { dbVideoId, language, voice } = parsedInput;
+
+      try {
+        // Check if favorite exists
+        const {
+          data: existingFavorite,
+          error: checkError,
+          count,
+        } = await supabaseServiceRoleClient
+          .from("favorites")
+          .select("id", { count: "exact", head: true }) // Just check existence efficiently
+          .eq("user_id", userId)
+          .eq("video_id", dbVideoId)
+          .eq("language", language)
+          .eq("voice", voice);
+
+        if (checkError) {
+          console.error("Error checking favorite status:", checkError);
+          throw appErrors.DATABASE_ERROR;
+        }
+
+        const isFavorite = (count ?? 0) > 0;
+
+        console.log(
+          `Favorite status for user ${userId}, video ${dbVideoId}: ${isFavorite}`
+        );
+        return { success: true, data: { isFavorite: isFavorite } };
+      } catch (error) {
+        console.error("Error in getFavoriteStatus action:", error);
+        throw error; // Let handleServerError manage it
+      }
+    }
+  );
