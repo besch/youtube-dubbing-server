@@ -149,11 +149,19 @@ create index idx_transcription_segments_replicate_id
 alter table public.transcription_segments enable row level security;
 
 -- Secure the tables
-create policy "Transcription segments are viewable by everyone"
-  on public.transcription_segments for select
-  using ( true );
+-- Drop policy if it exists, to avoid errors on re-run
+DROP POLICY IF EXISTS "Allow authenticated read access" ON public.transcription_segments;
+
+-- Allow authenticated users to read transcription segments
+CREATE POLICY "Allow authenticated read access"
+ON public.transcription_segments
+FOR SELECT
+TO authenticated
+USING (true);
 
 -- Allow service role to manage transcription segments (for webhook and server actions)
+-- Drop old policy if exists
+DROP POLICY IF EXISTS "Service role can manage transcription segments" ON public.transcription_segments;
 create policy "Service role can manage transcription segments"
   on public.transcription_segments for all
   using ( auth.role() = 'service_role' );
