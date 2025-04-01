@@ -32,7 +32,7 @@ const REPLICATE_WEBHOOK_URL = process.env.REPLICATE_WEBHOOK_URL;
 const DOWNLOAD_SERVICE_URL = process.env.DOWNLOADER_SERVICE_URL;
 const AUDIO_SEGMENTER_URL = process.env.AUDIO_SEGMENTER_URL;
 const AUDIO_SEGMENTER_SECRET_KEY = process.env.AUDIO_SEGMENTER_SECRET_KEY;
-const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN;
+const REPLICATE_API_KEY = process.env.REPLICATE_API_KEY;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 // Re-define TTS Voices constant for Zod enums
@@ -51,14 +51,14 @@ if (!DOWNLOAD_SERVICE_URL) console.error("DOWNLOADER_SERVICE_URL is not set.");
 if (!AUDIO_SEGMENTER_URL) console.error("AUDIO_SEGMENTER_URL is not set.");
 if (!AUDIO_SEGMENTER_SECRET_KEY)
   console.error("AUDIO_SEGMENTER_SECRET_KEY is not set.");
-if (!REPLICATE_API_TOKEN) console.error("REPLICATE_API_TOKEN is not set.");
+if (!REPLICATE_API_KEY) console.error("REPLICATE_API_KEY is not set.");
 if (!OPENAI_API_KEY) console.error("OPENAI_API_KEY is not set.");
 if (!process.env.NEXT_PUBLIC_APP_URL)
   console.error("NEXT_PUBLIC_APP_URL is not set (needed for webhook).");
 
 // --- Replicate Client Initialization ---
 const replicate = new Replicate({
-  auth: REPLICATE_API_TOKEN,
+  auth: REPLICATE_API_KEY,
 });
 
 // --- OpenAI Client Initialization ---
