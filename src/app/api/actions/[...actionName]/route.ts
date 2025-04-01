@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   startVideoProcessing,
-  startTranscription,
+  requestTranscriptionSegment,
+  getCompletedTranscriptionSegments,
   generateAudioChunk,
   updateHistory,
   toggleFavorite,
   getFavoriteStatus,
-  getVideoStatus,
 } from "@/app/actions/video"; // Import specific actions
 // Import other actions as they are created
 // import { toggleFavorite } from '@/app/actions/userVideoData'
@@ -21,12 +21,12 @@ type ActionFunction = (input: any) => Promise<any>; // Keep it simple
 const actionRegistry: Record<string, ActionFunction> = {
   // video actions
   "video/startVideoProcessing": startVideoProcessing,
-  "video/startTranscription": startTranscription,
+  "video/requestTranscriptionSegment": requestTranscriptionSegment,
+  "video/getCompletedTranscriptionSegments": getCompletedTranscriptionSegments,
   "video/generateAudioChunk": generateAudioChunk,
   "video/updateHistory": updateHistory,
   "video/toggleFavorite": toggleFavorite,
   "video/getFavoriteStatus": getFavoriteStatus,
-  "video/getVideoStatus": getVideoStatus,
 
   // user/favorites actions
   // 'user/toggleFavorite': toggleFavorite as any, // Add when implemented

@@ -166,7 +166,7 @@ export async function POST(request: Request) {
     }
 
     // --- 6. Timestamp Adjustment --- //
-    let adjustedOutput = prediction.output;
+    const adjustedOutput = prediction.output;
 
     if (
       segmentStartTime > 0 &&
