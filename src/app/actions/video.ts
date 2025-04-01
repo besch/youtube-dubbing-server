@@ -1055,6 +1055,9 @@ export const requestTranscriptionSegment = protectedAction
       );
 
       try {
+        console.log(
+          `RequestSegment: Checking for existing segment: Video=${videoId}, Start=${startTime}, End=${endTime}`
+        );
         // 1. Check if segment already exists/processing
         const { data: existingSegment, error: checkError } = await supabase
           .from("transcription_segments") // Use string literal
@@ -1084,13 +1087,22 @@ export const requestTranscriptionSegment = protectedAction
         }
 
         // 2. Get audio segment path from microservice
+        console.log(
+          `RequestSegment: Calling getAudioSegmentPath for video ${videoId} (${startTime}-${endTime})`
+        );
         const segmentStoragePath = await getAudioSegmentPath(
           videoId,
           startTime,
           endTime
         );
+        console.log(
+          `RequestSegment: Received segmentStoragePath: ${segmentStoragePath}`
+        );
 
         // 3. Get signed URL for the segment
+        console.log(
+          `RequestSegment: Getting signed URL for path: ${segmentStoragePath}`
+        );
         const { data: urlData, error: urlError } = await supabase.storage
           .from("transcription-segments")
           .createSignedUrl(segmentStoragePath, 60 * 5);
@@ -1106,9 +1118,17 @@ export const requestTranscriptionSegment = protectedAction
             "Signed URL creation returned no URL."
           );
         const segmentSignedUrl = urlData.signedUrl;
-        console.log(`Got signed URL for segment`);
+        console.log(
+          `RequestSegment: Got signed URL: ${segmentSignedUrl.substring(
+            0,
+            100
+          )}...`
+        ); // Log part of the URL
 
         // 4. Create placeholder record (pending)
+        console.log(
+          `RequestSegment: Creating placeholder DB record for segment ${videoId} (${startTime}-${endTime})`
+        );
         const { data: dbSegment, error: insertError } = await supabase
           .from("transcription_segments") // Use string literal
           .insert({
@@ -1138,14 +1158,31 @@ export const requestTranscriptionSegment = protectedAction
             "Failed to insert segment record or get ID."
           );
         const dbSegmentId = (dbSegment as Tables<"transcription_segments">).id;
+        console.log(
+          `RequestSegment: Created DB segment record with ID: ${dbSegmentId}`
+        );
 
         // 5. Start Replicate Transcription - Hardcode the model version here
+        const model =
+          "thomasmol/whisper-diarization:d8bc5908738ebd84a9bb7d77d94b9c5e5a3d867886791d7171ddb60455b4c6af";
+        console.log(
+          `RequestSegment: Calling startReplicateTranscription with URL ${segmentSignedUrl.substring(
+            0,
+            100
+          )}... and model ${model}`
+        );
         const replicatePredictionId = await startReplicateTranscription(
           segmentSignedUrl,
-          "thomasmol/whisper-diarization:d8bc5908738ebd84a9bb7d77d94b9c5e5a3d867886791d7171ddb60455b4c6af"
+          model
+        );
+        console.log(
+          `RequestSegment: Received Replicate Prediction ID: ${replicatePredictionId}`
         );
 
         // 6. Update DB record with Replicate ID (processing)
+        console.log(
+          `RequestSegment: Updating DB segment ${dbSegmentId} with Replicate ID ${replicatePredictionId} and status 'processing'`
+        );
         const { error: updateError } = await supabase
           .from("transcription_segments") // Use string literal
           .update({
@@ -1166,11 +1203,11 @@ export const requestTranscriptionSegment = protectedAction
         }
 
         console.log(
-          `Transcription segment request successful for ${videoId} (${startTime}-${endTime}), Replicate ID: ${replicatePredictionId}`
+          `RequestSegment: Successfully completed request for ${videoId} (${startTime}-${endTime}), Replicate ID: ${replicatePredictionId}` // Added prefix
         );
         return { success: true, data: { success: true } };
       } catch (error: unknown) {
-        console.error(`Error in requestTranscriptionSegment:`, error);
+        console.error(`RequestSegment: Error caught in main try block:`, error); // Added prefix
         const appErr =
           error instanceof AppError
             ? error
