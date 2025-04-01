@@ -1078,10 +1078,7 @@ export const requestTranscriptionSegment = protectedAction
         if (existingSegment) {
           // Use optional chaining after the cast
           console.log(
-            `Segment ${videoId} (${startTime}-${endTime}) already exists/processing (Status: ${
-              (existingSegment as Tables<"transcription_segments"> | null)
-                ?.status ?? "unknown"
-            }). Skipping.`
+            `RequestSegment: Found existing segment for ${videoId} (${startTime}-${endTime}). Status: ${existingSegment.status}. Skipping new Replicate request.`
           );
           return { success: true, data: { success: true } };
         }
