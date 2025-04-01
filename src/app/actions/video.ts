@@ -1159,6 +1159,10 @@ export const requestTranscriptionSegment = protectedAction
             `Failed to update segment ${dbSegmentId} with Replicate ID ${replicatePredictionId}:`,
             updateError.message
           );
+          throw new AppError(
+            AppErrorCode.DATABASE_ERROR,
+            `Failed to update segment status after starting Replicate: ${updateError.message}`
+          );
         }
 
         console.log(
