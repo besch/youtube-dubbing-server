@@ -4,6 +4,7 @@ export enum AppErrorCode {
   UNEXPECTED_ERROR = 1000,
   VALIDATION_ERROR = 1001,
   INVALID_INPUT = 1002,
+  CONFIGURATION_ERROR = 1003,
 
   // Authentication/Authorization Errors (2000-2999)
   UNAUTHENTICATED = 2001,
@@ -21,6 +22,8 @@ export enum AppErrorCode {
   OPENAI_API_ERROR = 4002,
   SUPABASE_STORAGE_ERROR = 4003,
   VIDEO_NOT_FOUND = 4004,
+  AUDIO_SEGMENTER_ERROR = 4005,
+  SERVICE_ERROR = 4006,
 
   // Video Processing Errors (5000-5999)
   VIDEO_PROCESSING_FAILED = 5000,
@@ -117,6 +120,18 @@ export const appErrors = {
   JOB_STATUS_ERROR: new AppError(
     AppErrorCode.JOB_STATUS_ERROR,
     "Error retrieving job status."
+  ),
+  CONFIGURATION_ERROR: new AppError(
+    AppErrorCode.CONFIGURATION_ERROR,
+    "Server configuration error."
+  ),
+  AUDIO_SEGMENTER_ERROR: new AppError(
+    AppErrorCode.AUDIO_SEGMENTER_ERROR,
+    "Error communicating with Audio Segmenter service."
+  ),
+  SERVICE_ERROR: new AppError(
+    AppErrorCode.SERVICE_ERROR,
+    "An external service call failed."
   ),
 };
 

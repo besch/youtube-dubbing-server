@@ -174,58 +174,54 @@ export type Database = {
         }
         Relationships: []
       }
-      transcriptions: {
+      transcription_segments: {
         Row: {
+          completed_at: string | null
           content: Json | null
           created_at: string
+          end_time: number
           error_message: string | null
-          expiry_at: string | null
           id: string
-          is_favorite: boolean
-          job_id: string | null
           replicate_prediction_id: string | null
+          segment_storage_path: string | null
+          start_time: number
           status: Database["public"]["Enums"]["job_status"]
           updated_at: string
           video_id: string
         }
         Insert: {
+          completed_at?: string | null
           content?: Json | null
           created_at?: string
+          end_time: number
           error_message?: string | null
-          expiry_at?: string | null
           id?: string
-          is_favorite?: boolean
-          job_id?: string | null
           replicate_prediction_id?: string | null
+          segment_storage_path?: string | null
+          start_time: number
           status?: Database["public"]["Enums"]["job_status"]
           updated_at?: string
           video_id: string
         }
         Update: {
+          completed_at?: string | null
           content?: Json | null
           created_at?: string
+          end_time?: number
           error_message?: string | null
-          expiry_at?: string | null
           id?: string
-          is_favorite?: boolean
-          job_id?: string | null
           replicate_prediction_id?: string | null
+          segment_storage_path?: string | null
+          start_time?: number
           status?: Database["public"]["Enums"]["job_status"]
           updated_at?: string
           video_id?: string
         }
         Relationships: [
           {
-            foreignKeyName: "transcriptions_job_id_fkey"
-            columns: ["job_id"]
-            isOneToOne: false
-            referencedRelation: "download_jobs"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "transcriptions_video_id_fkey"
+            foreignKeyName: "transcription_segments_video_id_fkey"
             columns: ["video_id"]
-            isOneToOne: true
+            isOneToOne: false
             referencedRelation: "videos"
             referencedColumns: ["id"]
           },
@@ -240,7 +236,6 @@ export type Database = {
           id: string
           is_favorite: boolean
           language: string
-          speaker_id: string | null
           storage_path: string
           video_id: string
           voice: string
@@ -253,7 +248,6 @@ export type Database = {
           id?: string
           is_favorite?: boolean
           language: string
-          speaker_id?: string | null
           storage_path: string
           video_id: string
           voice: string
@@ -266,7 +260,6 @@ export type Database = {
           id?: string
           is_favorite?: boolean
           language?: string
-          speaker_id?: string | null
           storage_path?: string
           video_id?: string
           voice?: string

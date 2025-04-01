@@ -85,7 +85,9 @@ create policy "Service role can view jobs"
   using ( auth.role() = 'service_role' );
 
 
--- Store full transcription and diarization results from Replicate
+-- Deprecated: Store full transcription and diarization results from Replicate
+-- comment out or remove this table definition
+/*
 create table public.transcriptions (
   id uuid default gen_random_uuid() primary key,
   video_id uuid references public.videos(id) on delete cascade not null unique, -- One transcription per video
@@ -114,6 +116,47 @@ create policy "Transcriptions are viewable by everyone"
 create policy "Service role can manage transcriptions"
   on transcriptions for all -- insert, update, delete
   using ( auth.role() = 'service_role' );
+*/
+
+-- Store individual transcribed audio segments
+create table public.transcription_segments (
+  id uuid default gen_random_uuid() primary key,
+  video_id uuid references public.videos(id) on delete cascade not null,
+  start_time float not null, -- Start time of this segment in the original video (seconds)
+  end_time float not null,   -- End time of this segment in the original video (seconds)
+  status public.job_status default 'pending' not null, -- Track transcription status for this segment
+  content jsonb,             -- Store the JSON output from Replicate for this segment (timestamps adjusted to be absolute)
+  replicate_prediction_id text unique, -- Store the prediction ID from Replicate, should be unique
+  segment_storage_path text, -- Optional: Path to the extracted segment audio file in storage
+  error_message text,
+  completed_at timestamp with time zone,
+  created_at timestamp with time zone default now() not null,
+  updated_at timestamp with time zone default now() not null,
+
+  -- Ensure segments for the same video don't have the exact same time range
+  unique(video_id, start_time, end_time)
+);
+
+-- Add index for faster lookups by video_id and time
+create index idx_transcription_segments_video_time
+  on public.transcription_segments (video_id, start_time);
+
+-- Add index for faster lookups by replicate_prediction_id for webhooks
+create index idx_transcription_segments_replicate_id
+  on public.transcription_segments (replicate_prediction_id);
+
+-- Enable RLS
+alter table public.transcription_segments enable row level security;
+
+-- Secure the tables
+create policy "Transcription segments are viewable by everyone"
+  on public.transcription_segments for select
+  using ( true );
+
+-- Allow service role to manage transcription segments (for webhook and server actions)
+create policy "Service role can manage transcription segments"
+  on public.transcription_segments for all
+  using ( auth.role() = 'service_role' );
 
 -- Store generated translated audio chunks (TTS output)
 create table public.translated_audio_chunks (
@@ -121,17 +164,19 @@ create table public.translated_audio_chunks (
     video_id uuid references public.videos(id) on delete cascade not null,
     language text not null, -- Target language (e.g., 'es', 'fr')
     voice text not null, -- Target voice (e.g., 'alloy', 'shimmer')
-    speaker_id text, -- Optional: Original speaker ID if diarized (e.g., 'SPEAKER_00')
-    chunk_start float not null, -- Start time of the original text segment
-    chunk_end float not null, -- End time of the original text segment
-    storage_path text not null, -- Path to the audio file in Supabase Storage (e.g., translated-audio bucket)
+    -- Removed speaker_id as diarization might be inconsistent across segments
+    -- speaker_id text, -- Optional: Original speaker ID if diarized (e.g., 'SPEAKER_00')
+    chunk_start float not null, -- Start time of the original text segment (absolute)
+    chunk_end float not null, -- End time of the original text segment (absolute)
+    storage_path text not null, -- Path to the TTS audio file in Supabase Storage (e.g., translated-audio bucket)
     is_favorite boolean default false not null, -- Mark if part of a favorited item
     created_at timestamp with time zone default now() not null,
     expiry_at timestamp with time zone, -- Can be set when unfavorited
 
-    unique(video_id, language, voice, chunk_start, chunk_end) -- Ensure uniqueness per segment
+    -- Use text segment hash or similar for uniqueness? For now, allow potential duplicates if text differs slightly.
+    unique(video_id, language, voice, chunk_start, chunk_end) -- Ensure uniqueness per original text segment time range
 );
--- Add index for faster lookups
+-- Update index to reflect removed speaker_id
 create index idx_translated_audio_chunks_lookup
   on public.translated_audio_chunks (video_id, language, voice, chunk_start, chunk_end);
 
@@ -230,30 +275,49 @@ create trigger update_download_jobs_modtime
 before update on public.download_jobs
 for each row execute function public.update_modified_column();
 
-create trigger update_transcriptions_modtime
-before update on public.transcriptions
+-- Remove trigger for old transcriptions table
+-- DROP TRIGGER IF EXISTS update_transcriptions_modtime ON public.transcriptions;
+
+-- Add trigger for new transcription_segments table
+create trigger update_transcription_segments_modtime
+before update on public.transcription_segments
 for each row execute function public.update_modified_column();
+
+-- Add trigger for translated_audio_chunks table (if not already present)
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgname = 'update_translated_audio_chunks_modtime'
+    ) THEN
+        CREATE TRIGGER update_translated_audio_chunks_modtime
+        BEFORE UPDATE ON public.translated_audio_chunks
+        FOR EACH ROW EXECUTE FUNCTION public.update_modified_column();
+    END IF;
+END;
+$$;
 
 
 -- Function to handle resource updates when a video is favorited
 create or replace function public.mark_resources_as_favorite()
 returns trigger as $$
 begin
-  -- Mark associated transcription as favorite (no expiry)
-  update public.transcriptions
-  set is_favorite = true, expiry_at = null
-  where video_id = NEW.video_id;
-
-  -- Mark associated translated audio chunks as favorite (no expiry)
+  -- Update associated translated audio chunks as favorite (no expiry)
   update public.translated_audio_chunks
   set is_favorite = true, expiry_at = null
   where video_id = NEW.video_id and language = NEW.language and voice = NEW.voice;
 
+  -- Note: We don't automatically mark transcription *segments* as favorite
+  -- because they are generated on demand. If needed, this could be added.
+
   return NEW;
 end;
-$$ language plpgsql security definer; -- Run with definer privileges to update tables
+$$ language plpgsql security definer;
 
 -- Trigger to mark resources when a video is favorited
+-- Recreate or ensure trigger exists and points to updated function
+DROP TRIGGER IF EXISTS mark_resources_as_favorite_trigger ON public.favorites;
 create trigger mark_resources_as_favorite_trigger
 after insert on public.favorites
 for each row
@@ -264,127 +328,133 @@ execute function public.mark_resources_as_favorite();
 create or replace function public.unmark_resources_as_favorite()
 returns trigger as $$
 declare
-  favorite_exists boolean;
   audio_favorite_exists boolean;
 begin
-  -- Check if any other favorite exists for the same video_id (any user, any lang/voice)
-  select exists (
-    select 1 from public.favorites where video_id = OLD.video_id and id != OLD.id
-  ) into favorite_exists;
-
-  -- If no other favorites exist for this video at all, mark transcription for expiry
-  if not favorite_exists then
-    update public.transcriptions
-    set is_favorite = false, expiry_at = now() + interval '24 hours' -- Or longer? Configurable?
-    where video_id = OLD.video_id;
-  end if;
-
   -- Check if other favorites exist for this specific video/language/voice combination (any user)
   select exists (
     select 1 from public.favorites
     where video_id = OLD.video_id
       and language = OLD.language
       and voice = OLD.voice
-      and id != OLD.id
+      and id != OLD.id -- Exclude the one being deleted
   ) into audio_favorite_exists;
 
   -- If no other favorites exist for this specific language/voice, mark audio chunks for expiry
   if not audio_favorite_exists then
     update public.translated_audio_chunks
-    set is_favorite = false, expiry_at = now() + interval '24 hours' -- Or longer?
+    set is_favorite = false, expiry_at = now() + interval '24 hours' -- Or adjust interval
     where video_id = OLD.video_id and language = OLD.language and voice = OLD.voice;
   end if;
 
+  -- Note: Transcription segments are not marked for expiry here as they don't have an is_favorite flag
+  -- Their cleanup depends on the translated_audio_chunks or potentially the raw segment file.
+
   return OLD;
 end;
-$$ language plpgsql security definer; -- Run with definer privileges to update tables
+$$ language plpgsql security definer;
 
 -- Trigger to potentially unmark resources when a favorite is removed
+-- Recreate or ensure trigger exists and points to updated function
+DROP TRIGGER IF EXISTS unmark_resources_as_favorite_trigger ON public.favorites;
 create trigger unmark_resources_as_favorite_trigger
 after delete on public.favorites
 for each row
 execute function public.unmark_resources_as_favorite();
 
 
--- Function to clean up expired resources (transcriptions, audio chunks, maybe old jobs?)
+-- Function to clean up expired resources
 create or replace function public.cleanup_expired_resources()
 returns void as $$
 declare
-  -- Define expiry intervals (could be moved to a config table later)
-  transcription_expiry_interval interval := interval '7 days';
+  -- Define expiry intervals
   audio_chunk_expiry_interval interval := interval '7 days';
-  raw_audio_expiry_interval interval := interval '7 days'; -- For the original youtube audio
+  raw_audio_expiry_interval interval := interval '7 days';
+  transcribed_segment_expiry_interval interval := interval '7 days'; -- How long to keep transcribed text segment records?
+  raw_segment_expiry_interval interval := interval '2 days'; -- How long to keep raw audio segment files in storage?
 begin
 
-  -- Delete expired transcriptions that are not favorited
-  delete from public.transcriptions
-  where is_favorite = false
-    and expiry_at is not null
-    and expiry_at < now();
-
   -- Delete expired translated audio chunks that are not favorited
-  delete from public.translated_audio_chunks
-  where is_favorite = false
-    and expiry_at is not null
-    and expiry_at < now();
+  -- Store deleted paths for potential storage cleanup
+  WITH deleted_chunks AS (
+    DELETE FROM public.translated_audio_chunks
+    WHERE is_favorite = false
+      AND expiry_at IS NOT NULL
+      AND expiry_at < now()
+    RETURNING storage_path
+  )
+  -- Placeholder for server-side storage cleanup logic using deleted_chunks.storage_path
+  SELECT count(*) FROM deleted_chunks; -- Prevent optimization removal
 
-  -- Find download jobs linked to deleted resources (or jobs older than interval without favorites)
-  -- This requires knowing the storage path to delete from Supabase Storage
-  -- Deleting from storage needs service_role key and is best handled by the server application
-  -- or a dedicated cleanup function called via cron that can interact with storage.
-  -- For now, just delete the job record if old and completed/failed.
-  delete from public.download_jobs
-  where status in ('completed', 'failed')
-    and updated_at < (now() - raw_audio_expiry_interval)
-    and not exists ( -- Don't delete if associated video is favorited
-      select 1 from public.favorites f where f.video_id = download_jobs.video_id
-    );
+  -- Delete old transcription segment *records* (optional, keeps history shorter)
+  DELETE FROM public.transcription_segments
+  WHERE completed_at IS NOT NULL
+    AND completed_at < (now() - transcribed_segment_expiry_interval)
+    -- Add condition: AND NOT EXISTS (SELECT 1 FROM favorites WHERE favorites.video_id = transcription_segments.video_id)?
+    -- Or based on associated audio chunks?
+    ;
 
-  -- TODO: Add logic here or in a separate server-side job to delete files
-  -- from Supabase Storage ('youtube-audio', 'translated-audio' buckets)
-  -- based on the deleted table rows or expiry_at timestamps.
+  -- Find old download jobs (full audio) not linked to any favorites
+  WITH deleted_jobs AS (
+      DELETE FROM public.download_jobs
+      WHERE status IN ('completed', 'failed')
+        AND updated_at < (now() - raw_audio_expiry_interval)
+        AND NOT EXISTS (
+          SELECT 1 FROM public.favorites f WHERE f.video_id = download_jobs.video_id
+        )
+      RETURNING storage_path
+  )
+  -- Placeholder for server-side storage cleanup logic for full audio files
+  SELECT count(*) FROM deleted_jobs; -- Prevent optimization removal
+
+
+  -- Placeholder: Server-side logic is needed to:
+  -- 1. Delete actual files from 'translated-audio' bucket based on deleted_chunks.
+  -- 2. Delete actual files from 'youtube-audio' bucket based on deleted_jobs.
+  -- 3. Delete files from 'transcription-segments' bucket older than raw_segment_expiry_interval.
+  --    This requires querying Storage API directly as segment records might be deleted earlier.
 
 end;
 $$ language plpgsql security definer;
 
 -- Schedule the cleanup job using pg_cron
--- Ensure pg_cron is enabled in your Supabase project
+-- Ensure pg_cron is enabled
+-- Drop old job if exists
+select cron.unschedule('cleanup-expired-resources');
+-- Schedule new job
 select cron.schedule(
   'cleanup-expired-resources',
   '0 1 * * *', -- Run at 01:00 UTC every day
   $$select public.cleanup_expired_resources()$$
 );
 
--- Setup Storage buckets (Run these manually in Supabase SQL Editor or via migration)
--- Make sure these buckets exist. Policies determine access.
+-- Setup Storage buckets (Ensure these exist)
 /*
--- Bucket for original YouTube audio extracts
-insert into storage.buckets (id, name, public)
-values ('youtube-audio', 'youtube-audio', false)
-on conflict (id) do nothing;
+-- Bucket for original YouTube audio extracts (existing)
+insert into storage.buckets (id, name, public) values ('youtube-audio', 'youtube-audio', false) on conflict (id) do nothing;
 
--- Bucket for translated TTS audio chunks
-insert into storage.buckets (id, name, public)
-values ('translated-audio', 'translated-audio', false)
-on conflict (id) do nothing;
+-- Bucket for extracted audio segments for transcription
+insert into storage.buckets (id, name, public) values ('transcription-segments', 'transcription-segments', false) on conflict (id) do nothing;
 
--- Policies for youtube-audio bucket (example: service role access)
-create policy "Allow service role full access to youtube-audio"
-  on storage.objects for all
-  using ( bucket_id = 'youtube-audio' and auth.role() = 'service_role' );
+-- Bucket for translated TTS audio chunks (existing)
+insert into storage.buckets (id, name, public) values ('translated-audio', 'translated-audio', false) on conflict (id) do nothing;
 
--- Policies for translated-audio bucket (example: public read, service role write)
-create policy "Allow public read access to translated-audio"
-  on storage.objects for select
-  using ( bucket_id = 'translated-audio' );
+-- Policies for youtube-audio bucket (Allow read by audio-segmenter service role)
+-- Ensure existing service role policies are sufficient or add specific read policy
 
-create policy "Allow service role write access to translated-audio"
+-- Policies for transcription-segments bucket (Allow write by audio-segmenter, read by server action service role)
+create policy "Allow audio-segmenter service role write access to transcription-segments"
   on storage.objects for insert, update
-  using ( bucket_id = 'translated-audio' and auth.role() = 'service_role' );
+  using ( bucket_id = 'transcription-segments' and auth.role() = 'service_role' ) -- Restrict further if roles differ
+  with check ( bucket_id = 'transcription-segments' and auth.role() = 'service_role' );
 
-create policy "Allow service role delete access to translated-audio"
-    on storage.objects for delete
-    using ( bucket_id = 'translated-audio' and auth.role() = 'service_role' );
+create policy "Allow server service role read access to transcription-segments"
+  on storage.objects for select
+  using ( bucket_id = 'transcription-segments' and auth.role() = 'service_role' ); -- Restrict further if roles differ
+
+-- Policies for translated-audio bucket (Allow write by server service role, public read)
+create policy "Allow public read access to translated-audio" on storage.objects for select using ( bucket_id = 'translated-audio' );
+create policy "Allow server service role write access to translated-audio" on storage.objects for insert, update using ( bucket_id = 'translated-audio' and auth.role() = 'service_role' );
+create policy "Allow server service role delete access to translated-audio" on storage.objects for delete using ( bucket_id = 'translated-audio' and auth.role() = 'service_role' );
 */
 
 -- Initial data for profiles based on auth users

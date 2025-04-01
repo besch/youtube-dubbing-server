@@ -1,274 +1,240 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { supabaseServiceRoleClient } from "@/lib/supabase/serviceRoleClient";
-import type { TranscriptionSegment } from "@/app/actions/video"; // Reuse existing type
+import { AppError, AppErrorCode } from "@/app/actions/actions"; // Import error types if needed
 
 // Define the expected Replicate webhook payload structure
+interface TranscriptionWord {
+  start?: number; // Mark as optional as they might be missing
+  end?: number;
+  word?: string;
+}
+interface ReplicateSegment {
+  start?: number;
+  end?: number;
+  text?: string;
+  words?: TranscriptionWord[];
+}
+interface ReplicateOutput {
+  segments?: ReplicateSegment[];
+  // Include other potential top-level fields like detected_language
+}
 interface ReplicateWebhookPayload {
   id: string; // Prediction ID
-  version: string;
   status: "starting" | "processing" | "succeeded" | "failed" | "canceled";
-  input: Record<string, any>; // Can be more specific if needed
-  output?: {
-    // Only present on 'succeeded'
-    detected_language?: string;
-    segments?: TranscriptionSegment[];
-    // Add other fields from Replicate output if needed
-  } | null;
-  error?: string | null; // Only present on 'failed'
-  logs?: string;
-  metrics?: Record<string, any>;
-  created_at: string;
-  started_at?: string;
-  completed_at?: string;
-  urls: {
-    get: string;
-    cancel: string;
-  };
+  output?: ReplicateOutput | null; // The transcription result on success
+  error?: any; // Error details on failure
+  // Include other fields Replicate sends if needed
 }
 
-export async function POST(request: NextRequest) {
-  const searchParams = request.nextUrl.searchParams;
-  const transcriptionId = searchParams.get("transcription_id");
-  const replicateSecret = process.env.REPLICATE_WEBHOOK_SECRET; // Optional: For security
-
-  // Optional: Basic Secret Validation (adjust as needed)
-  // const providedSecret = request.headers.get('X-Replicate-Secret'); // Or another header if Replicate supports custom headers
-  // if (replicateSecret && providedSecret !== replicateSecret) {
-  //   console.warn("Replicate webhook: Invalid secret received.");
-  //   return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+// --- Security Function (Placeholder) ---
+// You MUST implement proper webhook signature verification in production
+// See Replicate documentation and libraries like `svix`
+function isValidWebhookSignature(request: Request, body: string): boolean {
+  // const secret = process.env.REPLICATE_WEBHOOK_SECRET;
+  // const signature = request.headers.get('Webhook-Signature'); // Adjust header name if needed
+  // if (!secret || !signature) return false;
+  // try {
+  //     const wh = new Webhook(secret);
+  //     wh.verify(body, { signature }); // Throws error on invalid signature
+  //     return true;
+  // } catch (err) {
+  //     console.error('Webhook signature verification failed:', err);
+  //     return false;
   // }
+  console.warn(
+    "Webhook signature verification is skipped! Implement for production."
+  );
+  return true; // !! REMOVE THIS IN PRODUCTION !!
+}
 
-  if (!transcriptionId) {
-    console.error(
-      "Replicate webhook: Missing 'transcription_id' query parameter."
-    );
-    return NextResponse.json(
-      { error: "Missing transcription_id" },
-      { status: 400 }
-    );
-  }
+export async function POST(request: Request) {
+  const supabase = supabaseServiceRoleClient;
+  let prediction: ReplicateWebhookPayload | null = null;
+  let requestBodyText: string;
 
-  let payload: ReplicateWebhookPayload;
   try {
-    payload = await request.json();
+    requestBodyText = await request.text(); // Read body once for verification and parsing
+
+    // --- 1. Verify Webhook Signature (CRITICAL FOR PRODUCTION) ---
+    if (!isValidWebhookSignature(request, requestBodyText)) {
+      console.warn("Invalid webhook signature received.");
+      return new NextResponse("Invalid signature", { status: 401 });
+    }
+
+    // --- 2. Parse Payload ---
+    try {
+      prediction = JSON.parse(requestBodyText) as ReplicateWebhookPayload;
+    } catch (e) {
+      console.error("Webhook error: Failed to parse JSON body:", e);
+      return new NextResponse("Invalid JSON body", { status: 400 });
+    }
+
+    // --- 3. Validate Payload and Status ---
+    if (!prediction || !prediction.id) {
+      console.warn(
+        "Webhook received invalid or missing prediction ID.",
+        prediction
+      );
+      return new NextResponse("Invalid payload", { status: 400 });
+    }
+
     console.log(
-      `Received Replicate webhook for transcription ${transcriptionId}: Status - ${payload.status}`
+      `Webhook received for Replicate ID: ${prediction.id}, Status: ${prediction.status}`
     );
-  } catch (error) {
-    console.error("Replicate webhook: Failed to parse request body:", error);
-    return NextResponse.json(
-      { error: "Invalid request body" },
-      { status: 400 }
-    );
-  }
 
-  const { status, output, error: replicateError, id: predictionId } = payload;
-
-  try {
-    const supabase = supabaseServiceRoleClient;
-
-    // Fetch the existing transcription record to ensure it exists and potentially check current status
-    const { data: existingTranscription, error: fetchError } = await supabase
-      .from("transcriptions")
-      .select("id, status, replicate_prediction_id")
-      .eq("id", transcriptionId)
-      .maybeSingle();
-
-    if (fetchError) {
-      console.error(
-        `Replicate webhook: Error fetching transcription ${transcriptionId}:`,
-        fetchError
-      );
-      return NextResponse.json(
-        { error: "Database error fetching record" },
-        { status: 500 }
-      );
-    }
-
-    if (!existingTranscription) {
-      console.warn(
-        `Replicate webhook: Transcription record ${transcriptionId} not found.`
-      );
-      // Return 200 OK to Replicate even if we don't find the record,
-      // as retrying won't help if it's truly missing.
-      return NextResponse.json(
-        { message: "Transcription record not found" },
-        { status: 200 }
-      );
-    }
-
-    // Idempotency check: If already completed or failed, don't process again
-    if (
-      existingTranscription.status === "completed" ||
-      existingTranscription.status === "failed"
-    ) {
-      console.log(
-        `Replicate webhook: Transcription ${transcriptionId} already processed (status: ${existingTranscription.status}). Ignoring webhook.`
-      );
-      return NextResponse.json(
-        { message: "Already processed" },
-        { status: 200 }
-      );
-    }
-
-    // Check if the prediction ID matches (optional security measure)
-    if (
-      existingTranscription.replicate_prediction_id &&
-      existingTranscription.replicate_prediction_id !== predictionId
-    ) {
-      console.warn(
-        `Replicate webhook: Prediction ID mismatch for transcription ${transcriptionId}. Expected ${existingTranscription.replicate_prediction_id}, got ${predictionId}.`
-      );
-      // Decide how to handle: ignore, error, etc. For now, log and proceed cautiously.
-    }
-
-    if (status === "succeeded") {
-      if (!output || !output.segments) {
+    if (prediction.status !== "succeeded") {
+      if (prediction.status === "failed") {
         console.error(
-          `Replicate webhook: 'succeeded' status but missing output.segments for transcription ${transcriptionId}. Payload:`,
-          output
+          `Replicate prediction ${prediction.id} failed:`,
+          prediction.error
         );
-        // Update status to failed because output is unusable
-        const { error: updateError } = await supabase
-          .from("transcriptions")
-          .update({
-            status: "failed",
-            error_message: "Replicate succeeded but output format was invalid.",
-            completed_at: new Date().toISOString(),
-          })
-          .eq("id", transcriptionId);
-
-        if (updateError) {
+        // Optionally update the DB record to 'failed'
+        try {
+          // TODO: Regenerate Supabase types
+          await supabase
+            .from("transcription_segments" as any)
+            .update({
+              status: "failed",
+              error_message: JSON.stringify(
+                prediction.error ?? "Replicate reported failure"
+              ),
+              completed_at: new Date().toISOString(),
+            })
+            .eq("replicate_prediction_id", prediction.id);
+        } catch (dbError) {
           console.error(
-            `Replicate webhook: Failed to update transcription ${transcriptionId} status to 'failed' after invalid output:`,
-            updateError
+            `Webhook: Error updating segment status to failed for ${prediction.id}:`,
+            dbError
           );
         }
-        return NextResponse.json(
-          { error: "Invalid output format" },
-          { status: 400 }
-        ); // Or 500 if DB update failed
       }
-
-      // Format content if needed, here we assume output.segments is directly usable
-      const transcriptionContent = output.segments;
-
-      // Cast to unknown and then any to satisfy Supabase client type for jsonb
-      const transcriptionContentAny = transcriptionContent as unknown as any;
-
-      console.log(
-        `Replicate webhook: Updating transcription ${transcriptionId} to 'completed'.`
-      );
-      const { error: updateError } = await supabase
-        .from("transcriptions")
-        .update({
-          status: "completed",
-          content: transcriptionContentAny, // Use the casted value
-          error_message: null, // Clear any previous error
-          completed_at: new Date().toISOString(),
-        })
-        .eq("id", transcriptionId);
-
-      if (updateError) {
-        console.error(
-          `Replicate webhook: Failed to update transcription ${transcriptionId} to 'completed':`,
-          updateError
-        );
-        return NextResponse.json(
-          { error: "Database update error" },
-          { status: 500 }
-        );
-      }
-
-      console.log(
-        `Replicate webhook: Successfully processed 'succeeded' status for transcription ${transcriptionId}.`
-      );
+      // Acknowledge other non-success statuses (processing, canceled) without error
       return NextResponse.json(
-        { message: "Webhook processed successfully" },
+        { message: "Webhook acknowledged (status not 'succeeded')" },
         { status: 200 }
       );
-    } else if (status === "failed") {
-      console.error(
-        `Replicate webhook: Transcription ${transcriptionId} failed. Error: ${replicateError}`
-      );
-      const { error: updateError } = await supabase
-        .from("transcriptions")
-        .update({
-          status: "failed",
-          error_message:
-            replicateError ||
-            "Replicate prediction failed without specific error message.",
-          completed_at: new Date().toISOString(), // Mark completion time even for failure
-        })
-        .eq("id", transcriptionId);
-
-      if (updateError) {
-        console.error(
-          `Replicate webhook: Failed to update transcription ${transcriptionId} status to 'failed':`,
-          updateError
-        );
-        return NextResponse.json(
-          { error: "Database update error" },
-          { status: 500 }
-        );
-      }
-
-      console.log(
-        `Replicate webhook: Successfully processed 'failed' status for transcription ${transcriptionId}.`
-      );
-      return NextResponse.json(
-        { message: "Webhook processed successfully (failure)" },
-        { status: 200 }
-      );
-    } else if (status === "processing" || status === "starting") {
-      // Optional: Update status if we want to track these intermediate states
-      console.log(
-        `Replicate webhook: Received intermediate status '${status}' for transcription ${transcriptionId}. No DB update needed.`
-      );
-      return NextResponse.json(
-        { message: "Intermediate status received" },
-        { status: 200 }
-      );
-    } else if (status === "canceled") {
-      console.log(
-        `Replicate webhook: Received 'canceled' status for transcription ${transcriptionId}. Treating as failed.`
-      );
-      const { error: updateError } = await supabase
-        .from("transcriptions")
-        .update({
-          status: "failed",
-          error_message: "Replicate prediction was canceled.",
-          completed_at: new Date().toISOString(),
-        })
-        .eq("id", transcriptionId);
-      if (updateError) {
-        console.error(
-          `Replicate webhook: Failed to update transcription ${transcriptionId} status to 'failed' after cancel:`,
-          updateError
-        );
-        return NextResponse.json(
-          { error: "Database update error" },
-          { status: 500 }
-        );
-      }
-      return NextResponse.json(
-        { message: "Webhook processed successfully (canceled)" },
-        { status: 200 }
-      );
-    } else {
-      console.warn(
-        `Replicate webhook: Received unknown status '${status}' for transcription ${transcriptionId}.`
-      );
-      return NextResponse.json({ message: "Unknown status" }, { status: 200 }); // Acknowledge receipt
     }
-  } catch (error: any) {
-    console.error(
-      `Replicate webhook: Unexpected error processing webhook for ${transcriptionId}:`,
-      error
+
+    // --- 4. Process Successful Prediction ---
+    if (!prediction.output) {
+      console.error(
+        `Webhook error: Prediction ${prediction.id} succeeded but output is missing.`
+      );
+      // Update DB to failed status as output is unusable
+      await supabase
+        .from("transcription_segments" as any)
+        .update({
+          status: "failed",
+          error_message: "Replicate succeeded but output was empty.",
+          completed_at: new Date().toISOString(),
+        })
+        .eq("replicate_prediction_id", prediction.id);
+      return new NextResponse("Missing prediction output", { status: 400 });
+    }
+
+    // --- 5. Find Corresponding Segment in DB ---
+    const { data: segmentData, error: findError } = await supabase
+      .from("transcription_segments" as any)
+      .select("id, start_time")
+      .eq("replicate_prediction_id", prediction.id)
+      .maybeSingle();
+
+    if (findError) {
+      console.error(
+        `Webhook DB error: Failed finding segment for Replicate ID ${prediction.id}:`,
+        findError
+      );
+      // Don't return 500, as Replicate might retry endlessly. Log the error.
+      return NextResponse.json(
+        { message: "Webhook acknowledged (database error finding segment)" },
+        { status: 200 }
+      );
+    }
+
+    // Use cast and optional chaining here
+    const segmentId = (segmentData as any)?.id;
+    const segmentStartTime = (segmentData as any)?.start_time ?? 0;
+
+    if (!segmentId) {
+      console.error(
+        `Webhook error: No transcription segment found for Replicate ID ${prediction.id}`
+      );
+      return NextResponse.json(
+        { message: "Webhook acknowledged (segment not found)" },
+        { status: 200 }
+      );
+    }
+
+    // --- 6. Timestamp Adjustment --- //
+    let adjustedOutput = prediction.output;
+
+    if (
+      segmentStartTime > 0 &&
+      adjustedOutput?.segments &&
+      Array.isArray(adjustedOutput.segments)
+    ) {
+      console.log(
+        `Adjusting timestamps in transcription for segment ${segmentId} by +${segmentStartTime} seconds.`
+      );
+      adjustedOutput.segments.forEach((s: ReplicateSegment) => {
+        if (s.words && Array.isArray(s.words)) {
+          s.words.forEach((w: TranscriptionWord) => {
+            // Add start_time only if the timestamp exists and is a number
+            if (typeof w.start === "number") w.start += segmentStartTime;
+            if (typeof w.end === "number") w.end += segmentStartTime;
+          });
+        }
+        // Adjust segment-level timestamps if they exist
+        if (typeof s.start === "number") s.start += segmentStartTime;
+        if (typeof s.end === "number") s.end += segmentStartTime;
+      });
+    } else if (segmentStartTime > 0) {
+      console.warn(
+        `Webhook for ${prediction.id}: Cannot adjust timestamps, output format unexpected or start_time is 0. Output:`,
+        adjustedOutput
+      );
+    }
+
+    // --- 7. Update Segment Record in DB ---
+    const { error: updateError } = await supabase
+      .from("transcription_segments" as any)
+      .update({
+        status: "completed",
+        content: adjustedOutput, // Store the adjusted transcription
+        completed_at: new Date().toISOString(),
+        error_message: null, // Clear previous errors if any
+      })
+      .eq("id", segmentId);
+
+    if (updateError) {
+      console.error(
+        `Webhook DB error: Failed updating segment ${segmentId} for Replicate ID ${prediction.id}:`,
+        updateError
+      );
+      // Don't return 500
+      return NextResponse.json(
+        { message: "Webhook acknowledged (database error updating segment)" },
+        { status: 200 }
+      );
+    }
+
+    console.log(
+      `Successfully processed webhook for segment ${segmentId} (Replicate ID: ${prediction.id})`
     );
     return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
+      { message: "Webhook processed successfully" },
+      { status: 200 }
+    );
+  } catch (error: any) {
+    console.error(`Webhook - Unexpected error processing webhook:`, error);
+    // Log details if possible
+    if (prediction?.id) {
+      console.error(`Webhook - Failed prediction ID: ${prediction.id}`);
+    }
+    // Avoid returning 5xx to prevent Replicate retries for unexpected server issues
+    return NextResponse.json(
+      { message: "Webhook acknowledged (internal server error)" },
+      { status: 200 }
     );
   }
 }
