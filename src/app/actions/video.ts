@@ -923,8 +923,12 @@ async function getAudioSegmentPath(
       "Audio Segmenter not configured"
     );
   }
+
+  // Workaround for segmenter validation: send a tiny positive value if startTime is 0
+  const segmenterStartTime = startTime === 0 ? 0.01 : startTime;
+
   console.log(
-    `Calling Audio Segmenter at ${AUDIO_SEGMENTER_URL} for video ${videoId} (${startTime}-${endTime})`
+    `Calling Audio Segmenter at ${AUDIO_SEGMENTER_URL} for video ${videoId} (Sent Time: ${segmenterStartTime}-${endTime}, Original Start: ${startTime})`
   );
   try {
     const response = await fetch(`${AUDIO_SEGMENTER_URL}/segment-transcribe`, {
@@ -935,7 +939,7 @@ async function getAudioSegmentPath(
       },
       body: JSON.stringify({
         video_id: videoId,
-        start_time: startTime,
+        start_time: segmenterStartTime, // Use the adjusted start time here
         end_time: endTime,
       }),
     });
