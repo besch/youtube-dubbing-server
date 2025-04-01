@@ -64,4 +64,4 @@ export type Video = Tables["videos"]["Row"];
 export type History = Tables["history"]["Row"];
 export type Favorite = Tables["favorites"]["Row"];
 export type AudioChunk = Tables["translated_audio_chunks"]["Row"];
-export type Transcription = Tables["transcriptions"]["Row"];
+export type TranscriptionSegmentDb = Tables["transcription_segments"]["Row"];
