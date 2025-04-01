@@ -943,15 +943,22 @@ async function getAudioSegmentPath(
     if (!response.ok) {
       const errorBody = await response.text();
       console.error(`Audio Segmenter Error (${response.status}): ${errorBody}`);
-      let detail = errorBody;
+      let detailMessage = `Status ${response.status}: ${errorBody}`; // Default message
       try {
-        detail = JSON.parse(errorBody).detail || errorBody;
+        const parsedError = JSON.parse(errorBody);
+        // Prefer parsedError.detail if it's a string, otherwise stringify the whole object
+        if (typeof parsedError.detail === "string") {
+          detailMessage = parsedError.detail;
+        } else {
+          // Stringify the whole parsed object for more context
+          detailMessage = JSON.stringify(parsedError);
+        }
       } catch {
-        /* ignore */
+        // Parsing failed, stick with the raw errorBody
       }
       throw new AppError(
         AppErrorCode.AUDIO_SEGMENTER_ERROR,
-        `Audio Segmenter failed: ${detail}`
+        `Audio Segmenter failed: ${detailMessage}` // Use the refined message
       );
     }
 
