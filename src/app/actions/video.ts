@@ -1038,17 +1038,6 @@ export const requestTranscriptionSegment = protectedAction
     }): Promise<ActionResponse<{ success: boolean }>> => {
       const { videoId, startTime, endTime } = parsedInput;
       const supabase = supabaseServiceRoleClient;
-      const replicateModelVersion = process.env.REPLICATE_MODEL_VERSION;
-
-      if (!replicateModelVersion) {
-        return {
-          success: false,
-          error: new AppError(
-            AppErrorCode.CONFIGURATION_ERROR,
-            "Replicate model version not configured."
-          ),
-        };
-      }
 
       console.log(
         `Requesting transcription segment for video ${videoId} from ${startTime} to ${endTime}`
@@ -1139,10 +1128,10 @@ export const requestTranscriptionSegment = protectedAction
           );
         const dbSegmentId = (dbSegment as Tables<"transcription_segments">).id;
 
-        // 5. Start Replicate Transcription
+        // 5. Start Replicate Transcription - Hardcode the model version here
         const replicatePredictionId = await startReplicateTranscription(
           segmentSignedUrl,
-          replicateModelVersion
+          "thomasmol/whisper-diarization:d8bc5908738ebd84a9bb7d77d94b9c5e5a3d867886791d7171ddb60455b4c6af"
         );
 
         // 6. Update DB record with Replicate ID (processing)
