@@ -1,6 +1,8 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { supabaseServiceRoleClient } from "@/lib/supabase/serviceRoleClient";
 import { AppError, AppErrorCode } from "@/app/actions/actions"; // Import error types if needed
+// Import generated types
+import type { Database, Tables, Enums } from "@/types/supabase";
 
 // Define the expected Replicate webhook payload structure
 interface TranscriptionWord {
@@ -90,9 +92,9 @@ export async function POST(request: Request) {
         );
         // Optionally update the DB record to 'failed'
         try {
-          // TODO: Regenerate Supabase types
+          // Use generated types
           await supabase
-            .from("transcription_segments" as any)
+            .from("transcription_segments") // Use string literal
             .update({
               status: "failed",
               error_message: JSON.stringify(
@@ -122,7 +124,7 @@ export async function POST(request: Request) {
       );
       // Update DB to failed status as output is unusable
       await supabase
-        .from("transcription_segments" as any)
+        .from("transcription_segments") // Use string literal
         .update({
           status: "failed",
           error_message: "Replicate succeeded but output was empty.",
@@ -134,7 +136,7 @@ export async function POST(request: Request) {
 
     // --- 5. Find Corresponding Segment in DB ---
     const { data: segmentData, error: findError } = await supabase
-      .from("transcription_segments" as any)
+      .from("transcription_segments") // Use string literal
       .select("id, start_time")
       .eq("replicate_prediction_id", prediction.id)
       .maybeSingle();
@@ -151,9 +153,11 @@ export async function POST(request: Request) {
       );
     }
 
-    // Use cast and optional chaining here
-    const segmentId = (segmentData as any)?.id;
-    const segmentStartTime = (segmentData as any)?.start_time ?? 0;
+    // Use type assertion with generated type
+    const segmentRecord =
+      segmentData as Tables<"transcription_segments"> | null;
+    const segmentId = segmentRecord?.id;
+    const segmentStartTime = segmentRecord?.start_time ?? 0;
 
     if (!segmentId) {
       console.error(
@@ -197,10 +201,10 @@ export async function POST(request: Request) {
 
     // --- 7. Update Segment Record in DB ---
     const { error: updateError } = await supabase
-      .from("transcription_segments" as any)
+      .from("transcription_segments") // Use string literal
       .update({
         status: "completed",
-        content: adjustedOutput, // Store the adjusted transcription
+        content: adjustedOutput as any, // Cast adjustedOutput to Json (or refine validation)
         completed_at: new Date().toISOString(),
         error_message: null, // Clear previous errors if any
       })
