@@ -997,8 +997,29 @@ async function startReplicateTranscription(
   replicateModelVersion: string
 ): Promise<string> {
   console.log(
-    `Calling Replicate (${replicateModelVersion}) for: ${audioUrl} with webhook ${REPLICATE_WEBHOOK_URL}`
+    // Enhanced Log
+    `Replicate: Calling model ${replicateModelVersion} for audio URL: ${audioUrl.substring(
+      0,
+      150
+    )}... Webhook: ${REPLICATE_WEBHOOK_URL}`
   );
+  if (!REPLICATE_WEBHOOK_URL) {
+    // Added check
+    console.error("Replicate Error: REPLICATE_WEBHOOK_URL is not set!");
+    throw new AppError(
+      AppErrorCode.CONFIGURATION_ERROR,
+      "Replicate webhook URL is not configured."
+    );
+  }
+  if (!replicate) {
+    // Added check
+    console.error("Replicate Error: Replicate client is not initialized!");
+    throw new AppError(
+      AppErrorCode.CONFIGURATION_ERROR,
+      "Replicate client failed to initialize."
+    );
+  }
+
   try {
     const prediction = await replicate.predictions.create({
       version: replicateModelVersion,
@@ -1006,21 +1027,41 @@ async function startReplicateTranscription(
         audio: audioUrl,
       },
       webhook: REPLICATE_WEBHOOK_URL,
-      webhook_events_filter: ["completed"],
+      webhook_events_filter: ["completed"], // Ensure this matches what webhook handler expects
     });
 
-    if (!prediction.id) {
+    if (!prediction?.id) {
+      // Check prediction object itself as well
+      console.error(
+        "Replicate Error: API call succeeded but returned no prediction ID. Prediction object:",
+        JSON.stringify(prediction, null, 2)
+      ); // Log the full prediction object stringified
       throw new Error("Replicate did not return a prediction ID");
     }
-    console.log("Replicate prediction started:", prediction.id);
+    console.log(
+      "Replicate: Prediction started successfully. ID:",
+      prediction.id
+    ); // Log success
     return prediction.id;
   } catch (error: unknown) {
-    console.error("Replicate API Error:", error);
+    // Log the raw error *before* wrapping it
+    console.error(
+      "Replicate Error: Caught error during predictions.create():",
+      error
+    );
+
+    // Construct a more informative message
     const message =
-      error instanceof Error ? error.message : "Unknown Replicate error";
+      error instanceof Error ? error.message : "Unknown Replicate API error";
+    let detailedMessage = `Replicate transcription failed to start: ${message}`;
+    // Attempt to extract more details if available (e.g., from Replicate's error structure)
+    if (typeof error === "object" && error !== null && "toString" in error) {
+      detailedMessage += ` | Details: ${error.toString()}`;
+    }
+
     throw new AppError(
       AppErrorCode.REPLICATE_API_ERROR,
-      `Replicate transcription failed to start: ${message}`
+      detailedMessage // Use the more detailed message
     );
   }
 }
