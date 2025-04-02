@@ -1204,7 +1204,6 @@ export const requestTranscriptionSegment = protectedAction
         const model =
           "thomasmol/whisper-diarization:d8bc5908738ebd84a9bb7d77d94b9c5e5a3d867886791d7171ddb60455b4c6af";
         console.log(
-          // Added more detailed log before calling helper
           `RequestSegment: Attempting to start Replicate transcription (Model: ${model}) for segment ${dbSegmentId} using URL starting with: ${segmentSignedUrl.substring(
             0,
             100
@@ -1214,7 +1213,6 @@ export const requestTranscriptionSegment = protectedAction
           segmentSignedUrl,
           model
         );
-        // Added log after successful call
         console.log(
           `RequestSegment: Successfully started Replicate. Received Prediction ID: ${replicatePredictionId} for DB segment ${dbSegmentId}`
         );
