@@ -1549,15 +1549,30 @@ export const translateSegmentContent = protectedAction
         [targetLanguage]: translatedContent,
       };
 
+      // Log before the DB update
+      console.log(
+        `>>> translateSegmentContent: Attempting to update DB for segment ${segmentId} with translations: ${JSON.stringify(
+          updatedTranslations
+        )}`
+      );
       const { error: updateError } = await supabase
         .from("transcription_segments")
         .update({ translations: updatedTranslations as any }) // Keep 'as any' until types are updated
         .eq("id", segmentId);
 
+      // Log after the DB update, checking for errors
       if (updateError) {
+        console.error(
+          `>>> translateSegmentContent: DB Update Error for segment ${segmentId}:`,
+          updateError
+        );
         throw new AppError(
           AppErrorCode.DATABASE_ERROR,
           `DB error updating translations for segment ${segmentId}: ${updateError.message}`
+        );
+      } else {
+        console.log(
+          `>>> translateSegmentContent: DB Update successful for segment ${segmentId}. Realtime event should trigger.`
         );
       }
 
