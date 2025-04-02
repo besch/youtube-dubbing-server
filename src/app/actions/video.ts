@@ -1457,19 +1457,7 @@ export const translateSegmentContent = protectedAction
         return { success: true, data: null };
       }
 
-      // 3. Check if translation already exists
-      const existingTranslations = (segmentData.translations ?? {}) as Record<
-        string,
-        ReplicateSegmentOutput
-      >;
-      if (existingTranslations[targetLanguage]) {
-        console.log(
-          `Translation for ${targetLanguage} already exists for segment ${segmentId}. Skipping.`
-        );
-        return { success: true, data: null };
-      }
-
-      // 4. Prepare for Translation
+      // 3. Prepare for Translation
       const sourceLangCode = originalContent.detected_language || "en";
       const sourceLangName =
         config.languages.find((l) => l.code === sourceLangCode)?.name ||
@@ -1497,7 +1485,7 @@ export const translateSegmentContent = protectedAction
         `Calling Anthropic to translate ${sourceLangName} to ${targetLangName} for segment ${segmentId}`
       );
 
-      // 5. Call Anthropic API
+      // 4. Call Anthropic API
       const response = await anthropic.messages.create({
         model: "claude-3-haiku-20240307",
         max_tokens: 2500,
@@ -1522,7 +1510,7 @@ export const translateSegmentContent = protectedAction
       }
       const translatedText = response.content[0].text;
 
-      // 6. Parse Anthropic Response
+      // 5. Parse Anthropic Response
       const parsedSegments = parseAnthropicResponse(
         translatedText,
         originalContent.segments
@@ -1543,9 +1531,9 @@ export const translateSegmentContent = protectedAction
         // detected_language: targetLanguage
       };
 
-      // 7. Update Database
+      // 6. Update Database
       const updatedTranslations = {
-        ...(existingTranslations as object),
+        ...((segmentData.translations || {}) as object),
         [targetLanguage]: translatedContent,
       };
 
