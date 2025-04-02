@@ -1210,7 +1210,7 @@ export const requestTranscriptionSegment = protectedAction
 
         // 5. Start Replicate Transcription - Hardcode the model version here
         const model =
-          "thomasmol/whisper-diarization:d8bc5908738ebd84a9bb7d77d94b9c5e5a3d867886791d7171ddb60455b4c6af";
+          "vaibhavs10/insanely-fast-whisper-with-diarization:18a466752452d2e3f44964f588e7c0748d0323035c89903dec08729b122ca96c";
         console.log(
           `RequestSegment: Attempting to start Replicate transcription (Model: ${model}) for segment ${dbSegmentId} using URL starting with: ${segmentSignedUrl.substring(
             0,
