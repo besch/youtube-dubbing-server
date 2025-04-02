@@ -7,6 +7,7 @@ import {
   updateHistory,
   toggleFavorite,
   getFavoriteStatus,
+  translateSegmentContent,
 } from "@/app/actions/video"; // Import specific actions
 // Import other actions as they are created
 // import { toggleFavorite } from '@/app/actions/userVideoData'
@@ -27,6 +28,7 @@ const actionRegistry: Record<string, ActionFunction> = {
   "video/updateHistory": updateHistory,
   "video/toggleFavorite": toggleFavorite,
   "video/getFavoriteStatus": getFavoriteStatus,
+  "video/translateSegmentContent": translateSegmentContent,
 
   // user/favorites actions
   // 'user/toggleFavorite': toggleFavorite as any, // Add when implemented
