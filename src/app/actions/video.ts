@@ -1343,7 +1343,7 @@ function parseAnthropicResponse(
       const timeLine = lines[lineIndex++]?.trim();
       if (!timeLine || !timeLine.includes("-->")) continue; // Basic check for timestamp format
 
-      let textLine = lines[lineIndex++]?.trim();
+      const textLine = lines[lineIndex++]?.trim();
       if (textLine === undefined) continue;
 
       // Consume potential empty lines until next number or EOF
