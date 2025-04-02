@@ -1431,143 +1431,189 @@ export const translateSegmentContent = protectedAction
         );
 
       const segmentData = segmentDataUntyped as any;
+      // Cast safely, defaulting to an empty object if null/undefined
+      const existingTranslations = (segmentData.translations ?? {}) as Record<
+        string,
+        ReplicateSegmentOutput
+      >;
 
-      // 2. Validate content
-      let originalContent: ReplicateSegmentOutput | null = null;
-      if (
-        segmentData.content &&
-        typeof segmentData.content === "object" &&
-        !Array.isArray(segmentData.content) &&
-        "segments" in segmentData.content &&
-        Array.isArray(segmentData.content.segments)
-      ) {
-        originalContent = segmentData.content as ReplicateSegmentOutput;
-      } else {
-        // Use a known error code for now
-        throw new AppError(
-          AppErrorCode.INVALID_INPUT,
-          `Segment ${segmentId} has invalid 'content' structure for translation.`
-        );
-      }
-
-      if (!originalContent?.segments || originalContent.segments.length === 0) {
+      // --- START: Check if translation exists ---
+      if (existingTranslations[targetLanguage]) {
         console.log(
-          `Segment ${segmentId} content is empty, skipping translation.`
+          `>>> translateSegmentContent: Translation for ${targetLanguage} already exists for segment ${segmentId}. Forcing Realtime trigger via update.`
         );
-        return { success: true, data: null };
+        // Force an update by setting the field to its current value.
+        // The updated_at trigger will ensure Realtime fires.
+        const { error: forceUpdateError } = await supabase
+          .from("transcription_segments")
+          .update({ translations: existingTranslations as any }) // Re-set same value
+          .eq("id", segmentId);
+
+        if (forceUpdateError) {
+          console.error(
+            `>>> translateSegmentContent: DB Force Update Error for segment ${segmentId}:`,
+            forceUpdateError
+          );
+          // Throw error even if forcing, as something went wrong with the DB
+          throw new AppError(
+            AppErrorCode.DATABASE_ERROR,
+            `DB error forcing update for segment ${segmentId}: ${forceUpdateError.message}`
+          );
+        } else {
+          console.log(
+            `>>> translateSegmentContent: DB Force Update successful for segment ${segmentId}. Realtime event should trigger.`
+          );
+          // Return success because the requested translation data exists.
+          return { success: true, data: null };
+        }
       }
-
-      // 3. Prepare for Translation
-      const sourceLangCode = originalContent.detected_language || "en";
-      const sourceLangName =
-        config.languages.find((l) => l.code === sourceLangCode)?.name ||
-        sourceLangCode;
-      const targetLangName =
-        config.languages.find((l) => l.code === targetLanguage)?.name ||
-        targetLanguage;
-
-      if (sourceLangCode === targetLanguage) {
+      // --- END: Check if translation exists ---
+      else {
+        // --- Translation does NOT exist, proceed with API call ---
         console.log(
-          `Source and target language (${targetLanguage}) are the same for segment ${segmentId}. Skipping translation call.`
+          `>>> translateSegmentContent: Translation for ${targetLanguage} not found for segment ${segmentId}. Proceeding with API call.`
         );
-        return { success: true, data: null };
-      }
 
-      const textToTranslate = formatTranscriptionForAnthropic(
-        originalContent.segments
-      );
-      if (!textToTranslate) {
-        console.log(`No text found to translate in segment ${segmentId}.`);
-        return { success: true, data: null };
-      }
+        // 2. Validate content
+        let originalContent: ReplicateSegmentOutput | null = null;
+        if (
+          segmentData.content &&
+          typeof segmentData.content === "object" &&
+          !Array.isArray(segmentData.content) &&
+          "segments" in segmentData.content &&
+          Array.isArray(segmentData.content.segments)
+        ) {
+          originalContent = segmentData.content as ReplicateSegmentOutput;
+        } else {
+          // Use a known error code for now
+          throw new AppError(
+            AppErrorCode.INVALID_INPUT,
+            `Segment ${segmentId} has invalid 'content' structure for translation.`
+          );
+        }
 
-      console.log(
-        `Calling Anthropic to translate ${sourceLangName} to ${targetLangName} for segment ${segmentId}`
-      );
+        if (
+          !originalContent?.segments ||
+          originalContent.segments.length === 0
+        ) {
+          console.log(
+            `Segment ${segmentId} content is empty, skipping translation.`
+          );
+          return { success: true, data: null };
+        }
 
-      // 4. Call Anthropic API
-      const response = await anthropic.messages.create({
-        model: "claude-3-haiku-20240307",
-        max_tokens: 2500,
-        messages: [
-          {
-            role: "user",
-            content: `Translate the following subtitles from ${sourceLangName} to ${targetLangName}.\nMaintain the exact same timing and numbering format.\nCritical formatting rules:\n1. Each subtitle entry MUST be separated by exactly one empty line\n2. Each entry MUST follow this exact format (no square brackets):\n[number]\n[timestamp like 0.000 --> 0.000]\n[translated text]\n[empty line]\n3. The last subtitle entry MUST be followed by an empty line\n4. Never include multiple consecutive empty lines\n5. Preserve all original numbering and timing exactly as provided\n\n${textToTranslate}`,
-          },
-        ],
-        temperature: 0.3,
-      });
+        // 3. Prepare for Translation
+        const sourceLangCode = originalContent.detected_language || "en";
+        const sourceLangName =
+          config.languages.find((l) => l.code === sourceLangCode)?.name ||
+          sourceLangCode;
+        const targetLangName =
+          config.languages.find((l) => l.code === targetLanguage)?.name ||
+          targetLanguage;
 
-      if (
-        !response.content ||
-        !response.content[0] ||
-        response.content[0].type !== "text"
-      ) {
-        throw new AppError(
-          AppErrorCode.SERVICE_ERROR,
-          "Anthropic translation failed: Invalid response structure."
+        if (sourceLangCode === targetLanguage) {
+          console.log(
+            `Source and target language (${targetLanguage}) are the same for segment ${segmentId}. Skipping translation call.`
+          );
+          return { success: true, data: null };
+        }
+
+        const textToTranslate = formatTranscriptionForAnthropic(
+          originalContent.segments
         );
-      }
-      const translatedText = response.content[0].text;
+        if (!textToTranslate) {
+          console.log(`No text found to translate in segment ${segmentId}.`);
+          return { success: true, data: null };
+        }
 
-      // 5. Parse Anthropic Response
-      const parsedSegments = parseAnthropicResponse(
-        translatedText,
-        originalContent.segments
-      );
-      if (!parsedSegments) {
-        throw new AppError(
-          AppErrorCode.SERVICE_ERROR,
-          `Failed to parse Anthropic translation response for segment ${segmentId}. Raw: ${translatedText.substring(
-            0,
-            100
+        console.log(
+          `Calling Anthropic to translate ${sourceLangName} to ${targetLangName} for segment ${segmentId}`
+        );
+
+        // 4. Call Anthropic API
+        const response = await anthropic.messages.create({
+          model: "claude-3-haiku-20240307",
+          max_tokens: 2500,
+          messages: [
+            {
+              role: "user",
+              content: `Translate the following subtitles from ${sourceLangName} to ${targetLangName}.\nMaintain the exact same timing and numbering format.\nCritical formatting rules:\n1. Each subtitle entry MUST be separated by exactly one empty line\n2. Each entry MUST follow this exact format (no square brackets):\n[number]\n[timestamp like 0.000 --> 0.000]\n[translated text]\n[empty line]\n3. The last subtitle entry MUST be followed by an empty line\n4. Never include multiple consecutive empty lines\n5. Preserve all original numbering and timing exactly as provided\n\n${textToTranslate}`,
+            },
+          ],
+          temperature: 0.3,
+        });
+
+        if (
+          !response.content ||
+          !response.content[0] ||
+          response.content[0].type !== "text"
+        ) {
+          throw new AppError(
+            AppErrorCode.SERVICE_ERROR,
+            "Anthropic translation failed: Invalid response structure."
+          );
+        }
+        const translatedText = response.content[0].text;
+
+        // 5. Parse Anthropic Response
+        const parsedSegments = parseAnthropicResponse(
+          translatedText,
+          originalContent.segments
+        );
+        if (!parsedSegments) {
+          throw new AppError(
+            AppErrorCode.SERVICE_ERROR,
+            `Failed to parse Anthropic translation response for segment ${segmentId}. Raw: ${translatedText.substring(
+              0,
+              100
+            )}`
+          );
+        }
+
+        const translatedContent: ReplicateSegmentOutput = {
+          segments: parsedSegments,
+          // We can optionally add the target language here if needed later
+          // detected_language: targetLanguage
+        };
+
+        // 6. Update Database with the *new* translation
+        const updatedTranslations = {
+          ...((segmentData.translations || {}) as object),
+          [targetLanguage]: translatedContent,
+        };
+
+        // Log before the DB update
+        console.log(
+          `>>> translateSegmentContent: Attempting to update DB for segment ${segmentId} with translations: ${JSON.stringify(
+            updatedTranslations
           )}`
         );
-      }
+        const { error: updateError } = await supabase
+          .from("transcription_segments")
+          .update({ translations: updatedTranslations as any }) // Keep 'as any' until types are updated
+          .eq("id", segmentId);
 
-      const translatedContent: ReplicateSegmentOutput = {
-        segments: parsedSegments,
-        // We can optionally add the target language here if needed later
-        // detected_language: targetLanguage
-      };
+        // Log after the DB update, checking for errors
+        if (updateError) {
+          console.error(
+            `>>> translateSegmentContent: DB Update Error for segment ${segmentId}:`,
+            updateError
+          );
+          throw new AppError(
+            AppErrorCode.DATABASE_ERROR,
+            `DB error updating translations for segment ${segmentId}: ${updateError.message}`
+          );
+        } else {
+          console.log(
+            `>>> translateSegmentContent: DB Update successful for segment ${segmentId}. Realtime event should trigger.`
+          );
+        }
 
-      // 6. Update Database
-      const updatedTranslations = {
-        ...((segmentData.translations || {}) as object),
-        [targetLanguage]: translatedContent,
-      };
-
-      // Log before the DB update
-      console.log(
-        `>>> translateSegmentContent: Attempting to update DB for segment ${segmentId} with translations: ${JSON.stringify(
-          updatedTranslations
-        )}`
-      );
-      const { error: updateError } = await supabase
-        .from("transcription_segments")
-        .update({ translations: updatedTranslations as any }) // Keep 'as any' until types are updated
-        .eq("id", segmentId);
-
-      // Log after the DB update, checking for errors
-      if (updateError) {
-        console.error(
-          `>>> translateSegmentContent: DB Update Error for segment ${segmentId}:`,
-          updateError
-        );
-        throw new AppError(
-          AppErrorCode.DATABASE_ERROR,
-          `DB error updating translations for segment ${segmentId}: ${updateError.message}`
-        );
-      } else {
         console.log(
-          `>>> translateSegmentContent: DB Update successful for segment ${segmentId}. Realtime event should trigger.`
+          `Successfully translated and stored ${targetLanguage} for segment ${segmentId}.`
         );
+        return { success: true, data: null };
       }
-
-      console.log(
-        `Successfully translated and stored ${targetLanguage} for segment ${segmentId}.`
-      );
-      return { success: true, data: null };
     } catch (error: unknown) {
       console.error(
         `Error translating segment ${segmentId} to ${targetLanguage}:`,
