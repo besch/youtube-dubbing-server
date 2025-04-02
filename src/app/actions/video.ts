@@ -1024,7 +1024,7 @@ async function startReplicateTranscription(
     const prediction = await replicate.predictions.create({
       version: replicateModelVersion,
       input: {
-        audio: audioUrl,
+        audio_file: audioUrl,
       },
       webhook: REPLICATE_WEBHOOK_URL,
       webhook_events_filter: ["completed"], // Ensure this matches what webhook handler expects
