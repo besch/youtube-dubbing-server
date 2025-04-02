@@ -1022,7 +1022,8 @@ async function startReplicateTranscription(
 
   try {
     const prediction = await replicate.predictions.create({
-      version: replicateModelVersion,
+      version:
+        "84d2ad2d6194fe98a17d2b60bef1c7f910c46b2f6fd38996ca457afd9c8abfcb",
       input: {
         audio_file: audioUrl,
       },
