@@ -30,6 +30,9 @@ export enum AppErrorCode {
   TRANSCRIPTION_FAILED = 5001,
   AUDIO_GENERATION_FAILED = 5002,
   JOB_STATUS_ERROR = 5003,
+
+  // New errors
+  TRANSLATION_NOT_AVAILABLE = 6000,
 }
 
 // Custom error class for application-specific errors
@@ -132,6 +135,10 @@ export const appErrors = {
   SERVICE_ERROR: new AppError(
     AppErrorCode.SERVICE_ERROR,
     "An external service call failed."
+  ),
+  TRANSLATION_NOT_AVAILABLE: new AppError(
+    AppErrorCode.TRANSLATION_NOT_AVAILABLE,
+    "Translation for the requested language is not available yet."
   ),
 };
 

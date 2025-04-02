@@ -14,6 +14,8 @@ import type { Database, Tables, Enums } from "@/types/supabase";
 import { protectedAction } from "./safe-action";
 import { supabaseServiceRoleClient } from "@/lib/supabase/serviceRoleClient";
 import { ActionResponse, AppError, AppErrorCode, appErrors } from "./actions";
+import { config } from "@/config"; // Import config
+import Anthropic from "@anthropic-ai/sdk"; // Import Anthropic
 
 // Comment out unused OpenAI client for now
 // import { openai, translateTextOpenAI } from "@/lib/openai";
@@ -55,6 +57,9 @@ if (!REPLICATE_API_KEY) console.error("REPLICATE_API_KEY is not set.");
 if (!OPENAI_API_KEY) console.error("OPENAI_API_KEY is not set.");
 if (!process.env.NEXT_PUBLIC_APP_URL)
   console.error("NEXT_PUBLIC_APP_URL is not set (needed for webhook).");
+if (!config.apiKeys.anthropic)
+  // Check for Anthropic key from config
+  console.error("ANTHROPIC_API_KEY is not set.");
 
 // --- Replicate Client Initialization ---
 const replicate = new Replicate({
@@ -62,7 +67,12 @@ const replicate = new Replicate({
 });
 
 // --- OpenAI Client Initialization ---
-// const openai = new OpenAI({ apiKey: OPENAI_API_KEY }); // Defer initialization until needed in generateAudioChunk
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY }); // Defer initialization until needed in generateAudioChunk
+
+// --- Anthropic Client Initialization ---
+const anthropic = new Anthropic({
+  apiKey: config.apiKeys.anthropic, // Use key from config
+});
 
 // Helper to extract YouTube Video ID - throws error if not found
 function extractYoutubeVideoId(url: string): string {
@@ -352,13 +362,13 @@ export const startVideoProcessing = protectedAction
 // Define expected structure from transcription_segments.content
 // **IMPORTANT**: Adjust these interfaces to match your actual Replicate model output
 interface TranscriptionWord {
-  start: number;
-  end: number;
-  word: string;
+  start?: number; // Mark as optional if sometimes missing
+  end?: number;
+  word?: string;
   speaker?: string; // Optional: Include if your model provides it
 }
 interface ReplicateSegment {
-  start: number;
+  start: number; // Assume these are present in valid segments
   end: number;
   text: string;
   words: TranscriptionWord[];
@@ -366,7 +376,7 @@ interface ReplicateSegment {
 }
 interface ReplicateSegmentOutput {
   segments: ReplicateSegment[];
-  // detected_language?: string; // Optional: Include if provided
+  detected_language?: string; // Optional: Include if provided and needed
 }
 
 // --- Action: Generate Audio Chunk (Revised) ---
@@ -471,76 +481,89 @@ export const generateAudioChunk = protectedAction
         }
 
         // 2. Fetch relevant COMPLETED transcription segments
-        const { data: segmentsData, error: segmentsError } = await supabase
-          .from("transcription_segments") // Use string literal
-          .select("content")
-          .eq("video_id", videoId)
-          .eq("status", "completed")
-          .lte("start_time", endTime)
-          .gte("end_time", startTime)
-          .order("start_time", { ascending: true });
+        const { data: segmentsDataUntyped, error: segmentsError } =
+          await supabase
+            .from("transcription_segments")
+            .select("id, start_time, end_time, translations") // Select id, times, translations
+            .eq("video_id", videoId)
+            .eq("status", "completed")
+            .lte("start_time", endTime)
+            .gte("end_time", startTime)
+            .order("start_time", { ascending: true });
 
         if (segmentsError)
           throw new AppError(
             AppErrorCode.DATABASE_ERROR,
             `DB error fetching segments: ${segmentsError.message}`
           );
-        // Use existing RECORD_NOT_FOUND code
+
+        // Use type assertion as workaround for potentially stale generated types
+        const segmentsData = segmentsDataUntyped as any[] | null;
+
         if (!segmentsData || segmentsData.length === 0) {
           throw new AppError(
             AppErrorCode.RECORD_NOT_FOUND,
-            "Transcription not available for the requested time."
+            "Completed transcription not available for the requested time."
           );
         }
 
-        // 3. Extract text for the exact time range [startTime, endTime]
+        // 3. Extract *translated* text for the exact time range [startTime, endTime]
         let textToTranslate = "";
-        (segmentsData as Tables<"transcription_segments">[] | null)?.forEach(
-          (segment) => {
-            // Use generated type for content, ensuring it's an object first
-            let content: ReplicateSegmentOutput | null = null;
+        (segmentsData || [])?.forEach((segment) => {
+          let translatedContent: ReplicateSegmentOutput | null = null;
+          const segmentTranslations = segment.translations as Record<
+            string,
+            any
+          > | null;
+
+          if (segmentTranslations && segmentTranslations[language]) {
+            const langTranslation = segmentTranslations[language];
             if (
-              segment.content &&
-              typeof segment.content === "object" &&
-              !Array.isArray(segment.content)
+              langTranslation &&
+              typeof langTranslation === "object" &&
+              !Array.isArray(langTranslation) &&
+              "segments" in langTranslation &&
+              Array.isArray(langTranslation.segments)
             ) {
-              // Now it's safer to potentially cast, although validation is better
-              // For now, we assume the structure matches if it's an object
-              content = segment.content as unknown as ReplicateSegmentOutput; // Use unknown cast
+              translatedContent = langTranslation as ReplicateSegmentOutput;
             }
-
-            if (!content?.segments || !Array.isArray(content.segments)) return;
-
-            content.segments.forEach((sentence: ReplicateSegment) => {
-              // Add explicit type
-              if (!sentence?.words || !Array.isArray(sentence.words)) return;
-              sentence.words.forEach((word: TranscriptionWord) => {
-                // Add explicit type
-                const wordStart = word?.start ?? -1;
-                const wordEnd = word?.end ?? -1;
-                const wordText = word?.word ?? "";
-
-                if (wordStart >= 0 && wordEnd >= 0 && wordText) {
-                  if (
-                    Math.max(wordStart, startTime) < Math.min(wordEnd, endTime)
-                  ) {
-                    textToTranslate += wordText + " ";
-                  }
-                }
-              });
-            });
           }
-        );
+
+          if (!translatedContent) {
+            console.error(
+              `Translation for language '${language}' not found in segment ${segment.id} (time ${segment.start_time}-${segment.end_time})`
+            );
+            throw new AppError(
+              AppErrorCode.TRANSLATION_NOT_AVAILABLE,
+              `Translation for '${language}' not ready for time ${segment.start_time?.toFixed(
+                1
+              )}s.`
+            );
+          }
+
+          if (!translatedContent?.segments) return;
+
+          translatedContent.segments.forEach((sentence: ReplicateSegment) => {
+            const sentenceStart = sentence?.start ?? -1;
+            const sentenceEnd = sentence?.end ?? -1;
+            const sentenceText = sentence?.text ?? "";
+
+            if (sentenceStart >= 0 && sentenceEnd >= 0 && sentenceText) {
+              if (
+                Math.max(sentenceStart, startTime) <
+                Math.min(sentenceEnd, endTime)
+              ) {
+                textToTranslate += sentenceText + " "; // Append sentence text
+              }
+            }
+          });
+        });
         textToTranslate = textToTranslate.trim();
 
         if (!textToTranslate) {
-          console.warn(
-            `No words found overlapping the range ${startTime}-${endTime}.`
-          );
-          // Use existing RECORD_NOT_FOUND code
           throw new AppError(
             AppErrorCode.RECORD_NOT_FOUND,
-            "No transcription text found for the precise time range."
+            `No translated text found for the precise time range ${startTime}-${endTime} in ${language}.`
           );
         }
 
@@ -552,7 +575,6 @@ export const generateAudioChunk = protectedAction
         );
 
         // 4. Call OpenAI TTS
-        const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
         const ttsResponse = await openai.audio.speech.create({
           model: "tts-1",
           voice: ttsVoice,
@@ -631,7 +653,6 @@ export const generateAudioChunk = protectedAction
         return { success: true, data: { publicUrl: finalUrlData.signedUrl } };
       } catch (error: unknown) {
         console.error("Error generating audio chunk:", error);
-        // Use AppErrorCode here
         const appErr =
           error instanceof AppError
             ? error
@@ -1273,3 +1294,280 @@ export const requestTranscriptionSegment = protectedAction
       }
     }
   );
+
+// --- New Action: Translate Segment Content ---
+const translateSegmentContentSchema = z.object({
+  segmentId: z.string().uuid(),
+  targetLanguage: z.string().length(2), // ISO 639-1 code
+});
+
+// Helper function to format transcription for Anthropic prompt
+function formatTranscriptionForAnthropic(
+  segments: ReplicateSegment[] | undefined | null
+): string {
+  if (!segments || !Array.isArray(segments)) return "";
+  let batch = "";
+  segments.forEach((segment, index) => {
+    if (
+      segment &&
+      typeof segment.start === "number" &&
+      typeof segment.end === "number" &&
+      typeof segment.text === "string"
+    ) {
+      batch += `${index + 1}
+`;
+      batch += `${segment.start.toFixed(3)} --> ${segment.end.toFixed(3)}
+`;
+      batch += `${segment.text}
+
+`;
+    }
+  });
+  return batch.trim(); // Remove trailing newline
+}
+
+// Helper function to parse Anthropic response back into structure
+function parseAnthropicResponse(
+  anthropicText: string,
+  originalSegments: ReplicateSegment[]
+): ReplicateSegment[] | null {
+  try {
+    const lines = anthropicText.trim().split("\n");
+    const translatedSegments: ReplicateSegment[] = [];
+    let lineIndex = 0;
+
+    while (lineIndex < lines.length) {
+      const numLine = lines[lineIndex++]?.trim();
+      if (!numLine || !/^[0-9]+$/.test(numLine)) continue;
+
+      const timeLine = lines[lineIndex++]?.trim();
+      if (!timeLine || !timeLine.includes("-->")) continue; // Basic check for timestamp format
+
+      let textLine = lines[lineIndex++]?.trim();
+      if (textLine === undefined) continue;
+
+      // Consume potential empty lines until next number or EOF
+      while (lineIndex < lines.length && lines[lineIndex]?.trim() === "") {
+        lineIndex++;
+      }
+
+      const originalIndex = parseInt(numLine, 10) - 1;
+      const original = originalSegments[originalIndex];
+
+      if (
+        original &&
+        typeof original.start === "number" &&
+        typeof original.end === "number"
+      ) {
+        translatedSegments.push({
+          start: original.start,
+          end: original.end,
+          text: textLine,
+          words: [],
+        });
+      } else {
+        console.warn(
+          `Parsing Anthropic: Could not find original segment for index ${originalIndex} or times missing`
+        );
+      }
+    }
+
+    if (
+      translatedSegments.length === 0 &&
+      originalSegments.length > 0 &&
+      anthropicText.length > 0
+    ) {
+      // Added check for non-empty input
+      console.warn(
+        `Parsing Anthropic: Failed to parse any segments from non-empty response.`
+      );
+      return null;
+    } else if (translatedSegments.length !== originalSegments.length) {
+      console.warn(
+        `Parsing Anthropic: Mismatch in segment count. Original: ${originalSegments.length}, Translated: ${translatedSegments.length}`
+      );
+    }
+
+    return translatedSegments;
+  } catch (error) {
+    console.error("Error parsing Anthropic response:", error);
+    console.error("Anthropic Raw Response Text:", anthropicText);
+    return null;
+  }
+}
+
+export const translateSegmentContent = protectedAction
+  .schema(translateSegmentContentSchema)
+  .action(async ({ parsedInput, ctx }): Promise<ActionResponse<null>> => {
+    const { segmentId, targetLanguage } = parsedInput;
+    const supabase = supabaseServiceRoleClient;
+
+    console.log(
+      `Translating segment ${segmentId} to language: ${targetLanguage}`
+    );
+
+    try {
+      // 1. Fetch the segment data
+      const { data: segmentDataUntyped, error: fetchError } = await supabase
+        .from("transcription_segments")
+        .select("id, content, translations")
+        .eq("id", segmentId)
+        .single();
+
+      if (fetchError)
+        throw new AppError(
+          AppErrorCode.DATABASE_ERROR,
+          `DB error fetching segment ${segmentId}: ${fetchError.message}`
+        );
+      if (!segmentDataUntyped)
+        throw new AppError(
+          AppErrorCode.RECORD_NOT_FOUND,
+          `Segment ${segmentId} not found.`
+        );
+
+      const segmentData = segmentDataUntyped as any;
+
+      // 2. Validate content
+      let originalContent: ReplicateSegmentOutput | null = null;
+      if (
+        segmentData.content &&
+        typeof segmentData.content === "object" &&
+        !Array.isArray(segmentData.content) &&
+        "segments" in segmentData.content &&
+        Array.isArray(segmentData.content.segments)
+      ) {
+        originalContent = segmentData.content as ReplicateSegmentOutput;
+      } else {
+        // Use a known error code for now
+        throw new AppError(
+          AppErrorCode.INVALID_INPUT,
+          `Segment ${segmentId} has invalid 'content' structure for translation.`
+        );
+      }
+
+      if (!originalContent?.segments || originalContent.segments.length === 0) {
+        console.log(
+          `Segment ${segmentId} content is empty, skipping translation.`
+        );
+        return { success: true, data: null };
+      }
+
+      // 3. Check if translation already exists
+      const existingTranslations = (segmentData.translations ?? {}) as Record<
+        string,
+        ReplicateSegmentOutput
+      >;
+      if (existingTranslations[targetLanguage]) {
+        console.log(
+          `Translation for ${targetLanguage} already exists for segment ${segmentId}. Skipping.`
+        );
+        return { success: true, data: null };
+      }
+
+      // 4. Prepare for Translation
+      const sourceLangCode = originalContent.detected_language || "en";
+      const sourceLangName =
+        config.languages.find((l) => l.code === sourceLangCode)?.name ||
+        sourceLangCode;
+      const targetLangName =
+        config.languages.find((l) => l.code === targetLanguage)?.name ||
+        targetLanguage;
+
+      if (sourceLangCode === targetLanguage) {
+        console.log(
+          `Source and target language (${targetLanguage}) are the same for segment ${segmentId}. Skipping translation call.`
+        );
+        return { success: true, data: null };
+      }
+
+      const textToTranslate = formatTranscriptionForAnthropic(
+        originalContent.segments
+      );
+      if (!textToTranslate) {
+        console.log(`No text found to translate in segment ${segmentId}.`);
+        return { success: true, data: null };
+      }
+
+      console.log(
+        `Calling Anthropic to translate ${sourceLangName} to ${targetLangName} for segment ${segmentId}`
+      );
+
+      // 5. Call Anthropic API
+      const response = await anthropic.messages.create({
+        model: "claude-3-haiku-20240307",
+        max_tokens: 2500,
+        messages: [
+          {
+            role: "user",
+            content: `Translate the following subtitles from ${sourceLangName} to ${targetLangName}.\nMaintain the exact same timing and numbering format.\nCritical formatting rules:\n1. Each subtitle entry MUST be separated by exactly one empty line\n2. Each entry MUST follow this exact format (no square brackets):\n[number]\n[timestamp like 0.000 --> 0.000]\n[translated text]\n[empty line]\n3. The last subtitle entry MUST be followed by an empty line\n4. Never include multiple consecutive empty lines\n5. Preserve all original numbering and timing exactly as provided\n\n${textToTranslate}`,
+          },
+        ],
+        temperature: 0.3,
+      });
+
+      if (
+        !response.content ||
+        !response.content[0] ||
+        response.content[0].type !== "text"
+      ) {
+        throw new AppError(
+          AppErrorCode.SERVICE_ERROR,
+          "Anthropic translation failed: Invalid response structure."
+        );
+      }
+      const translatedText = response.content[0].text;
+
+      // 6. Parse Anthropic Response
+      const parsedSegments = parseAnthropicResponse(
+        translatedText,
+        originalContent.segments
+      );
+      if (!parsedSegments) {
+        throw new AppError(
+          AppErrorCode.SERVICE_ERROR,
+          `Failed to parse Anthropic translation response for segment ${segmentId}. Raw: ${translatedText.substring(
+            0,
+            100
+          )}`
+        );
+      }
+
+      const translatedContent: ReplicateSegmentOutput = {
+        segments: parsedSegments,
+        // We can optionally add the target language here if needed later
+        // detected_language: targetLanguage
+      };
+
+      // 7. Update Database
+      const updatedTranslations = {
+        ...(existingTranslations as object),
+        [targetLanguage]: translatedContent,
+      };
+
+      const { error: updateError } = await supabase
+        .from("transcription_segments")
+        .update({ translations: updatedTranslations as any }) // Keep 'as any' until types are updated
+        .eq("id", segmentId);
+
+      if (updateError) {
+        throw new AppError(
+          AppErrorCode.DATABASE_ERROR,
+          `DB error updating translations for segment ${segmentId}: ${updateError.message}`
+        );
+      }
+
+      console.log(
+        `Successfully translated and stored ${targetLanguage} for segment ${segmentId}.`
+      );
+      return { success: true, data: null };
+    } catch (error: unknown) {
+      console.error(
+        `Error translating segment ${segmentId} to ${targetLanguage}:`,
+        error
+      );
+      // Simplify error reporting for now
+      const appErr =
+        error instanceof AppError ? error : appErrors.UNEXPECTED_ERROR;
+      return { success: false, error: appErr };
+    }
+  });

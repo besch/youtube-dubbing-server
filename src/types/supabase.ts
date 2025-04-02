@@ -186,6 +186,7 @@ export type Database = {
           segment_storage_path: string | null
           start_time: number
           status: Database["public"]["Enums"]["job_status"]
+          translations: Json | null
           updated_at: string
           video_id: string
         }
@@ -200,6 +201,7 @@ export type Database = {
           segment_storage_path?: string | null
           start_time: number
           status?: Database["public"]["Enums"]["job_status"]
+          translations?: Json | null
           updated_at?: string
           video_id: string
         }
@@ -214,6 +216,7 @@ export type Database = {
           segment_storage_path?: string | null
           start_time?: number
           status?: Database["public"]["Enums"]["job_status"]
+          translations?: Json | null
           updated_at?: string
           video_id?: string
         }
