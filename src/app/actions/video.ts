@@ -1625,3 +1625,188 @@ export const translateSegmentContent = protectedAction
       return { success: false, error: appErr };
     }
   });
+
+// --- Action: Get Favorites ---
+
+// Define output structure for a single favorite item
+const FavoriteItemSchema = z.object({
+  favoriteId: z.string().uuid(),
+  videoId: z.string().uuid(), // The DB video ID
+  youtubeId: z.string(),
+  title: z.string().nullable().optional(),
+  thumbnailUrl: z.string().url().nullable().optional(),
+  duration: z.number().int().positive().nullable().optional(),
+  language: z.string(),
+  voice: z.string(), // Keep as string, validated by DB enum/usage
+  addedAt: z.string().datetime(),
+});
+export type FavoriteItem = z.infer<typeof FavoriteItemSchema>;
+
+export const getFavorites = protectedAction
+  // No input schema needed, userId comes from context
+  .action(async ({ ctx }): Promise<ActionResponse<FavoriteItem[]>> => {
+    const userId = ctx.user.id;
+    const supabase = supabaseServiceRoleClient;
+
+    console.log(`Fetching favorites for user: ${userId}`);
+
+    try {
+      const { data, error } = await supabase
+        .from("favorites")
+        .select(
+          `
+          id, 
+          added_at,
+          language,
+          voice,
+          video_id,
+          videos ( youtube_id, title, thumbnail_url, duration )
+        `
+        )
+        .eq("user_id", userId)
+        .order("added_at", { ascending: false });
+
+      if (error) {
+        console.error(`DB error fetching favorites for user ${userId}:`, error);
+        throw appErrors.DATABASE_ERROR;
+      }
+
+      if (!data) {
+        return { success: true, data: [] }; // Return empty array if no favorites
+      }
+
+      // Transform data and validate
+      const favorites: FavoriteItem[] = data
+        .map((fav) => {
+          // Type assertion for joined video table
+          const video = fav.videos as Tables<"videos"> | null;
+          if (!video) return null; // Skip if video data is missing (shouldn't happen with inner join logic)
+
+          return {
+            favoriteId: fav.id,
+            videoId: fav.video_id,
+            youtubeId: video.youtube_id,
+            title: video.title ?? null,
+            thumbnailUrl: video.thumbnail_url ?? null,
+            duration: video.duration ?? null,
+            language: fav.language,
+            voice: fav.voice,
+            addedAt: fav.added_at,
+          };
+        })
+        .filter((item) => item !== null); // Filter out nulls from skipped videos
+
+      // Validate the final array structure
+      const validation = z.array(FavoriteItemSchema).safeParse(favorites);
+      if (!validation.success) {
+        console.error("Favorites data validation failed:", validation.error);
+        throw new AppError(
+          AppErrorCode.UNEXPECTED_ERROR,
+          "Failed to validate favorites data structure."
+        );
+      }
+
+      console.log(
+        `Found ${validation.data.length} favorites for user ${userId}`
+      );
+      return { success: true, data: validation.data };
+    } catch (error: unknown) {
+      console.error(`Error in getFavorites action for user ${userId}:`, error);
+      const appErr =
+        error instanceof AppError ? error : appErrors.UNEXPECTED_ERROR;
+      return { success: false, error: appErr };
+    }
+  });
+
+// --- Action: Get History ---
+
+const HistoryItemSchema = z.object({
+  historyId: z.string().uuid(),
+  videoId: z.string().uuid(), // DB video ID
+  youtubeId: z.string(),
+  title: z.string().nullable().optional(),
+  thumbnailUrl: z.string().url().nullable().optional(),
+  duration: z.number().int().positive().nullable().optional(),
+  language: z.string(),
+  voice: z.string(),
+  lastPosition: z.number().min(0),
+  watchedAt: z.string().datetime(),
+});
+export type HistoryItem = z.infer<typeof HistoryItemSchema>;
+
+export const getHistory = protectedAction
+  // No input schema needed
+  .action(async ({ ctx }): Promise<ActionResponse<HistoryItem[]>> => {
+    const userId = ctx.user.id;
+    const supabase = supabaseServiceRoleClient;
+
+    console.log(`Fetching history for user: ${userId}`);
+
+    try {
+      const { data, error } = await supabase
+        .from("history")
+        .select(
+          `
+          id,
+          watched_at,
+          language,
+          voice,
+          last_position,
+          video_id,
+          videos ( youtube_id, title, thumbnail_url, duration )
+        `
+        )
+        .eq("user_id", userId)
+        .order("watched_at", { ascending: false })
+        .limit(50); // Limit history items for performance
+
+      if (error) {
+        console.error(`DB error fetching history for user ${userId}:`, error);
+        throw appErrors.DATABASE_ERROR;
+      }
+
+      if (!data) {
+        return { success: true, data: [] };
+      }
+
+      // Transform data
+      const history: HistoryItem[] = data
+        .map((item) => {
+          const video = item.videos as Tables<"videos"> | null;
+          if (!video) return null;
+
+          return {
+            historyId: item.id,
+            videoId: item.video_id,
+            youtubeId: video.youtube_id,
+            title: video.title ?? null,
+            thumbnailUrl: video.thumbnail_url ?? null,
+            duration: video.duration ?? null,
+            language: item.language,
+            voice: item.voice,
+            lastPosition: item.last_position,
+            watchedAt: item.watched_at,
+          };
+        })
+        .filter((item) => item !== null);
+
+      const validation = z.array(HistoryItemSchema).safeParse(history);
+      if (!validation.success) {
+        console.error("History data validation failed:", validation.error);
+        throw new AppError(
+          AppErrorCode.UNEXPECTED_ERROR,
+          "Failed to validate history data structure."
+        );
+      }
+
+      console.log(
+        `Found ${validation.data.length} history items for user ${userId}`
+      );
+      return { success: true, data: validation.data };
+    } catch (error: unknown) {
+      console.error(`Error in getHistory action for user ${userId}:`, error);
+      const appErr =
+        error instanceof AppError ? error : appErrors.UNEXPECTED_ERROR;
+      return { success: false, error: appErr };
+    }
+  });
