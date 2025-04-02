@@ -854,7 +854,9 @@ const getCompletedTranscriptionSegmentsSchema = z.object({
 });
 
 // Define the output structure matching the ReplicateSegmentOutput interface defined earlier
+// **MODIFIED**: Added optional id
 interface CompletedSegmentOutput {
+  id?: string; // Added optional id
   start_time: number;
   end_time: number;
   content: ReplicateSegmentOutput | null;
@@ -876,9 +878,10 @@ export const getCompletedTranscriptionSegments = protectedAction
 
       try {
         // Use generated types
+        // **MODIFIED**: Added 'id' to select
         const { data, error } = await supabase
           .from("transcription_segments") // Use string literal
-          .select("start_time, end_time, content")
+          .select("id, start_time, end_time, content") // Added 'id'
           .eq("video_id", videoId)
           .eq("status", "completed")
           .order("start_time", { ascending: true });
@@ -904,7 +907,9 @@ export const getCompletedTranscriptionSegments = protectedAction
             contentResult =
               segment.content as unknown as ReplicateSegmentOutput; // Use unknown cast
           }
+          // **MODIFIED**: Include id in the result
           return {
+            id: segment.id, // Include the id
             start_time: segment.start_time,
             end_time: segment.end_time,
             content: contentResult,
