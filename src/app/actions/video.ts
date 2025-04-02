@@ -1117,11 +1117,19 @@ export const requestTranscriptionSegment = protectedAction
         }
 
         if (existingSegment) {
-          // Use optional chaining after the cast
-          console.log(
-            `RequestSegment: Found existing segment for ${videoId} (${startTime}-${endTime}). Status: ${existingSegment.status}. Skipping new Replicate request.`
-          );
-          return { success: true, data: { success: true } };
+          // Check the status before skipping
+          if (existingSegment.status !== "pending") {
+            console.log(
+              `RequestSegment: Found existing segment for ${videoId} (${startTime}-${endTime}). Status: ${existingSegment.status}. Skipping new Replicate request.`
+            );
+            return { success: true, data: { success: true } };
+          } else {
+            // Log that we are proceeding despite finding a pending segment
+            console.log(
+              `RequestSegment: Found existing segment for ${videoId} (${startTime}-${endTime}) with status 'pending'. Proceeding to request/start Replicate job.`
+            );
+            // Allow the code execution to continue below to retry the process
+          }
         }
 
         // 2. Get audio segment path from microservice
