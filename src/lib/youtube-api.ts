@@ -2,6 +2,16 @@ import { google } from "googleapis";
 import { YoutubeVideoInfo } from "@/types";
 import { appErrors } from "@/app/actions/actions";
 
+interface YoutubeSearchResult extends YoutubeVideoInfo {
+  views: number;
+  published_at: string;
+}
+
+interface YoutubeSearchResponse {
+  results: YoutubeSearchResult[];
+  nextPageToken?: string;
+}
+
 const youtube = google.youtube({
   version: "v3",
   auth: process.env.YOUTUBE_API_KEY,
@@ -51,18 +61,25 @@ export async function getVideoDetails(
 /**
  * Search for YouTube videos
  */
-export async function searchYoutubeVideos(query: string, maxResults = 10) {
+export async function searchYoutubeVideos(
+  query: string,
+  maxResults = 10,
+  pageToken?: string
+): Promise<YoutubeSearchResponse> {
   try {
     const response = await youtube.search.list({
       part: ["snippet"],
       q: query,
       maxResults,
       type: ["video"],
+      pageToken,
     });
 
     if (!response.data.items) {
-      return [];
+      return { results: [], nextPageToken: undefined };
     }
+
+    const nextPageToken = response.data.nextPageToken || undefined;
 
     // Get video details for each search result to get duration
     const videoIds = response.data.items
@@ -70,7 +87,7 @@ export async function searchYoutubeVideos(query: string, maxResults = 10) {
       .filter(Boolean) as string[];
 
     if (videoIds.length === 0) {
-      return [];
+      return { results: [], nextPageToken: undefined };
     }
 
     const videoDetailsResponse = await youtube.videos.list({
@@ -79,7 +96,7 @@ export async function searchYoutubeVideos(query: string, maxResults = 10) {
     });
 
     // Map search results to include details
-    return response.data.items.map((item) => {
+    const results = response.data.items.map((item): YoutubeSearchResult => {
       const videoDetails = videoDetailsResponse.data.items?.find(
         (v) => v.id === item.id?.videoId
       );
@@ -101,6 +118,8 @@ export async function searchYoutubeVideos(query: string, maxResults = 10) {
         published_at: item.snippet?.publishedAt || "",
       };
     });
+
+    return { results, nextPageToken };
   } catch (error) {
     console.error("Error searching YouTube videos:", error);
     throw appErrors.UNEXPECTED_ERROR;
