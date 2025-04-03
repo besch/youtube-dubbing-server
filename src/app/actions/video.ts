@@ -1,34 +1,20 @@
 "use server";
 
-// Remove unused import
-// import { createSafeActionClient } from "next-safe-action";
 import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
-import OpenAI from "openai"; // Import OpenAI class
-import { Buffer } from "buffer"; // Import Buffer if not already globally available
+import OpenAI from "openai";
+import { Buffer } from "buffer";
 import Replicate from "replicate";
-import type { User } from "@supabase/supabase-js"; // Re-import User type for assertion
-import { translateText } from "@/lib/translation";
-// Import generated types
-import type { Database, Tables, Enums } from "@/types/supabase";
+import type { User } from "@supabase/supabase-js";
+import type { Tables } from "@/types/supabase";
 import { protectedAction } from "./safe-action";
 import { supabaseServiceRoleClient } from "@/lib/supabase/serviceRoleClient";
 import { ActionResponse, AppError, AppErrorCode, appErrors } from "./actions";
-import { config } from "@/config"; // Import config
-import Anthropic from "@anthropic-ai/sdk"; // Import Anthropic
-
-// Comment out unused OpenAI client for now
-// import { openai, translateTextOpenAI } from "@/lib/openai";
+import { config } from "@/config";
+import Anthropic from "@anthropic-ai/sdk";
 
 // Define REPLICATE_WEBHOOK_URL at the top level for easier access
 const REPLICATE_WEBHOOK_URL = process.env.REPLICATE_WEBHOOK_URL;
-
-// Comment out unused variable
-// const DOWNLOAD_SERVICE_URL =
-//   process.env.DOWNLOADER_SERVICE_URL || "http://83.27.167.60:1777/process";
-
-// Remove unused action variable
-// const action = createSafeActionClient();
 
 // Constants
 const DOWNLOAD_SERVICE_URL = process.env.DOWNLOADER_SERVICE_URL;
