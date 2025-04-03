@@ -1033,6 +1033,10 @@ async function startReplicateTranscription(
   }
 
   try {
+    console.log(
+      "!!!!!!!!!!!!!!!!!!!!!!>>> Starting Replicate transcription...",
+      audioUrl
+    );
     const prediction = await replicate.predictions.create({
       version:
         "84d2ad2d6194fe98a17d2b60bef1c7f910c46b2f6fd38996ca457afd9c8abfcb",
