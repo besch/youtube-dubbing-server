@@ -267,7 +267,7 @@ export const startVideoProcessing = protectedAction
           console.log(
             `Triggering downloader service for job ${downloadJobId} at ${downloaderServiceUrl}`
           );
-          const response = await fetch(`${downloaderServiceUrl}/process`, {
+          const response = await fetch(`${downloaderServiceUrl}`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
