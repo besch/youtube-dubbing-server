@@ -1043,7 +1043,7 @@ async function startReplicateTranscription(
         "84d2ad2d6194fe98a17d2b60bef1c7f910c46b2f6fd38996ca457afd9c8abfcb",
       input: {
         // Ensure input format matches the model's expectation
-        audio: audioUrl, // Changed from audio_file based on potential model schema - VERIFY THIS
+        audio_file: audioUrl, // Changed from 'audio' to 'audio_file' based on error log
         // language: "en", // Optional: Specify language if needed by the model
         // model: "large-v3" // Optional: Specify sub-model if applicable
       },
