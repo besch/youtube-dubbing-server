@@ -1008,12 +1008,12 @@ async function startReplicateTranscription(
   audioUrl: string,
   replicateModelVersion: string
 ): Promise<string> {
+  // Enhanced Log
   console.log(
-    // Enhanced Log
-    `Replicate: Calling model ${replicateModelVersion} for audio URL: ${audioUrl.substring(
+    `Replicate: Preparing to call model ${replicateModelVersion}. Audio URL starts with: ${audioUrl.substring(
       0,
       150
-    )}... Webhook: ${REPLICATE_WEBHOOK_URL}`
+    )}... Webhook URL: ${REPLICATE_WEBHOOK_URL}`
   );
   if (!REPLICATE_WEBHOOK_URL) {
     // Added check
@@ -1033,15 +1033,19 @@ async function startReplicateTranscription(
   }
 
   try {
+    // Log inputs right before the call
     console.log(
-      "!!!!!!!!!!!!!!!!!!!!!!>>> Starting Replicate transcription...",
-      audioUrl
+      `Replicate: Calling replicate.predictions.create with version: ${replicateModelVersion}, webhook: ${REPLICATE_WEBHOOK_URL}`
     );
     const prediction = await replicate.predictions.create({
+      // Use the hardcoded version directly as identified in requestTranscriptionSegment
       version:
         "84d2ad2d6194fe98a17d2b60bef1c7f910c46b2f6fd38996ca457afd9c8abfcb",
       input: {
-        audio_file: audioUrl,
+        // Ensure input format matches the model's expectation
+        audio: audioUrl, // Changed from audio_file based on potential model schema - VERIFY THIS
+        // language: "en", // Optional: Specify language if needed by the model
+        // model: "large-v3" // Optional: Specify sub-model if applicable
       },
       webhook: REPLICATE_WEBHOOK_URL,
       webhook_events_filter: ["completed"], // Ensure this matches what webhook handler expects
@@ -1064,8 +1068,26 @@ async function startReplicateTranscription(
     // Log the raw error *before* wrapping it
     console.error(
       "Replicate Error: Caught error during predictions.create():",
-      error
+      error // Log the actual error object
     );
+    // Log details if it's an AxiosError or similar structure
+    if (typeof error === "object" && error !== null && "response" in error) {
+      const axiosError = error as {
+        response?: { data?: any; status?: number; headers?: any };
+      };
+      console.error(
+        "Replicate Error Response Data:",
+        axiosError.response?.data
+      );
+      console.error(
+        "Replicate Error Response Status:",
+        axiosError.response?.status
+      );
+      console.error(
+        "Replicate Error Response Headers:",
+        axiosError.response?.headers
+      );
+    }
 
     // Construct a more informative message
     const message =
@@ -1226,17 +1248,17 @@ export const requestTranscriptionSegment = protectedAction
         );
 
         // 5. Start Replicate Transcription - Hardcode the model version here
-        const model =
+        const modelVersion = // Keep the specific version hardcoded here
           "victor-upmeet/whisperx:84d2ad2d6194fe98a17d2b60bef1c7f910c46b2f6fd38996ca457afd9c8abfcb";
         console.log(
-          `RequestSegment: Attempting to start Replicate transcription (Model: ${model}) for segment ${dbSegmentId} using URL starting with: ${segmentSignedUrl.substring(
+          `RequestSegment: Attempting to start Replicate transcription (Model Version: ${modelVersion}) for segment ${dbSegmentId} using URL starting with: ${segmentSignedUrl.substring(
             0,
             100
           )}...`
         );
         const replicatePredictionId = await startReplicateTranscription(
           segmentSignedUrl,
-          model
+          modelVersion // Pass the version string
         );
         console.log(
           `RequestSegment: Successfully started Replicate. Received Prediction ID: ${replicatePredictionId} for DB segment ${dbSegmentId}`
