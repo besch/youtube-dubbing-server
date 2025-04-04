@@ -1155,20 +1155,33 @@ export const requestTranscriptionSegment = protectedAction
           );
         }
 
+        let dbSegmentId: string;
+        let shouldProceed = true;
+
         if (existingSegment) {
           // Check the status before skipping
-          if (existingSegment.status !== "pending") {
+          if (
+            existingSegment.status === "completed" ||
+            existingSegment.status === "processing"
+          ) {
             console.log(
-              `RequestSegment: Found existing segment for ${videoId} (${startTime}-${endTime}). Status: ${existingSegment.status}. Skipping new Replicate request.`
+              `RequestSegment: Found existing segment for ${videoId} (${startTime}-${endTime}). Status: ${existingSegment.status}. Skipping.`
             );
-            return { success: true, data: { success: true } };
+            shouldProceed = false;
           } else {
+            // Status is pending or failed (allow retry for failed?)
             // Log that we are proceeding despite finding a pending segment
             console.log(
-              `RequestSegment: Found existing segment for ${videoId} (${startTime}-${endTime}) with status 'pending'. Proceeding to request/start Replicate job.`
+              `RequestSegment: Found existing segment for ${videoId} (${startTime}-${endTime}) with status '${existingSegment.status}'. Proceeding to update and start Replicate job.`
             );
+            dbSegmentId = existingSegment.id;
             // Allow the code execution to continue below to retry the process
           }
+        }
+
+        // Exit early if segment is already completed or processing
+        if (!shouldProceed) {
+          return { success: true, data: { success: true } };
         }
 
         // 2. Get audio segment path from microservice
@@ -1210,42 +1223,67 @@ export const requestTranscriptionSegment = protectedAction
           )}...`
         ); // Log part of the URL
 
-        // 4. Create placeholder record (pending)
+        // 4. Insert or identify existing segment ID
         console.log(
-          `RequestSegment: Creating placeholder DB record for segment ${videoId} (${startTime}-${endTime})`
+          `RequestSegment: Ensuring DB record exists for segment ${videoId} (${startTime}-${endTime})`
         );
-        const { data: dbSegment, error: insertError } = await supabase
-          .from("transcription_segments") // Use string literal
-          .insert({
-            video_id: videoId,
-            start_time: startTime,
-            end_time: endTime,
-            status: "pending",
-            segment_storage_path: segmentStoragePath,
-          })
-          .select("id")
-          .single();
 
-        if (insertError && insertError.code === "23505") {
-          console.warn(
-            `Race condition: Segment ${videoId} (${startTime}-${endTime}) inserted concurrently. Skipping request.`
+        // Only insert if dbSegmentId is not already set (meaning no pending/failed segment was found)
+        if (!dbSegmentId!) {
+          const { data: dbSegment, error: insertError } = await supabase
+            .from("transcription_segments")
+            .insert({
+              video_id: videoId,
+              start_time: startTime,
+              end_time: endTime,
+              status: "pending", // Start as pending before Replicate call
+              segment_storage_path: segmentStoragePath,
+            })
+            .select("id")
+            .single();
+
+          if (insertError && insertError.code === "23505") {
+            // This case should ideally be less frequent now, but handle it. Fetch the existing ID.
+            console.warn(
+              `Race condition inserting segment ${videoId} (${startTime}-${endTime}). Fetching existing ID.`
+            );
+            const { data: raceSegment, error: raceError } = await supabase
+              .from("transcription_segments")
+              .select("id")
+              .eq("video_id", videoId)
+              .eq("start_time", startTime)
+              .eq("end_time", endTime)
+              .single();
+            if (raceError || !raceSegment) {
+              throw new AppError(
+                AppErrorCode.DATABASE_ERROR,
+                `Failed to fetch segment after insert race condition: ${
+                  raceError?.message || "Not Found"
+                }`
+              );
+            }
+            dbSegmentId = raceSegment.id;
+          } else if (insertError) {
+            throw new AppError(
+              AppErrorCode.DATABASE_ERROR,
+              `DB error inserting segment: ${insertError.message}`
+            );
+          } else if (!dbSegment) {
+            throw new AppError(
+              AppErrorCode.DATABASE_ERROR,
+              "Failed to insert segment record or get ID."
+            );
+          } else {
+            dbSegmentId = dbSegment.id;
+          }
+          console.log(
+            `RequestSegment: Inserted/Confirmed DB segment record with ID: ${dbSegmentId}`
           );
-          return { success: true, data: { success: true } };
-        } else if (insertError) {
-          throw new AppError(
-            AppErrorCode.DATABASE_ERROR,
-            `DB error inserting segment: ${insertError.message}`
+        } else {
+          console.log(
+            `RequestSegment: Using existing DB segment record with ID: ${dbSegmentId}`
           );
         }
-        if (!dbSegment)
-          throw new AppError(
-            AppErrorCode.DATABASE_ERROR,
-            "Failed to insert segment record or get ID."
-          );
-        const dbSegmentId = (dbSegment as Tables<"transcription_segments">).id;
-        console.log(
-          `RequestSegment: Created DB segment record with ID: ${dbSegmentId}`
-        );
 
         // 5. Start Replicate Transcription - Hardcode the model version here
         const modelVersion = // Keep the specific version hardcoded here
@@ -1266,19 +1304,20 @@ export const requestTranscriptionSegment = protectedAction
 
         // 6. Update DB record with Replicate ID (processing)
         console.log(
-          `RequestSegment: Updating DB segment ${dbSegmentId} with Replicate ID ${replicatePredictionId} and status 'processing'`
+          `RequestSegment: Updating DB segment ${dbSegmentId!} with Replicate ID ${replicatePredictionId}, segment path, and status 'processing'`
         );
         const { error: updateError } = await supabase
           .from("transcription_segments") // Use string literal
           .update({
             replicate_prediction_id: replicatePredictionId,
             status: "processing",
+            segment_storage_path: segmentStoragePath, // Update path in case it changed
           })
-          .eq("id", dbSegmentId);
+          .eq("id", dbSegmentId!); // Use the determined segment ID
 
         if (updateError) {
           console.error(
-            `Failed to update segment ${dbSegmentId} with Replicate ID ${replicatePredictionId}:`,
+            `Failed to update segment ${dbSegmentId!} with Replicate ID ${replicatePredictionId}:`,
             updateError.message
           );
           throw new AppError(
@@ -1288,7 +1327,7 @@ export const requestTranscriptionSegment = protectedAction
         }
 
         console.log(
-          `RequestSegment: Successfully completed request for ${videoId} (${startTime}-${endTime}), Replicate ID: ${replicatePredictionId}` // Added prefix
+          `RequestSegment: Successfully updated/initiated segment ${dbSegmentId!} for ${videoId} (${startTime}-${endTime}), Replicate ID: ${replicatePredictionId}` // Added prefix
         );
         return { success: true, data: { success: true } };
       } catch (error: unknown) {
