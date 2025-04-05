@@ -1859,11 +1859,17 @@ export const getHistory = protectedAction
       }
 
       // Transform data
-      const history: HistoryItem[] = data
+      const mappedData = data
         .map((item) => {
           const video = item.videos as Tables<"videos"> | null;
-          if (!video) return null;
+          if (!video || !item.watched_at) {
+            console.warn(
+              `Skipping history ${item.id} due to missing video or watched_at data.`
+            );
+            return null; // Skip if essential data is missing
+          }
 
+          // Return the object structure, converting watchedAt
           return {
             historyId: item.id,
             videoId: item.video_id,
@@ -1874,14 +1880,18 @@ export const getHistory = protectedAction
             language: item.language,
             voice: item.voice,
             lastPosition: item.last_position,
-            watchedAt: item.watched_at,
+            watchedAt: new Date(item.watched_at).toISOString(), // Convert to ISO string
           };
         })
         .filter((item) => item !== null);
 
-      const validation = z.array(HistoryItemSchema).safeParse(history);
+      const validation = z.array(HistoryItemSchema).safeParse(mappedData);
       if (!validation.success) {
-        console.error("History data validation failed:", validation.error);
+        console.error(
+          "History data validation failed:",
+          validation.error.errors
+        );
+        // console.error("Data that failed validation:", JSON.stringify(mappedData, null, 2)); // Optional: Log the data
         throw new AppError(
           AppErrorCode.UNEXPECTED_ERROR,
           "Failed to validate history data structure."
