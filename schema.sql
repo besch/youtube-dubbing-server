@@ -306,6 +306,8 @@ BEGIN
 END;
 $$;
 
+-- REMOVE TRIGGER for favorites table (as it doesn't have updated_at)
+-- DROP TRIGGER IF EXISTS update_favorites_modtime ON public.favorites;
 
 -- Function to handle resource updates when a video is favorited
 create or replace function public.mark_resources_as_favorite()
