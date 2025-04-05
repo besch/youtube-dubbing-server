@@ -776,9 +776,10 @@ export const toggleFavorite = protectedAction
 
         return { success: true, data: { isFavorite: isNowFavorite } };
       } catch (error: unknown) {
-        console.error("Error in toggleFavorite action:", error);
+        console.error("Caught raw error in toggleFavorite action:", error); // Log the raw error
         // Ensure we always throw an AppError
         if (error instanceof AppError) {
+          console.log("Re-throwing existing AppError:", error.toJSON()); // Log the AppError JSON
           throw error; // Re-throw if already AppError
         } else {
           // Wrap other errors in a generic DATABASE_ERROR or UNEXPECTED_ERROR
@@ -792,8 +793,16 @@ export const toggleFavorite = protectedAction
           ) {
             message = error.message; // Use Supabase error message if available
           }
-          // Use DATABASE_ERROR as it's the most likely cause here
-          throw new AppError(AppErrorCode.DATABASE_ERROR, message);
+          console.log(`Wrapping error with message: '${message}'`); // Log the message being used
+          const wrappedError = new AppError(
+            AppErrorCode.DATABASE_ERROR,
+            message
+          );
+          console.log(
+            "Throwing newly wrapped AppError:",
+            wrappedError.toJSON()
+          ); // Log the wrapped AppError JSON
+          throw wrappedError;
         }
       }
     }
