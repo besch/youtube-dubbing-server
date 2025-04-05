@@ -775,9 +775,26 @@ export const toggleFavorite = protectedAction
         }
 
         return { success: true, data: { isFavorite: isNowFavorite } };
-      } catch (error) {
+      } catch (error: unknown) {
         console.error("Error in toggleFavorite action:", error);
-        throw error; // Let handleServerError manage it
+        // Ensure we always throw an AppError
+        if (error instanceof AppError) {
+          throw error; // Re-throw if already AppError
+        } else {
+          // Wrap other errors in a generic DATABASE_ERROR or UNEXPECTED_ERROR
+          // Check if it's likely a Supabase error structure (heuristic)
+          let message = "Failed to toggle favorite status.";
+          if (
+            typeof error === "object" &&
+            error !== null &&
+            "message" in error &&
+            typeof error.message === "string"
+          ) {
+            message = error.message; // Use Supabase error message if available
+          }
+          // Use DATABASE_ERROR as it's the most likely cause here
+          throw new AppError(AppErrorCode.DATABASE_ERROR, message);
+        }
       }
     }
   );
