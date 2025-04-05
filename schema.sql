@@ -292,6 +292,7 @@ before update on public.transcription_segments
 for each row execute function public.update_modified_column();
 
 -- Add trigger for translated_audio_chunks table (if not already present)
+/*
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -305,6 +306,7 @@ BEGIN
     END IF;
 END;
 $$;
+*/
 
 -- REMOVE TRIGGER for favorites table (as it doesn't have updated_at)
 -- DROP TRIGGER IF EXISTS update_favorites_modtime ON public.favorites;

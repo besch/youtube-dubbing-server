@@ -1752,13 +1752,18 @@ export const getFavorites = protectedAction
         return { success: true, data: [] }; // Return empty array if no favorites
       }
 
-      // Transform data and validate
-      const favorites: FavoriteItem[] = data
+      // Transform data first
+      const mappedData = data
         .map((fav) => {
-          // Type assertion for joined video table
           const video = fav.videos as Tables<"videos"> | null;
-          if (!video) return null; // Skip if video data is missing (shouldn't happen with inner join logic)
+          if (!video || !fav.added_at) {
+            console.warn(
+              `Skipping favorite ${fav.id} due to missing video or added_at data.`
+            );
+            return null; // Skip if essential data is missing
+          }
 
+          // Return the object structure, converting added_at
           return {
             favoriteId: fav.id,
             videoId: fav.video_id,
@@ -1768,15 +1773,21 @@ export const getFavorites = protectedAction
             duration: video.duration ?? null,
             language: fav.language,
             voice: fav.voice,
-            addedAt: fav.added_at,
+            addedAt: new Date(fav.added_at).toISOString(), // Convert to ISO string
           };
         })
-        .filter((item) => item !== null); // Filter out nulls from skipped videos
+        .filter((item) => item !== null); // Filter out nulls
 
-      // Validate the final array structure
-      const validation = z.array(FavoriteItemSchema).safeParse(favorites);
+      // Now validate the filtered array against the Zod schema
+      const validation = z.array(FavoriteItemSchema).safeParse(mappedData);
+
       if (!validation.success) {
-        console.error("Favorites data validation failed:", validation.error);
+        // Log the specific validation errors and potentially the data that failed
+        console.error(
+          "Favorites data validation failed:",
+          validation.error.errors
+        ); // Log specific errors
+        // console.error("Data that failed validation:", JSON.stringify(mappedData, null, 2)); // Optional: Log the data
         throw new AppError(
           AppErrorCode.UNEXPECTED_ERROR,
           "Failed to validate favorites data structure."
@@ -1786,6 +1797,7 @@ export const getFavorites = protectedAction
       console.log(
         `Found ${validation.data.length} favorites for user ${userId}`
       );
+      // Return the validated data
       return { success: true, data: validation.data };
     } catch (error: unknown) {
       console.error(`Error in getFavorites action for user ${userId}:`, error);
