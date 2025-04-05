@@ -33,3 +33,37 @@ export async function createSupabaseServerClient() {
     },
   });
 }
+
+// NEW: Utility function to create a Supabase client using the SERVICE_ROLE_KEY
+// for administrative tasks (like deleting users).
+// This client bypasses Row Level Security (RLS).
+export async function createSupabaseAdminClient() {
+  // Validate environment variables
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!supabaseUrl) {
+    throw new Error("Missing env.NEXT_PUBLIC_SUPABASE_URL");
+  }
+  if (!supabaseServiceRoleKey) {
+    throw new Error("Missing env.SUPABASE_SERVICE_ROLE_KEY");
+  }
+
+  // Note: Using createServerClient is generally for interacting with cookies/auth state.
+  // For service role actions that don't need user context from cookies, you might
+  // consider using the simpler `createClient` from '@supabase/supabase-js',
+  // but `createServerClient` works here too, just without cookie handling logic needed.
+  return createServerClient<Database>(supabaseUrl, supabaseServiceRoleKey, {
+    auth: {
+      // Important: Specify autoRefreshToken and persistSession to false for service roles
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+    // No cookies needed for service role client typically
+    cookies: {
+      get: () => undefined,
+      set: () => {},
+      remove: () => {},
+    },
+  });
+}

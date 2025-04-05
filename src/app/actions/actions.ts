@@ -33,6 +33,9 @@ export enum AppErrorCode {
 
   // New errors
   TRANSLATION_NOT_AVAILABLE = 6000,
+
+  // New errors for auth admin actions
+  AUTH_OPERATION_FAILED = 7000,
 }
 
 // Custom error class for application-specific errors
@@ -139,6 +142,10 @@ export const appErrors = {
   TRANSLATION_NOT_AVAILABLE: new AppError(
     AppErrorCode.TRANSLATION_NOT_AVAILABLE,
     "Translation for the requested language is not available yet."
+  ),
+  AUTH_OPERATION_FAILED: new AppError(
+    AppErrorCode.AUTH_OPERATION_FAILED,
+    "User authentication operation failed."
   ),
 };
 
