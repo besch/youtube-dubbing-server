@@ -1517,32 +1517,32 @@ export const translateSegmentContent = protectedAction
       // --- START: Check if translation exists ---
       if (existingTranslations[targetLanguage]) {
         console.log(
-          `>>> translateSegmentContent: Translation for ${targetLanguage} already exists for segment ${segmentId}. Forcing Realtime trigger via update.`
+          `>>> translateSegmentContent: Translation for ${targetLanguage} already exists for segment ${segmentId}. Skipping API call and returning success.`
         );
-        // Force an update by setting the field to its current value.
-        // The updated_at trigger will ensure Realtime fires.
-        const { error: forceUpdateError } = await supabase
-          .from("transcription_segments")
-          .update({ translations: existingTranslations as any }) // Re-set same value
-          .eq("id", segmentId);
+        // // Force an update by setting the field to its current value.
+        // // The updated_at trigger will ensure Realtime fires.
+        // const { error: forceUpdateError } = await supabase
+        //   .from("transcription_segments")
+        //   .update({ translations: existingTranslations as any }) // Re-set same value
+        //   .eq("id", segmentId);
 
-        if (forceUpdateError) {
-          console.error(
-            `>>> translateSegmentContent: DB Force Update Error for segment ${segmentId}:`,
-            forceUpdateError
-          );
-          // Throw error even if forcing, as something went wrong with the DB
-          throw new AppError(
-            AppErrorCode.DATABASE_ERROR,
-            `DB error forcing update for segment ${segmentId}: ${forceUpdateError.message}`
-          );
-        } else {
-          console.log(
-            `>>> translateSegmentContent: DB Force Update successful for segment ${segmentId}. Realtime event should trigger.`
-          );
-          // Return success because the requested translation data exists.
-          return { success: true, data: null };
-        }
+        // if (forceUpdateError) {
+        //   console.error(
+        //     `>>> translateSegmentContent: DB Force Update Error for segment ${segmentId}:`,
+        //     forceUpdateError
+        //   );
+        //   // Throw error even if forcing, as something went wrong with the DB
+        //   throw new AppError(
+        //     AppErrorCode.DATABASE_ERROR,
+        //     `DB error forcing update for segment ${segmentId}: ${forceUpdateError.message}`
+        //   );
+        // } else {
+        //   console.log(
+        //     `>>> translateSegmentContent: DB Force Update successful for segment ${segmentId}. Realtime event should trigger.`
+        //   );
+        // Return success because the requested translation data exists.
+        return { success: true, data: null };
+        // }
       }
       // --- END: Check if translation exists ---
       else {
@@ -1661,9 +1661,7 @@ export const translateSegmentContent = protectedAction
 
         // Log before the DB update
         console.log(
-          `>>> translateSegmentContent: Attempting to update DB for segment ${segmentId} with translations: ${JSON.stringify(
-            updatedTranslations
-          )}`
+          `>>> translateSegmentContent: Attempting to update DB for segment ${segmentId} with translations for language ${targetLanguage}` // More specific log
         );
         const { error: updateError } = await supabase
           .from("transcription_segments")
