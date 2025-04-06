@@ -893,7 +893,7 @@ export const getCompletedTranscriptionSegments = protectedAction
         // **MODIFIED**: Added 'id' to select
         const { data, error } = await supabase
           .from("transcription_segments") // Use string literal
-          .select("id, start_time, end_time, content") // Added 'id'
+          .select("id, start_time, end_time, content, translations") // Added 'id' and 'translations'
           .eq("video_id", videoId)
           .eq("status", "completed")
           .order("start_time", { ascending: true });
@@ -919,12 +919,13 @@ export const getCompletedTranscriptionSegments = protectedAction
             contentResult =
               segment.content as unknown as ReplicateSegmentOutput; // Use unknown cast
           }
-          // **MODIFIED**: Include id in the result
+          // **MODIFIED**: Include id and translations in the result
           return {
             id: segment.id, // Include the id
             start_time: segment.start_time,
             end_time: segment.end_time,
             content: contentResult,
+            translations: segment.translations, // Include translations
           };
         });
 
