@@ -2,7 +2,6 @@
 
 import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
-import { Buffer } from "buffer";
 import type { User } from "@supabase/supabase-js";
 import type { Tables } from "@/types/supabase";
 import { protectedAction } from "./safe-action";
@@ -378,15 +377,6 @@ export const startVideoProcessing = protectedAction
     }
   );
 
-// Define expected structure from transcription_segments.content
-// **IMPORTANT**: Adjust these interfaces to match your actual Replicate model output
-interface TranscriptionWord {
-  start?: number; // Mark as optional if sometimes missing
-  end?: number;
-  word?: string;
-  speaker?: string; // Optional: Include if your model provides it
-}
-
 // --- Action: Generate Audio Chunk (Revised) ---
 const generateAudioChunkSchema = z
   .object({
@@ -400,13 +390,6 @@ const generateAudioChunkSchema = z
     message: "End time must be greater than start time",
     path: ["endTime"],
   });
-
-type GenerateAudioChunkOutput = {
-  storagePath: string;
-  publicUrl: string;
-  startTime: number; // Echo back start time
-  endTime: number; // Echo back end time
-};
 
 export const generateAudioChunk = protectedAction
   .schema(generateAudioChunkSchema)
@@ -1323,30 +1306,7 @@ export const translateSegmentContent = protectedAction
         console.log(
           `>>> translateSegmentContent: Translation for ${targetLanguage} already exists for segment ${segmentId}. Skipping API call and returning success.`
         );
-        // // Force an update by setting the field to its current value.
-        // // The updated_at trigger will ensure Realtime fires.
-        // const { error: forceUpdateError } = await supabase
-        //   .from("transcription_segments")
-        //   .update({ translations: existingTranslations as any }) // Re-set same value
-        //   .eq("id", segmentId);
-
-        // if (forceUpdateError) {
-        //   console.error(
-        //     `>>> translateSegmentContent: DB Force Update Error for segment ${segmentId}:`,
-        //     forceUpdateError
-        //   );
-        //   // Throw error even if forcing, as something went wrong with the DB
-        //   throw new AppError(
-        //     AppErrorCode.DATABASE_ERROR,
-        //     `DB error forcing update for segment ${segmentId}: ${forceUpdateError.message}`
-        //   );
-        // } else {
-        //   console.log(
-        //     `>>> translateSegmentContent: DB Force Update successful for segment ${segmentId}. Realtime event should trigger.`
-        //   );
-        // Return success because the requested translation data exists.
         return { success: true, data: null };
-        // }
       }
       // --- END: Check if translation exists ---
       else {
