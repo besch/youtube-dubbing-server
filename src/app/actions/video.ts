@@ -2004,7 +2004,7 @@ export const getSuggestedVideos = protectedAction
         // Revert to using DB data directly, as it should now be populated correctly
         const mappedData = data.map((video) => ({
           youtubeId: video.youtube_id,
-          title: video.title ?? null, // Use title from DB, fallback to null
+          title: video.title ?? "Untitled Video", // Use title from DB, fallback to 'Untitled Video'
           thumbnailUrl: video.thumbnail_url ?? null, // Use thumbnail from DB, fallback to null
         }));
 
