@@ -209,7 +209,7 @@ export const startVideoProcessing = protectedAction
 
           // --- Fetch Metadata (Placeholder) ---
           // TODO: Replace with actual metadata fetching (e.g., using a library)
-          let metadata: {
+          const metadata: {
             // Define types explicitly
             title: string | null;
             thumbnailUrl: string | null;
