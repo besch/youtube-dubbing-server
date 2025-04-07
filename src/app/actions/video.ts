@@ -204,12 +204,40 @@ export const startVideoProcessing = protectedAction
           );
         } else {
           console.log(
-            `Video ${youtubeId} not found in DB. Creating new record.`
+            `Video ${youtubeId} not found in DB. Fetching metadata and creating record.`
           );
+
+          // --- Fetch Metadata (Placeholder) ---
+          // TODO: Replace with actual metadata fetching (e.g., using a library)
+          let metadata: {
+            // Define types explicitly
+            title: string | null;
+            thumbnailUrl: string | null;
+            duration: number | null;
+          } = { title: null, thumbnailUrl: null, duration: null };
+          try {
+            // Example: metadata = await fetchYoutubeMetadataFromServer(youtubeId);
+            // Simulating a fetch for now:
+            metadata.title = `Fetched Title for ${youtubeId}`; // Placeholder
+            metadata.thumbnailUrl = `https://img.youtube.com/vi/${youtubeId}/hqdefault.jpg`; // Generate default thumbnail
+            metadata.duration = 300; // Placeholder duration (seconds)
+            console.log(`Fetched metadata for ${youtubeId}:`, metadata);
+          } catch (metaError) {
+            console.warn(
+              `Failed to fetch metadata for ${youtubeId}:`,
+              metaError
+            );
+            // Proceed without metadata, columns should allow NULL
+          }
+          // --- End Fetch Metadata ---
+
           const { data: newVideo, error: insertVideoError } = await supabase
             .from("videos")
             .insert({
               youtube_id: youtubeId,
+              title: metadata.title, // Insert title
+              thumbnail_url: metadata.thumbnailUrl, // Insert thumbnail URL
+              duration: metadata.duration, // Insert duration
             })
             .select("id")
             .single();
