@@ -1908,3 +1908,86 @@ export const getHistory = protectedAction
       return { success: false, error: appErr };
     }
   });
+
+// --- Action: Get Suggested Videos ---
+
+const SuggestedVideoItemSchema = z.object({
+  youtubeId: z.string(),
+  title: z.string().nullable().optional(),
+  thumbnailUrl: z.string().url().nullable().optional(),
+});
+export type SuggestedVideoItem = z.infer<typeof SuggestedVideoItemSchema>;
+
+const getSuggestedVideosSchema = z.object({
+  currentYoutubeId: z.string(),
+});
+
+export const getSuggestedVideos = protectedAction
+  .schema(getSuggestedVideosSchema)
+  .action(
+    async ({
+      parsedInput,
+      ctx,
+    }): Promise<ActionResponse<SuggestedVideoItem[]>> => {
+      const { currentYoutubeId } = parsedInput;
+      const supabase = supabaseServiceRoleClient;
+      const userId = ctx.user.id; // Included for potential future use (e.g., personalized suggestions)
+
+      console.log(
+        `Fetching suggested videos, excluding: ${currentYoutubeId} for user ${userId}`
+      );
+
+      try {
+        const { data, error } = await supabase
+          .from("videos")
+          .select("youtube_id, title, thumbnail_url")
+          .neq("youtube_id", currentYoutubeId) // Exclude the current video
+          .order("created_at", { ascending: false }) // Get the most recent
+          .limit(5); // Limit to 5 suggestions
+
+        if (error) {
+          console.error(
+            `DB error fetching suggested videos (excluding ${currentYoutubeId}):`,
+            error
+          );
+          throw appErrors.DATABASE_ERROR;
+        }
+
+        if (!data) {
+          return { success: true, data: [] };
+        }
+
+        // Transform and validate data
+        const mappedData = data.map((video) => ({
+          youtubeId: video.youtube_id,
+          title: video.title ?? null,
+          thumbnailUrl: video.thumbnail_url ?? null,
+        }));
+
+        const validation = z
+          .array(SuggestedVideoItemSchema)
+          .safeParse(mappedData);
+        if (!validation.success) {
+          console.error(
+            "Suggested videos data validation failed:",
+            validation.error.errors
+          );
+          throw new AppError(
+            AppErrorCode.UNEXPECTED_ERROR,
+            "Failed to validate suggested videos data structure."
+          );
+        }
+
+        console.log(`Found ${validation.data.length} suggested videos.`);
+        return { success: true, data: validation.data };
+      } catch (error: unknown) {
+        console.error(
+          `Error in getSuggestedVideos action (excluding ${currentYoutubeId}):`,
+          error
+        );
+        const appErr =
+          error instanceof AppError ? error : appErrors.UNEXPECTED_ERROR;
+        return { success: false, error: appErr };
+      }
+    }
+  );
