@@ -207,25 +207,37 @@ export const startVideoProcessing = protectedAction
             `Video ${youtubeId} not found in DB. Fetching metadata and creating record.`
           );
 
-          // --- Fetch Metadata (Placeholder) ---
-          // TODO: Replace with actual metadata fetching (e.g., using a library)
-          const metadata: {
-            // Define types explicitly
-            title: string | null;
-            thumbnailUrl: string | null;
-            duration: number | null;
-          } = { title: null, thumbnailUrl: null, duration: null };
+          // --- Fetch Metadata via oEmbed ---
+          let fetchedTitle: string | null = null;
+          let fetchedThumbnailUrl: string | null = null;
+          // Duration is not provided by oEmbed, keep as null for now
+          const duration: number | null = null;
+
           try {
-            // Example: metadata = await fetchYoutubeMetadataFromServer(youtubeId);
-            // Simulating a fetch for now:
-            metadata.title = `Fetched Title for ${youtubeId}`; // Placeholder
-            metadata.thumbnailUrl = `https://img.youtube.com/vi/${youtubeId}/hqdefault.jpg`; // Generate default thumbnail
-            metadata.duration = 300; // Placeholder duration (seconds)
-            console.log(`Fetched metadata for ${youtubeId}:`, metadata);
-          } catch (metaError) {
+            const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(
+              youtubeUrl // Use the original full URL
+            )}&format=json`;
+            console.log(`Fetching oEmbed metadata from: ${oembedUrl}`);
+            const oembedResponse = await fetch(oembedUrl);
+
+            if (!oembedResponse.ok) {
+              // Handle cases like private videos (401/403) or not found (404)
+              throw new Error(
+                `oEmbed request failed with status ${oembedResponse.status}`
+              );
+            }
+
+            const oembedData = await oembedResponse.json();
+            fetchedTitle = oembedData.title || null;
+            fetchedThumbnailUrl = oembedData.thumbnail_url || null;
+            console.log(`Fetched oEmbed metadata for ${youtubeId}:`, {
+              title: fetchedTitle,
+              thumbnailUrl: fetchedThumbnailUrl,
+            });
+          } catch (metaError: any) {
             console.warn(
               `Failed to fetch metadata for ${youtubeId}:`,
-              metaError
+              metaError?.message || metaError
             );
             // Proceed without metadata, columns should allow NULL
           }
@@ -235,9 +247,9 @@ export const startVideoProcessing = protectedAction
             .from("videos")
             .insert({
               youtube_id: youtubeId,
-              title: metadata.title, // Insert title
-              thumbnail_url: metadata.thumbnailUrl, // Insert thumbnail URL
-              duration: metadata.duration, // Insert duration
+              title: fetchedTitle, // Use fetched title
+              thumbnail_url: fetchedThumbnailUrl, // Use fetched thumbnail URL
+              duration: duration, // Duration remains null for now
             })
             .select("id")
             .single();
@@ -1968,7 +1980,7 @@ export const getSuggestedVideos = protectedAction
       try {
         const { data, error } = await supabase
           .from("videos")
-          .select("youtube_id, title, thumbnail_url")
+          .select("youtube_id, title, thumbnail_url") // Select the columns from DB
           .neq("youtube_id", currentYoutubeId) // Exclude the current video
           .order("created_at", { ascending: false }) // Get the most recent
           .limit(5); // Limit to 5 suggestions
@@ -1986,18 +1998,12 @@ export const getSuggestedVideos = protectedAction
         }
 
         // Transform and validate data
-        const mappedData = data.map((video) => {
-          // Generate thumbnail URL consistently
-          const thumbnailUrl = `https://img.youtube.com/vi/${video.youtube_id}/hqdefault.jpg`;
-          // Use DB title or a placeholder if null/empty
-          const title = video.title || "Title not available";
-
-          return {
-            youtubeId: video.youtube_id,
-            title: title,
-            thumbnailUrl: thumbnailUrl,
-          };
-        });
+        // Revert to using DB data directly, as it should now be populated correctly
+        const mappedData = data.map((video) => ({
+          youtubeId: video.youtube_id,
+          title: video.title ?? null, // Use title from DB, fallback to null
+          thumbnailUrl: video.thumbnail_url ?? null, // Use thumbnail from DB, fallback to null
+        }));
 
         const validation = z
           .array(SuggestedVideoItemSchema)
