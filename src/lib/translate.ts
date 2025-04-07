@@ -3,9 +3,8 @@ import {
   HarmCategory,
   HarmBlockThreshold,
 } from "@google/generative-ai";
-import type { ReplicateSegment } from "@/app/actions/video"; // Assuming ReplicateSegment is exported or moved
+import type { ReplicateSegment } from "@/lib/replicate"; // Assuming ReplicateSegment is exported or moved
 import { AppError, AppErrorCode } from "@/app/actions/actions";
-import { config } from "@/config";
 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
 const GEMINI_MODEL_NAME = "gemini-2.0-flash";
@@ -23,7 +22,7 @@ const generationConfig = {
   temperature: 0.3,
   topK: 1,
   topP: 1,
-  maxOutputTokens: 8192, // Adjust as needed
+  maxOutputTokens: 8192,
 };
 
 const safetySettings = [
