@@ -2,7 +2,6 @@
 
 import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
-import OpenAI from "openai";
 import { Buffer } from "buffer";
 import Replicate from "replicate";
 import type { User } from "@supabase/supabase-js";
@@ -16,6 +15,11 @@ import {
   parseTranslationResponse,
   translateText,
 } from "@/lib/translate";
+import {
+  generateOpenAiTts,
+  VALID_TTS_VOICES,
+  type OpenAiTtsVoice,
+} from "@/lib/openai-tts";
 
 // Define REPLICATE_WEBHOOK_URL at the top level for easier access
 const REPLICATE_WEBHOOK_URL = process.env.REPLICATE_WEBHOOK_URL;
@@ -25,17 +29,11 @@ const DOWNLOAD_SERVICE_URL = process.env.DOWNLOADER_SERVICE_URL;
 const AUDIO_SEGMENTER_URL = process.env.AUDIO_SEGMENTER_URL;
 const AUDIO_SEGMENTER_SECRET_KEY = process.env.AUDIO_SEGMENTER_SECRET_KEY;
 const REPLICATE_API_KEY = process.env.REPLICATE_API_KEY;
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-// Re-define TTS Voices constant for Zod enums
-type OpenAiTtsVoice = "alloy" | "echo" | "fable" | "onyx" | "nova" | "shimmer";
-const OPENAI_TTS_VOICES: [OpenAiTtsVoice, ...OpenAiTtsVoice[]] = [
-  "alloy",
-  "echo",
-  "fable",
-  "onyx",
-  "nova",
-  "shimmer",
+// Use the imported constant for Zod enum definition
+const OPENAI_TTS_VOICES_ARRAY = Array.from(VALID_TTS_VOICES) as [
+  OpenAiTtsVoice,
+  ...OpenAiTtsVoice[]
 ];
 
 // --- Environment Variable Checks ---
@@ -44,7 +42,6 @@ if (!AUDIO_SEGMENTER_URL) console.error("AUDIO_SEGMENTER_URL is not set.");
 if (!AUDIO_SEGMENTER_SECRET_KEY)
   console.error("AUDIO_SEGMENTER_SECRET_KEY is not set.");
 if (!REPLICATE_API_KEY) console.error("REPLICATE_API_KEY is not set.");
-if (!OPENAI_API_KEY) console.error("OPENAI_API_KEY is not set.");
 if (!process.env.NEXT_PUBLIC_APP_URL)
   console.error("NEXT_PUBLIC_APP_URL is not set (needed for webhook).");
 if (!config.apiKeys.anthropic)
@@ -55,9 +52,6 @@ if (!config.apiKeys.anthropic)
 const replicate = new Replicate({
   auth: REPLICATE_API_KEY,
 });
-
-// --- OpenAI Client Initialization ---
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY }); // Defer initialization until needed in generateAudioChunk
 
 // Helper to extract YouTube Video ID - throws error if not found
 function extractYoutubeVideoId(url: string): string {
@@ -109,6 +103,7 @@ function extractYoutubeVideoId(url: string): string {
 const startVideoProcessingSchema = z.object({
   youtubeUrl: z.string().url("Invalid YouTube URL"),
   // userId: z.string().uuid().optional(), // userId is now taken from context
+  endTime: z.number().min(0),
 });
 
 interface StartProcessingOutput {
@@ -126,7 +121,7 @@ export const startVideoProcessing = protectedAction
     }): Promise<ActionResponse<StartProcessingOutput>> => {
       // Use type assertion for ctx.user.id
       const userId = (ctx as { user: User }).user.id;
-      const { youtubeUrl } = parsedInput;
+      const { youtubeUrl, endTime } = parsedInput;
 
       const downloaderServiceUrl = process.env.DOWNLOADER_SERVICE_URL;
       if (!downloaderServiceUrl) {
@@ -439,22 +434,8 @@ export const generateAudioChunk = protectedAction
     }): Promise<ActionResponse<{ publicUrl: string }>> => {
       const { videoId, language, voice, startTime, endTime } = parsedInput;
       const supabase = supabaseServiceRoleClient;
-      type OpenAiTtsVoice =
-        | "alloy"
-        | "echo"
-        | "fable"
-        | "onyx"
-        | "nova"
-        | "shimmer";
-      const VALID_TTS_VOICES: Set<OpenAiTtsVoice> = new Set([
-        "alloy",
-        "echo",
-        "fable",
-        "onyx",
-        "nova",
-        "shimmer",
-      ]);
 
+      // Validate voice using the imported constant/type
       if (!VALID_TTS_VOICES.has(voice as OpenAiTtsVoice)) {
         return {
           success: false,
@@ -604,27 +585,19 @@ export const generateAudioChunk = protectedAction
           )}..."`
         );
 
-        // 4. Call OpenAI TTS
-        const ttsResponse = await openai.audio.speech.create({
-          model: "tts-1",
-          voice: ttsVoice,
-          input: textToTranslate,
-          response_format: "mp3",
-        });
-
-        if (!ttsResponse.body) {
-          throw new AppError(
-            AppErrorCode.SERVICE_ERROR,
-            "OpenAI TTS failed: No response body"
-          );
-        }
-        const audioBuffer = Buffer.from(await ttsResponse.arrayBuffer());
+        // 4. Call the refactored TTS function
+        const { audioBuffer, storagePath: chunkStoragePath } =
+          await generateOpenAiTts({
+            text: textToTranslate,
+            voice: ttsVoice,
+            videoId,
+            language,
+            startTime,
+            endTime,
+          });
 
         // 5. Upload TTS chunk
-        const chunkFileName = `${videoId}_${language}_${ttsVoice}_${startTime.toFixed(
-          2
-        )}_${endTime.toFixed(2)}.mp3`;
-        const chunkStoragePath = `${videoId}/${language}/${chunkFileName}`;
+        console.log(`Uploading TTS chunk to: ${chunkStoragePath}`);
         const { error: uploadError } = await supabase.storage
           .from("translated-audio")
           .upload(chunkStoragePath, audioBuffer, {
@@ -704,7 +677,7 @@ const updateHistorySchema = z.object({
   dbVideoId: z.string().uuid(), // Renaming input field
   position: z.number().min(0),
   language: z.string(),
-  voice: z.enum(OPENAI_TTS_VOICES), // Use the defined constant
+  voice: z.enum(OPENAI_TTS_VOICES_ARRAY), // Use the array derived from the set
 });
 
 export const updateHistory = protectedAction
@@ -750,7 +723,7 @@ export const updateHistory = protectedAction
 const toggleFavoriteSchema = z.object({
   dbVideoId: z.string().uuid(),
   language: z.string(),
-  voice: z.enum(OPENAI_TTS_VOICES), // Use the defined constant
+  voice: z.enum(OPENAI_TTS_VOICES_ARRAY), // Use the array derived from the set
 });
 
 type ToggleFavoriteOutput = {
@@ -856,7 +829,7 @@ export const toggleFavorite = protectedAction
 const getFavoriteStatusSchema = z.object({
   dbVideoId: z.string().uuid(),
   language: z.string(),
-  voice: z.enum(OPENAI_TTS_VOICES), // Use the defined constant
+  voice: z.enum(OPENAI_TTS_VOICES_ARRAY), // Use the array derived from the set
 });
 
 // Output type is the same as ToggleFavoriteOutput
