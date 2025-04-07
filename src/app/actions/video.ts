@@ -11,7 +11,11 @@ import { protectedAction } from "./safe-action";
 import { supabaseServiceRoleClient } from "@/lib/supabase/serviceRoleClient";
 import { ActionResponse, AppError, AppErrorCode, appErrors } from "./actions";
 import { config } from "@/config";
-import Anthropic from "@anthropic-ai/sdk";
+import {
+  formatTranscriptionForTranslation,
+  parseTranslationResponse,
+  translateText,
+} from "@/lib/translate";
 
 // Define REPLICATE_WEBHOOK_URL at the top level for easier access
 const REPLICATE_WEBHOOK_URL = process.env.REPLICATE_WEBHOOK_URL;
@@ -54,11 +58,6 @@ const replicate = new Replicate({
 
 // --- OpenAI Client Initialization ---
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY }); // Defer initialization until needed in generateAudioChunk
-
-// --- Anthropic Client Initialization ---
-const anthropic = new Anthropic({
-  apiKey: config.apiKeys.anthropic, // Use key from config
-});
 
 // Helper to extract YouTube Video ID - throws error if not found
 function extractYoutubeVideoId(url: string): string {
@@ -396,13 +395,15 @@ interface TranscriptionWord {
   word?: string;
   speaker?: string; // Optional: Include if your model provides it
 }
-interface ReplicateSegment {
+
+export interface ReplicateSegment {
   start: number; // Assume these are present in valid segments
   end: number;
   text: string;
   words: TranscriptionWord[];
   speaker?: string; // Optional: Include if your model provides it
 }
+
 interface ReplicateSegmentOutput {
   segments: ReplicateSegment[];
   detected_language?: string; // Optional: Include if provided and needed
@@ -1427,101 +1428,6 @@ const translateSegmentContentSchema = z.object({
   targetLanguage: z.string().length(2), // ISO 639-1 code
 });
 
-// Helper function to format transcription for Anthropic prompt
-function formatTranscriptionForAnthropic(
-  segments: ReplicateSegment[] | undefined | null
-): string {
-  if (!segments || !Array.isArray(segments)) return "";
-  let batch = "";
-  segments.forEach((segment, index) => {
-    if (
-      segment &&
-      typeof segment.start === "number" &&
-      typeof segment.end === "number" &&
-      typeof segment.text === "string"
-    ) {
-      batch += `${index + 1}
-`;
-      batch += `${segment.start.toFixed(3)} --> ${segment.end.toFixed(3)}
-`;
-      batch += `${segment.text}
-
-`;
-    }
-  });
-  return batch.trim(); // Remove trailing newline
-}
-
-// Helper function to parse Anthropic response back into structure
-function parseAnthropicResponse(
-  anthropicText: string,
-  originalSegments: ReplicateSegment[]
-): ReplicateSegment[] | null {
-  try {
-    const lines = anthropicText.trim().split("\n");
-    const translatedSegments: ReplicateSegment[] = [];
-    let lineIndex = 0;
-
-    while (lineIndex < lines.length) {
-      const numLine = lines[lineIndex++]?.trim();
-      if (!numLine || !/^[0-9]+$/.test(numLine)) continue;
-
-      const timeLine = lines[lineIndex++]?.trim();
-      if (!timeLine || !timeLine.includes("-->")) continue; // Basic check for timestamp format
-
-      const textLine = lines[lineIndex++]?.trim();
-      if (textLine === undefined) continue;
-
-      // Consume potential empty lines until next number or EOF
-      while (lineIndex < lines.length && lines[lineIndex]?.trim() === "") {
-        lineIndex++;
-      }
-
-      const originalIndex = parseInt(numLine, 10) - 1;
-      const original = originalSegments[originalIndex];
-
-      if (
-        original &&
-        typeof original.start === "number" &&
-        typeof original.end === "number"
-      ) {
-        translatedSegments.push({
-          start: original.start,
-          end: original.end,
-          text: textLine,
-          words: [],
-        });
-      } else {
-        console.warn(
-          `Parsing Anthropic: Could not find original segment for index ${originalIndex} or times missing`
-        );
-      }
-    }
-
-    if (
-      translatedSegments.length === 0 &&
-      originalSegments.length > 0 &&
-      anthropicText.length > 0
-    ) {
-      // Added check for non-empty input
-      console.warn(
-        `Parsing Anthropic: Failed to parse any segments from non-empty response.`
-      );
-      return null;
-    } else if (translatedSegments.length !== originalSegments.length) {
-      console.warn(
-        `Parsing Anthropic: Mismatch in segment count. Original: ${originalSegments.length}, Translated: ${translatedSegments.length}`
-      );
-    }
-
-    return translatedSegments;
-  } catch (error) {
-    console.error("Error parsing Anthropic response:", error);
-    console.error("Anthropic Raw Response Text:", anthropicText);
-    return null;
-  }
-}
-
 export const translateSegmentContent = protectedAction
   .schema(translateSegmentContentSchema)
   .action(async ({ parsedInput, ctx }): Promise<ActionResponse<null>> => {
@@ -1639,7 +1545,7 @@ export const translateSegmentContent = protectedAction
           return { success: true, data: null };
         }
 
-        const textToTranslate = formatTranscriptionForAnthropic(
+        const textToTranslate = formatTranscriptionForTranslation(
           originalContent.segments
         );
         if (!textToTranslate) {
@@ -1648,43 +1554,32 @@ export const translateSegmentContent = protectedAction
         }
 
         console.log(
-          `Calling Anthropic to translate ${sourceLangName} to ${targetLangName} for segment ${segmentId}`
+          `Calling Translation Service (Gemini) to translate ${sourceLangName} to ${targetLangName} for segment ${segmentId}`
         );
 
-        // 4. Call Anthropic API
-        const response = await anthropic.messages.create({
-          model: "claude-3-haiku-20240307",
-          max_tokens: 2500,
-          messages: [
-            {
-              role: "user",
-              content: `Translate the following subtitles from ${sourceLangName} to ${targetLangName}.\nMaintain the exact same timing and numbering format.\nCritical formatting rules:\n1. Each subtitle entry MUST be separated by exactly one empty line\n2. Each entry MUST follow this exact format (no square brackets):\n[number]\n[timestamp like 0.000 --> 0.000]\n[translated text]\n[empty line]\n3. The last subtitle entry MUST be followed by an empty line\n4. Never include multiple consecutive empty lines\n5. Preserve all original numbering and timing exactly as provided\n\n${textToTranslate}`,
-            },
-          ],
-          temperature: 0.3,
-        });
+        // 4. Call Translation Service (Gemini)
+        const translatedText = await translateText(
+          textToTranslate,
+          sourceLangName,
+          targetLangName
+        );
 
-        if (
-          !response.content ||
-          !response.content[0] ||
-          response.content[0].type !== "text"
-        ) {
+        if (!translatedText) {
           throw new AppError(
             AppErrorCode.SERVICE_ERROR,
-            "Anthropic translation failed: Invalid response structure."
+            "Translation service returned empty response."
           );
         }
-        const translatedText = response.content[0].text;
 
-        // 5. Parse Anthropic Response
-        const parsedSegments = parseAnthropicResponse(
+        // 5. Parse Translation Response
+        const parsedSegments = parseTranslationResponse(
           translatedText,
           originalContent.segments
         );
         if (!parsedSegments) {
           throw new AppError(
             AppErrorCode.SERVICE_ERROR,
-            `Failed to parse Anthropic translation response for segment ${segmentId}. Raw: ${translatedText.substring(
+            `Failed to parse translation response for segment ${segmentId}. Raw: ${translatedText.substring(
               0,
               100
             )}`
