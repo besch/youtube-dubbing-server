@@ -243,13 +243,16 @@ export const startVideoProcessing = protectedAction
           }
           // --- End Fetch Metadata ---
 
+          // Ensure a title exists, falling back to a default
+          const videoTitle = fetchedTitle || "Untitled Video";
+
           const { data: newVideo, error: insertVideoError } = await supabase
             .from("videos")
             .insert({
               youtube_id: youtubeId,
-              title: fetchedTitle, // Use fetched title
-              thumbnail_url: fetchedThumbnailUrl, // Use fetched thumbnail URL
-              duration: duration, // Duration remains null for now
+              title: videoTitle, // Use the guaranteed title
+              thumbnail_url: fetchedThumbnailUrl,
+              duration: duration, // Duration might still be null
             })
             .select("id")
             .single();

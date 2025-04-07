@@ -336,7 +336,7 @@ ALTER TABLE "public"."translated_audio_chunks" OWNER TO "postgres";
 CREATE TABLE IF NOT EXISTS "public"."videos" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "youtube_id" "text" NOT NULL,
-    "title" "text",
+    "title" "text" NOT NULL DEFAULT 'Untitled Video'::"text",
     "description" "text",
     "thumbnail_url" "text",
     "duration" integer,
