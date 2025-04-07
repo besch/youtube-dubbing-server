@@ -3,7 +3,6 @@
 import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
 import { Buffer } from "buffer";
-import Replicate from "replicate";
 import type { User } from "@supabase/supabase-js";
 import type { Tables } from "@/types/supabase";
 import { protectedAction } from "./safe-action";
@@ -16,13 +15,15 @@ import {
   translateText,
 } from "@/lib/translate";
 import {
+  startReplicateTranscription,
+  type ReplicateSegment,
+  type ReplicateSegmentOutput,
+} from "@/lib/replicate";
+import {
   generateOpenAiTts,
   VALID_TTS_VOICES,
   type OpenAiTtsVoice,
 } from "@/lib/openai-tts";
-
-// Define REPLICATE_WEBHOOK_URL at the top level for easier access
-const REPLICATE_WEBHOOK_URL = process.env.REPLICATE_WEBHOOK_URL;
 
 // Constants
 const DOWNLOAD_SERVICE_URL = process.env.DOWNLOADER_SERVICE_URL;
@@ -47,11 +48,6 @@ if (!process.env.NEXT_PUBLIC_APP_URL)
 if (!config.apiKeys.anthropic)
   // Check for Anthropic key from config
   console.error("ANTHROPIC_API_KEY is not set.");
-
-// --- Replicate Client Initialization ---
-const replicate = new Replicate({
-  auth: REPLICATE_API_KEY,
-});
 
 // Helper to extract YouTube Video ID - throws error if not found
 function extractYoutubeVideoId(url: string): string {
@@ -389,19 +385,6 @@ interface TranscriptionWord {
   end?: number;
   word?: string;
   speaker?: string; // Optional: Include if your model provides it
-}
-
-export interface ReplicateSegment {
-  start: number; // Assume these are present in valid segments
-  end: number;
-  text: string;
-  words: TranscriptionWord[];
-  speaker?: string; // Optional: Include if your model provides it
-}
-
-interface ReplicateSegmentOutput {
-  segments: ReplicateSegment[];
-  detected_language?: string; // Optional: Include if provided and needed
 }
 
 // --- Action: Generate Audio Chunk (Revised) ---
@@ -1043,108 +1026,6 @@ async function getAudioSegmentPath(
     throw new AppError(
       AppErrorCode.SERVICE_ERROR,
       `Failed to communicate with Audio Segmenter: ${message}`
-    );
-  }
-}
-
-// --- Helper: Start Replicate Transcription ---
-async function startReplicateTranscription(
-  audioUrl: string,
-  replicateModelVersion: string
-): Promise<string> {
-  // Enhanced Log
-  console.log(
-    `Replicate: Preparing to call model ${replicateModelVersion}. Audio URL starts with: ${audioUrl.substring(
-      0,
-      150
-    )}... Webhook URL: ${REPLICATE_WEBHOOK_URL}`
-  );
-  if (!REPLICATE_WEBHOOK_URL) {
-    // Added check
-    console.error("Replicate Error: REPLICATE_WEBHOOK_URL is not set!");
-    throw new AppError(
-      AppErrorCode.CONFIGURATION_ERROR,
-      "Replicate webhook URL is not configured."
-    );
-  }
-  if (!replicate) {
-    // Added check
-    console.error("Replicate Error: Replicate client is not initialized!");
-    throw new AppError(
-      AppErrorCode.CONFIGURATION_ERROR,
-      "Replicate client failed to initialize."
-    );
-  }
-
-  try {
-    // Log inputs right before the call
-    console.log(
-      `Replicate: Calling replicate.predictions.create with version: ${replicateModelVersion}, webhook: ${REPLICATE_WEBHOOK_URL}`
-    );
-    const prediction = await replicate.predictions.create({
-      // Use the hardcoded version directly as identified in requestTranscriptionSegment
-      version:
-        "84d2ad2d6194fe98a17d2b60bef1c7f910c46b2f6fd38996ca457afd9c8abfcb",
-      input: {
-        // Ensure input format matches the model's expectation
-        audio_file: audioUrl, // Changed from 'audio' to 'audio_file' based on error log
-        // language: "en", // Optional: Specify language if needed by the model
-        // model: "large-v3" // Optional: Specify sub-model if applicable
-      },
-      webhook: REPLICATE_WEBHOOK_URL,
-      webhook_events_filter: ["completed"], // Ensure this matches what webhook handler expects
-    });
-
-    if (!prediction?.id) {
-      // Check prediction object itself as well
-      console.error(
-        "Replicate Error: API call succeeded but returned no prediction ID. Prediction object:",
-        JSON.stringify(prediction, null, 2)
-      ); // Log the full prediction object stringified
-      throw new Error("Replicate did not return a prediction ID");
-    }
-    console.log(
-      "Replicate: Prediction started successfully. ID:",
-      prediction.id
-    ); // Log success
-    return prediction.id;
-  } catch (error: unknown) {
-    // Log the raw error *before* wrapping it
-    console.error(
-      "Replicate Error: Caught error during predictions.create():",
-      error // Log the actual error object
-    );
-    // Log details if it's an AxiosError or similar structure
-    if (typeof error === "object" && error !== null && "response" in error) {
-      const axiosError = error as {
-        response?: { data?: any; status?: number; headers?: any };
-      };
-      console.error(
-        "Replicate Error Response Data:",
-        axiosError.response?.data
-      );
-      console.error(
-        "Replicate Error Response Status:",
-        axiosError.response?.status
-      );
-      console.error(
-        "Replicate Error Response Headers:",
-        axiosError.response?.headers
-      );
-    }
-
-    // Construct a more informative message
-    const message =
-      error instanceof Error ? error.message : "Unknown Replicate API error";
-    let detailedMessage = `Replicate transcription failed to start: ${message}`;
-    // Attempt to extract more details if available (e.g., from Replicate's error structure)
-    if (typeof error === "object" && error !== null && "toString" in error) {
-      detailedMessage += ` | Details: ${error.toString()}`;
-    }
-
-    throw new AppError(
-      AppErrorCode.REPLICATE_API_ERROR,
-      detailedMessage // Use the more detailed message
     );
   }
 }
