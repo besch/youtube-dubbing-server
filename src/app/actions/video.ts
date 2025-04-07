@@ -1986,11 +1986,18 @@ export const getSuggestedVideos = protectedAction
         }
 
         // Transform and validate data
-        const mappedData = data.map((video) => ({
-          youtubeId: video.youtube_id,
-          title: video.title ?? null,
-          thumbnailUrl: video.thumbnail_url ?? null,
-        }));
+        const mappedData = data.map((video) => {
+          // Generate thumbnail URL consistently
+          const thumbnailUrl = `https://img.youtube.com/vi/${video.youtube_id}/hqdefault.jpg`;
+          // Use DB title or a placeholder if null/empty
+          const title = video.title || "Title not available";
+
+          return {
+            youtubeId: video.youtube_id,
+            title: title,
+            thumbnailUrl: thumbnailUrl,
+          };
+        });
 
         const validation = z
           .array(SuggestedVideoItemSchema)
