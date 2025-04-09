@@ -44,12 +44,11 @@ export interface ReplicateSegmentOutput {
 
 // --- Helper: Start Replicate Transcription ---
 export async function startReplicateTranscription(
-  audioUrl: string,
-  replicateModelVersion: string
+  audioUrl: string
 ): Promise<string> {
   // Enhanced Log
   console.log(
-    `Replicate: Preparing to call model ${replicateModelVersion}. Audio URL starts with: ${audioUrl.substring(
+    `Replicate: Audio URL starts with: ${audioUrl.substring(
       0,
       150
     )}... Webhook URL: ${REPLICATE_WEBHOOK_URL}`
@@ -74,15 +73,13 @@ export async function startReplicateTranscription(
   try {
     // Log inputs right before the call
     console.log(
-      `Replicate: Calling replicate.predictions.create with version: ${replicateModelVersion}, webhook: ${REPLICATE_WEBHOOK_URL}`
+      `Replicate: Calling replicate.predictions.create, webhook: ${REPLICATE_WEBHOOK_URL}`
     );
     const prediction = await replicate.predictions.create({
-      version: replicateModelVersion, // Use the passed version
+      version:
+        "84d2ad2d6194fe98a17d2b60bef1c7f910c46b2f6fd38996ca457afd9c8abfcb",
       input: {
-        // Ensure input format matches the model's expectation
-        audio_file: audioUrl, // Use 'audio_file' based on original code comment
-        // language: "en", // Optional: Specify language if needed by the model
-        // model: "large-v3" // Optional: Specify sub-model if applicable
+        audio_file: audioUrl,
       },
       webhook: REPLICATE_WEBHOOK_URL,
       webhook_events_filter: ["completed"], // Ensure this matches what webhook handler expects
