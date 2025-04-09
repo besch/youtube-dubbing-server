@@ -1193,18 +1193,47 @@ export const requestTranscriptionSegment = protectedAction
         }
 
         // 5. Start Replicate Transcription - Hardcode the model version here
-        const modelVersion = // Keep the specific version hardcoded here
-          "victor-upmeet/whisperx:84d2ad2d6194fe98a17d2b60bef1c7f910c46b2f6fd38996ca457afd9c8abfcb";
+        const modelVersion =
+          "stable-diffusion-stability-ai/stable-diffusion:db21e45d3f7023abc2a46ee38a23973f6dce16bb082a930b0c49861f96d1e5bf"; // Example, replace if needed
         console.log(
           `RequestSegment: Attempting to start Replicate transcription (Model Version: ${modelVersion}) for segment ${dbSegmentId} using URL starting with: ${segmentSignedUrl.substring(
             0,
             100
           )}...`
         );
-        const replicatePredictionId = await startReplicateTranscription(
-          segmentSignedUrl,
-          modelVersion // Pass the version string
-        );
+
+        // --- START: Added Error Handling for startReplicateTranscription ---
+        let replicatePredictionId: string;
+        try {
+          replicatePredictionId = await startReplicateTranscription(
+            segmentSignedUrl,
+            modelVersion // Pass the version string
+          );
+        } catch (replicateError: unknown) {
+          let errorMessage = "Failed to start Replicate transcription.";
+          if (replicateError instanceof Error) {
+            errorMessage = `Replicate transcription failed to start: ${replicateError.message}`;
+          }
+          // Log the specific error before throwing a generic one
+          console.error(
+            `RequestSegment: Error calling startReplicateTranscription: ${errorMessage}`,
+            replicateError
+          );
+
+          // Optionally update the DB record to 'failed' here before throwing
+          await supabase
+            .from("transcription_segments")
+            .update({
+              status: "failed",
+              error_message: errorMessage.substring(0, 500), // Limit error message length
+            })
+            .eq("id", dbSegmentId!);
+
+          // Throw an AppError that the client can understand
+          throw new AppError(AppErrorCode.REPLICATE_API_ERROR, errorMessage);
+        }
+        // --- END: Added Error Handling for startReplicateTranscription ---
+
         console.log(
           `RequestSegment: Successfully started Replicate. Received Prediction ID: ${replicatePredictionId} for DB segment ${dbSegmentId}`
         );
@@ -1227,10 +1256,9 @@ export const requestTranscriptionSegment = protectedAction
             `Failed to update segment ${dbSegmentId!} with Replicate ID ${replicatePredictionId}:`,
             updateError.message
           );
-          throw new AppError(
-            AppErrorCode.DATABASE_ERROR,
-            `Failed to update segment status after starting Replicate: ${updateError.message}`
-          );
+          // Don't throw here if Replicate started, just log. The webhook should eventually fail?
+          // Or maybe mark as failed? For now, just log.
+          // Consider adding specific handling if the update fails after Replicate starts.
         }
 
         console.log(
@@ -1239,6 +1267,8 @@ export const requestTranscriptionSegment = protectedAction
         return { success: true, data: { success: true } };
       } catch (error: unknown) {
         console.error(`RequestSegment: Error caught in main try block:`, error); // Added prefix
+
+        // Ensure the error is an AppError before returning
         const appErr =
           error instanceof AppError
             ? error
@@ -1248,12 +1278,17 @@ export const requestTranscriptionSegment = protectedAction
                   ? error.message
                   : "Unknown error in requestTranscriptionSegment"
               );
+
         // Explicitly log the error object being returned
         console.error(
           `RequestSegment: Returning failure response with error:`,
           JSON.stringify(appErr, null, 2)
         );
-        return { success: false, error: appErr };
+        // Return failure within the ActionResponse structure
+        // The protectedAction wrapper will catch AppErrors thrown here.
+        // We only return { success: false, error: appErr } if we want to handle the failure *within* the action logic itself.
+        // Throwing ensures the safe-action client receives the error correctly.
+        throw appErr; // Throw the AppError
       }
     }
   );
