@@ -50,8 +50,10 @@ The project allows users to watch YouTube videos with dynamically generated, dub
 
 - **State Handling (`app/video/[id].tsx`):**
   - Manages `loadingState`, `currentTime`, `playerState`, etc.
+  - **New:** Manages buffering state (`isBuffering`, `bufferingReason`, `isManuallyPaused`).
   - Stores completed **original** transcription segments: `transcriptionSegments: Map<number, {id: string, content: SegmentData}>` (keyed by start time).
   - Stores **translated** segments: `translatedSegments: Map<string, Map<number, SegmentData>>` (keyed by language, then start time).
+  - Stores generated audio chunk data: `generatedChunks: Map<string, { publicUrl: string }>`.
   - Tracks requested segment end times: `requestedTranscriptionEndTimes: Set<number>`.
   - Tracks translation status per segment/language: `segmentTranslationState: Map<string, { [lang]: status }>`
   - Tracks the maximum time transcribed: `maxTranscribedTime: number`.
@@ -67,6 +69,24 @@ The project allows users to watch YouTube videos with dynamically generated, dub
     - If `status = 'completed'` and `content` exists, updates the local `transcriptionSegments` map and `maxTranscribedTime`. If the target language is not the source ('en'), calls `translateSegmentContentApi` for this newly completed segment.
     - If `translations` field exists and contains data for a language, updates the `translatedSegments` map and `segmentTranslationState`.
     - Checks `checkIfReadyToPlay` to see if initial transcription and required translation are available to transition `loadingState` to `ready`.
+- **Time Update & Buffering (`startCurrentTimeInterval`):**
+  - Runs periodically while the player is playing.
+  - Detects seeks based on `currentTime` jumps (`SEEK_THRESHOLD_SECONDS`).
+  - Throttles buffer checks using `BUFFER_CHECK_INTERVAL_SECONDS`.
+  - Calls `checkBufferingStatus` function with the `targetTime`.
+  - **`checkBufferingStatus` Logic:**
+    - Checks if transcription is available for `targetTime` in `transcriptionSegments`.
+    - If transcription needed, triggers `requestNextTranscriptionSegment` early.
+    - Checks if translation is available for `targetTime` in `translatedSegments` (or if language is 'en').
+    - If translation needed, triggers `triggerTranslation`.
+    - Checks if the corresponding audio chunk exists in `generatedChunks`.
+    - If audio chunk needed, triggers `generateAndStoreAudioChunk`.
+    - If any of the above are missing: Sets `isBuffering` to `true`, updates `bufferingReason`, pauses the YouTube player (`playerRef.current.pauseVideo()`) and the dubbing audio (`soundRef.current.pauseAsync()`).
+    - If all are available and `isBuffering` was true: Sets `isBuffering` to `false`, resumes the YouTube player (`playerRef.current.playVideo()`) only if it wasn't manually paused by the user.
+- **Player State (`onPlayerStateChange`):**
+  - Distinguishes between manual pauses (`isManuallyPaused = true`) and pauses triggered by buffering (`isBuffering = true`).
+  - Controls the time interval (`startCurrentTimeInterval`, `stopCurrentTimeInterval`).
+  - Only resumes the player after buffering if `!isManuallyPaused`.
 - **Requesting Next Transcription Segment:** `useEffect` monitors `currentTime`.
   - When `currentTime` approaches `maxTranscribedTime` (minus a buffer), it calls `requestTranscriptionSegmentApi` on the Next.js server for the _next_ time chunk (e.g., 180-360s), adding the end time to `requestedTranscriptionEndTimes`. The actual data arrives later via Realtime.
 - **Requesting Translation (Lookahead):** `checkAndRequestTranslation` function runs periodically.
@@ -76,6 +96,7 @@ The project allows users to watch YouTube videos with dynamically generated, dub
   - Finds the translated text corresponding to `currentTime + LOOKAHEAD_SECONDS`.
   - Calls `generateAudioChunkApi` on the Next.js server, passing the _absolute_ start/end times of the required **translated** text snippet, along with the `language` and `voice`.
 - **Audio Playback:** `manageAudioPlayback` finds the **translated** segment for the current `language` that `currentTime` falls within.
+  - **Modified:** Halts playback and unloads sound if `isBuffering` becomes true.
   - Uses `expo-av` to play the specific audio chunk URL (corresponding to the translated segment's time and selected voice), applying `dubbingVolume`.
 - **Language/Voice Changes:**
   - **Language:** Clears `generatedChunks`, checks favorites, calls `checkAndRequestInitialTranslations` to trigger translation API calls for all existing transcription segments for the _new_ language.
