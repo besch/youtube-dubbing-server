@@ -98,7 +98,6 @@ function extractYoutubeVideoId(url: string): string {
 const startVideoProcessingSchema = z.object({
   youtubeUrl: z.string().url("Invalid YouTube URL"),
   // userId: z.string().uuid().optional(), // userId is now taken from context
-  endTime: z.number().min(0),
 });
 
 interface StartProcessingOutput {
@@ -116,7 +115,7 @@ export const startVideoProcessing = protectedAction
     }): Promise<ActionResponse<StartProcessingOutput>> => {
       // Use type assertion for ctx.user.id
       const userId = (ctx as { user: User }).user.id;
-      const { youtubeUrl, endTime } = parsedInput;
+      const { youtubeUrl } = parsedInput;
 
       const downloaderServiceUrl = process.env.DOWNLOADER_SERVICE_URL;
       if (!downloaderServiceUrl) {
