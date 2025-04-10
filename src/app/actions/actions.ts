@@ -39,7 +39,7 @@ export enum AppErrorCode {
 
   // New errors for translation and TTS
   TRANSLATION_FAILED = 6002,
-  TTS_FAILED = 7000,
+  TTS_FAILED = 7001,
   STORAGE_UPLOAD_FAILED = 8000,
   STORAGE_DOWNLOAD_FAILED = 8001,
   STORAGE_DELETE_FAILED = 8002,
