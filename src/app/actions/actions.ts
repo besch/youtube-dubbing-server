@@ -36,6 +36,14 @@ export enum AppErrorCode {
 
   // New errors for auth admin actions
   AUTH_OPERATION_FAILED = 7000,
+
+  // New errors for translation and TTS
+  TRANSLATION_FAILED = 6002,
+  TTS_FAILED = 7000,
+  STORAGE_UPLOAD_FAILED = 8000,
+  STORAGE_DOWNLOAD_FAILED = 8001,
+  STORAGE_DELETE_FAILED = 8002,
+  DEPENDENCY_NOT_READY = 9000, // Added for missing transcript/translation
 }
 
 // Custom error class for application-specific errors

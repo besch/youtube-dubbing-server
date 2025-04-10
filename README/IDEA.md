@@ -198,13 +198,13 @@ Authentication is handled using Supabase Auth, supporting Google Sign-In (Androi
 
 ### 2.1. Overview
 
-The video player screen (`mobile/app/video/[id].tsx`) plays a YouTube video using `react-native-youtube-iframe`. It implements on-the-fly audio generation and playback for dubbed audio based on transcription segments fetched from the server. It interacts with server actions via API helper functions.
+The video player screen (`mobile/app/video/[id].tsx`) plays a YouTube video using `react-native-webview`. It implements on-the-fly audio generation and playback for dubbed audio based on transcription segments fetched from the server. It interacts with server actions via API helper functions.
 
 ### 2.2. Core Components & Files
 
 - **Video Player Screen (`mobile/app/video/[id].tsx`):**
-  - Gets `youtubeVideoId`, `youtubeUrl`, `language`, `voice`, `position` from route params (`useLocalSearchParams`).
-  - Uses `react-native-youtube-iframe` for video playback and control (`playerRef`).
+  - Gets `youtubeVideoId`, `language`, `voice`, `position` from route params (`useLocalSearchParams`).
+  - Uses `react-native-webview` to embed the YouTube IFrame Player.
   - Uses `expo-av` (`Audio.Sound`) for playing generated audio chunks (`soundRef`).
   - Manages various states: `loadingState`, `errorMessage`, `playerState`, `currentTime`, `videoDuration`, `isFavorite`, `videoTitle`, `dbVideoId`, `downloadJobId`, `transcription`, `language`, `voice`, `generatedChunks`, `audioStatusText`, `isAudioGenerating`, `currentlyPlayingChunkKey`.
   - Uses the `useAuth` hook to get `userId` and `isAuthenticated` status.
@@ -219,7 +219,7 @@ The video player screen (`mobile/app/video/[id].tsx`) plays a YouTube video usin
     - `checkFavoriteStatus`: Calls `getFavoriteStatusApi` with video/user details to update `isFavorite` state.
     - `handleToggleFavorite`: Optimistically updates `isFavorite` state, calls `toggleFavoriteApi`. Reverts state on API failure.
     - `updateWatchHistory`: Calls `updateHistoryApi` with video ID, position, and `userId` when the player is paused/ended or the app goes to the background.
-  - **UI:** Renders loading indicators, error messages, the `YoutubePlayer`, video title, audio status, and header controls (back, title, favorite toggle).
+  - **UI:** Renders loading indicators, error messages, the `WebView`, video title, audio status, and header controls (back, title, favorite toggle).
 - **API Library (`mobile/lib/api.ts`):**
   - Contains functions (`startVideoProcessingApi`, `startTranscriptionApi`, `getJobStatusApi`, `getTranscriptionApi`, `generateAudioChunkApi`, `updateHistoryApi`, `toggleFavoriteApi`, `getFavoriteStatusApi`) that act as wrappers for calling server actions.
   - Includes a `callServerAction` helper function using `fetch` to POST JSON data to assumed server endpoints (`/api/actions/[actionName]`). Handles basic success/error checking and maps results to `ActionResponse`.
@@ -232,7 +232,7 @@ The video player screen (`mobile/app/video/[id].tsx`) plays a YouTube video usin
 
 ### 2.3. Video/Audio Workflow
 
-1.  Screen mounts, `initiateVideoProcessing` sends URL/userId to the server. Server starts download job, returns `jobId` and internal `videoId`.
+1.  Screen mounts, `initiateVideoProcessing` sends videoId, URL, userId to the server. Server starts download job, returns `jobId` and internal `videoId`.
 2.  Client polls `getJobStatusApi` using `jobId`.
 3.  Once download completes, client calls `startTranscriptionApi` (server starts transcription job).
 4.  Client polls `getTranscriptionApi` using `videoId`.

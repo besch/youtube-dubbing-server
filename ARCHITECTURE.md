@@ -12,7 +12,7 @@ The project allows users to watch YouTube videos with dynamically generated, dub
   - `youtube-download/`: Python FastAPI service (YouTube full audio download & upload).
   - `audio-segmenter/`: Python FastAPI service (Audio segment extraction & upload).
 - **Technology Stack:**
-  - **Mobile:** React Native, Expo, TypeScript, Jotai, Supabase Client, Expo Router, `react-native-youtube-iframe`, `expo-av`.
+  - **Mobile:** React Native, Expo, TypeScript, Jotai, Supabase Client, Expo Router, `react-native-webview`, `expo-av`.
   - **Server:** Next.js (App Router), TypeScript, Supabase (Auth & DB), `next-safe-action`, Zod, Replicate Client (Transcription), OpenAI Client (TTS), Anthropic Client (Translation).
   - **Downloader:** Python, FastAPI, `yt-dlp`, `supabase-py`.
   - **Segmenter:** Python, FastAPI, `ffmpeg`, `supabase-py` (Deployed on Google Cloud Run).

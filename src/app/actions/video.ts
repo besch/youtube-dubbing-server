@@ -91,6 +91,46 @@ function extractYoutubeVideoId(url: string): string {
   );
 }
 
+// --- Helper Function: Extract Text from Segments for Time Range ---
+function extractTextFromSegments(
+  segmentsOutputs: (ReplicateSegmentOutput | null | undefined)[],
+  targetStartTime: number,
+  targetEndTime: number
+): string {
+  let extractedText = "";
+  const addedSentences = new Set<string>(); // Avoid duplicating sentences if segments overlap
+
+  for (const output of segmentsOutputs) {
+    if (output?.segments) {
+      for (const sentence of output.segments) {
+        const sentenceStart = sentence?.start ?? -1;
+        const sentenceEnd = sentence?.end ?? -1;
+        const sentenceText = sentence?.text?.trim() ?? "";
+
+        if (
+          sentenceStart >= 0 &&
+          sentenceEnd >= 0 &&
+          sentenceText &&
+          !addedSentences.has(sentenceText) // Check if already added
+        ) {
+          // Check for overlap: max(start1, start2) < min(end1, end2)
+          if (
+            Math.max(sentenceStart, targetStartTime) <
+            Math.min(sentenceEnd, targetEndTime)
+          ) {
+            // For simplicity, include the whole sentence if it overlaps.
+            // More precise clipping might be desired but adds complexity.
+            extractedText += sentenceText + " ";
+            addedSentences.add(sentenceText); // Mark sentence as added
+          }
+        }
+      }
+    }
+  }
+  return extractedText.trim();
+}
+// --- End Helper Function ---
+
 // Zod schema for input validation
 const startVideoProcessingSchema = z.object({
   youtubeUrl: z.string().url("Invalid YouTube URL"),
@@ -480,60 +520,56 @@ export const generateAudioChunk = protectedAction
           );
         }
 
-        // 3. Extract *translated* text for the exact time range [startTime, endTime]
-        let textToTranslate = "";
-        (segmentsData || [])?.forEach((segment) => {
-          let translatedContent: ReplicateSegmentOutput | null = null;
-          const segmentTranslations = segment.translations as Record<
-            string,
-            any
-          > | null;
+        // --- 3. Extract Text for the Specific Time Range & Language ---
+        let textToSynthesize = "";
 
-          if (segmentTranslations && segmentTranslations[language]) {
-            const langTranslation = segmentTranslations[language];
-            if (
-              langTranslation &&
-              typeof langTranslation === "object" &&
-              !Array.isArray(langTranslation) &&
-              "segments" in langTranslation &&
-              Array.isArray(langTranslation.segments)
-            ) {
-              translatedContent = langTranslation as ReplicateSegmentOutput;
+        if (language === "en") {
+          // If English, use the original transcription content
+          const originalContents: ReplicateSegmentOutput[] = [];
+          for (const segment of segmentsData) {
+            if (!segment.content) {
+              // Throw specific error if original content is missing for EN
+              console.warn(
+                `Original transcription content missing for segment ${segment.id} (${segment.start_time}-${segment.end_time}) needed for English TTS.`
+              );
+              throw new AppError(
+                AppErrorCode.DEPENDENCY_NOT_READY,
+                `Original transcription not ready for time ${segment.start_time}s.` // More accurate error
+              );
             }
+            originalContents.push(segment.content as ReplicateSegmentOutput);
           }
-
-          if (!translatedContent) {
-            console.error(
-              `Translation for language '${language}' not found in segment ${segment.id} (time ${segment.start_time}-${segment.end_time})`
-            );
-            throw new AppError(
-              AppErrorCode.TRANSLATION_NOT_AVAILABLE,
-              `Translation for '${language}' not ready for time ${segment.start_time?.toFixed(
-                1
-              )}s.`
-            );
-          }
-
-          if (!translatedContent?.segments) return;
-
-          translatedContent.segments.forEach((sentence: ReplicateSegment) => {
-            const sentenceStart = sentence?.start ?? -1;
-            const sentenceEnd = sentence?.end ?? -1;
-            const sentenceText = sentence?.text ?? "";
-
-            if (sentenceStart >= 0 && sentenceEnd >= 0 && sentenceText) {
-              if (
-                Math.max(sentenceStart, startTime) <
-                Math.min(sentenceEnd, endTime)
-              ) {
-                textToTranslate += sentenceText + " "; // Append sentence text
-              }
+          textToSynthesize = extractTextFromSegments(
+            originalContents,
+            startTime,
+            endTime
+          );
+        } else {
+          // If not English, use the translated content
+          const translatedContents: ReplicateSegmentOutput[] = [];
+          for (const segment of segmentsData) {
+            const translation = segment.translations?.[language];
+            if (!translation) {
+              console.warn(
+                `Translation for '${language}' not found for segment ${segment.id} (${segment.start_time}-${segment.end_time}).`
+              );
+              throw new AppError(
+                AppErrorCode.DEPENDENCY_NOT_READY,
+                `Translation for '${language}' not ready for time ${segment.start_time}s.`
+              );
             }
-          });
-        });
-        textToTranslate = textToTranslate.trim();
+            // Ensure the translation structure matches ReplicateSegmentOutput if needed
+            // This might require validation or adjustment depending on the actual structure
+            translatedContents.push(translation as ReplicateSegmentOutput);
+          }
+          textToSynthesize = extractTextFromSegments(
+            translatedContents,
+            startTime,
+            endTime
+          );
+        }
 
-        if (!textToTranslate) {
+        if (!textToSynthesize.trim()) {
           throw new AppError(
             AppErrorCode.RECORD_NOT_FOUND,
             `No translated text found for the precise time range ${startTime}-${endTime} in ${language}.`
@@ -541,7 +577,7 @@ export const generateAudioChunk = protectedAction
         }
 
         console.log(
-          `Text for TTS (${language}, ${ttsVoice}, ${startTime}-${endTime}): "${textToTranslate.substring(
+          `Text for TTS (${language}, ${ttsVoice}, ${startTime}-${endTime}): "${textToSynthesize.substring(
             0,
             100
           )}..."`
@@ -550,7 +586,7 @@ export const generateAudioChunk = protectedAction
         // 4. Call the refactored TTS function
         const { audioBuffer, storagePath: chunkStoragePath } =
           await generateOpenAiTts({
-            text: textToTranslate,
+            text: textToSynthesize,
             voice: ttsVoice,
             videoId,
             language,
