@@ -154,14 +154,6 @@ export const startVideoProcessing = protectedAction
       const userId = (ctx as { user: User }).user.id;
       const { youtubeUrl } = parsedInput;
 
-      const downloaderServiceUrl = process.env.DOWNLOADER_SERVICE_URL;
-      if (!downloaderServiceUrl) {
-        console.error(
-          "DOWNLOADER_SERVICE_URL is not set in environment variables."
-        );
-        throw appErrors.UNEXPECTED_ERROR;
-      }
-
       let youtubeId: string;
       try {
         youtubeId = extractYoutubeVideoId(youtubeUrl);
@@ -176,7 +168,7 @@ export const startVideoProcessing = protectedAction
       try {
         const supabase = supabaseServiceRoleClient;
 
-        // Use const for variables not reassigned
+        // 1. Check/Create Video Record
         const { data: existingVideo, error: videoCheckError } = await supabase
           .from("videos")
           .select("id")
@@ -192,10 +184,15 @@ export const startVideoProcessing = protectedAction
 
         if (existingVideo) {
           videoId = existingVideo.id;
+          console.log(
+            `Found existing video record ${videoId} for YouTube ID ${youtubeId}`
+          );
+          // Check if a non-failed job already exists (completed or processing)
           const { data: existingJob, error: jobCheckError } = await supabase
             .from("download_jobs")
             .select("id, status")
             .eq("video_id", videoId)
+            // Look for jobs that are already done or in progress
             .in("status", ["completed", "processing"])
             .order("created_at", { ascending: false })
             .limit(1)
@@ -206,15 +203,14 @@ export const startVideoProcessing = protectedAction
               "Error checking for existing download job:",
               jobCheckError
             );
+            // Continue, maybe create a new job if none are processing/completed
           }
 
-          if (
-            existingJob?.status === "completed" ||
-            existingJob?.status === "processing"
-          ) {
+          if (existingJob) {
             console.log(
-              `Video ${youtubeId} (DB ID: ${videoId}) already downloaded or is processing (Job: ${existingJob.id}, Status: ${existingJob.status}).`
+              `Video ${youtubeId} (DB ID: ${videoId}) already has a recent job (ID: ${existingJob.id}, Status: ${existingJob.status}). Returning 'exists'.`
             );
+            // Return status 'exists' to indicate no new job needs creation/triggering
             return {
               success: true,
               data: {
@@ -225,80 +221,62 @@ export const startVideoProcessing = protectedAction
             };
           }
           console.log(
-            `Existing job for video ${videoId} is not completed or processing. Creating a new download job.`
+            `Existing video ${videoId} found, but no recent completed/processing job. Proceeding to create a new 'pending' job.`
           );
         } else {
+          // Video doesn't exist, create it
           console.log(
             `Video ${youtubeId} not found in DB. Fetching metadata and creating record.`
           );
 
-          // --- Fetch Metadata via oEmbed ---
+          // --- Fetch Metadata via oEmbed --- (Keep this part)
           let fetchedTitle: string | null = null;
           let fetchedThumbnailUrl: string | null = null;
-          // Duration is not provided by oEmbed, keep as null for now
           const duration: number | null = null;
-
           try {
             const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(
-              youtubeUrl // Use the original full URL
+              youtubeUrl
             )}&format=json`;
-            console.log(`Fetching oEmbed metadata from: ${oembedUrl}`);
             const oembedResponse = await fetch(oembedUrl);
-
-            if (!oembedResponse.ok) {
-              // Handle cases like private videos (401/403) or not found (404)
+            if (!oembedResponse.ok)
               throw new Error(
-                `oEmbed request failed with status ${oembedResponse.status}`
+                `oEmbed request failed: ${oembedResponse.status}`
               );
-            }
-
             const oembedData = await oembedResponse.json();
             fetchedTitle = oembedData.title || null;
             fetchedThumbnailUrl = oembedData.thumbnail_url || null;
-            console.log(`Fetched oEmbed metadata for ${youtubeId}:`, {
-              title: fetchedTitle,
-              thumbnailUrl: fetchedThumbnailUrl,
-            });
           } catch (metaError: any) {
             console.warn(
               `Failed to fetch metadata for ${youtubeId}:`,
               metaError?.message || metaError
             );
-            // Proceed without metadata, columns should allow NULL
           }
           // --- End Fetch Metadata ---
 
-          // Ensure a title exists, falling back to a default
           const videoTitle = fetchedTitle || "Untitled Video";
-
           const { data: newVideo, error: insertVideoError } = await supabase
             .from("videos")
             .insert({
               youtube_id: youtubeId,
-              title: videoTitle, // Use the guaranteed title
+              title: videoTitle,
               thumbnail_url: fetchedThumbnailUrl,
-              duration: duration, // Duration might still be null
+              duration: duration,
             })
             .select("id")
             .single();
 
           if (insertVideoError) {
             if (insertVideoError.code === "23505") {
+              // Handle race condition
               console.warn(
-                `Race condition: Video ${youtubeId} inserted concurrently. Fetching existing.`
+                `Race condition inserting video ${youtubeId}. Fetching existing.`
               );
               const { data: raceVideo, error: raceError } = await supabase
                 .from("videos")
                 .select("id")
                 .eq("youtube_id", youtubeId)
                 .single();
-              if (raceError || !raceVideo) {
-                console.error(
-                  "Error fetching video after race condition:",
-                  raceError
-                );
-                throw appErrors.DATABASE_ERROR;
-              }
+              if (raceError || !raceVideo) throw appErrors.DATABASE_ERROR;
               videoId = raceVideo.id;
             } else {
               console.error("Error inserting new video:", insertVideoError);
@@ -312,9 +290,10 @@ export const startVideoProcessing = protectedAction
           }
         }
 
+        // 2. Create the 'pending' Download Job
         const downloadJobId = uuidv4();
         console.log(
-          `Creating new download job ${downloadJobId} for video ${videoId}`
+          `Creating new 'pending' download job ${downloadJobId} for video ${videoId}. Webhook/Trigger will handle downloader invocation.`
         );
 
         const { error: insertJobError } = await supabase
@@ -323,7 +302,7 @@ export const startVideoProcessing = protectedAction
             id: downloadJobId,
             video_id: videoId,
             user_id: userId,
-            status: "pending",
+            status: "pending", // Set initial status to pending
           });
 
         if (insertJobError) {
@@ -331,72 +310,17 @@ export const startVideoProcessing = protectedAction
           throw appErrors.DATABASE_ERROR;
         }
 
-        try {
-          console.log(
-            `Triggering downloader service for job ${downloadJobId} at ${downloaderServiceUrl}`
-          );
-          const response = await fetch(`${downloaderServiceUrl}`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              youtube_url: youtubeUrl,
-              job_id: downloadJobId,
-            }),
-          });
-
-          if (!response.ok) {
-            const responseBody = await response.text();
-            console.error(
-              `Downloader service rejected the request for job ${downloadJobId}: ${response.status} ${response.statusText}`,
-              responseBody
-            );
-            await supabaseServiceRoleClient
-              .from("download_jobs")
-              .update({
-                status: "failed",
-                error_message: `Downloader service rejected request: ${response.status}`,
-              })
-              .eq("id", downloadJobId);
-            throw appErrors.DOWNLOADER_SERVICE_ERROR;
-          }
-
-          const downloaderResponse = await response.json();
-          console.log("Downloader service response:", downloaderResponse);
-          if (
-            downloaderResponse.status &&
-            downloaderResponse.status !== "processing" &&
-            downloaderResponse.status !== "completed"
-          ) {
-            console.warn(
-              `Downloader service returned status ${downloaderResponse.status} in initial response for job ${downloadJobId}. Expecting status update via DB.`
-            );
-          }
-        } catch (fetchError) {
-          console.error(
-            `Network error calling downloader service for job ${downloadJobId}:`,
-            fetchError
-          );
-          await supabaseServiceRoleClient
-            .from("download_jobs")
-            .update({
-              status: "failed",
-              error_message:
-                "Failed to trigger downloader service (network error)",
-            })
-            .eq("id", downloadJobId);
-          throw appErrors.DOWNLOADER_SERVICE_ERROR;
-        }
-
+        // 4. Return success immediately, indicating the job was created in 'pending' state
         console.log(
-          `Successfully initiated download job ${downloadJobId} for video ${videoId}`
+          `Successfully created pending download job ${downloadJobId} for video ${videoId}`
         );
         return {
           success: true,
           data: {
             videoId: videoId,
             downloadJobId: downloadJobId,
+            // Status indicates the *server action* initiated the job record
+            // The actual download status is now managed by the downloader + DB updates
             status: "initiated",
           },
         };
