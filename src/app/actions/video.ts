@@ -1161,7 +1161,7 @@ export const requestTranscriptionSegment = protectedAction
             0,
             100
           )}...`
-        ); // Log part of the URL
+        );
 
         // 4. Insert or identify existing segment ID
         console.log(
