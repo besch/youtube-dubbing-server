@@ -317,87 +317,59 @@ export const startVideoProcessing = protectedAction
           `Creating new download job ${downloadJobId} for video ${videoId}`
         );
 
+        // 1. Insert the job record first
         const { error: insertJobError } = await supabase
           .from("download_jobs")
           .insert({
             id: downloadJobId,
             video_id: videoId,
             user_id: userId,
-            status: "pending",
+            status: "pending", // Start as pending
           });
 
         if (insertJobError) {
           console.error("Error inserting new download job:", insertJobError);
+          // If insertion fails, don't proceed to call the downloader
           throw appErrors.DATABASE_ERROR;
         }
 
-        try {
-          console.log(
-            `Triggering downloader service for job ${downloadJobId} at ${downloaderServiceUrl}`
-          );
-          const response = await fetch(`${downloaderServiceUrl}`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              youtube_url: youtubeUrl,
-              job_id: downloadJobId,
-            }),
-          });
-
-          if (!response.ok) {
-            const responseBody = await response.text();
-            console.error(
-              `Downloader service rejected the request for job ${downloadJobId}: ${response.status} ${response.statusText}`,
-              responseBody
-            );
-            await supabaseServiceRoleClient
-              .from("download_jobs")
-              .update({
-                status: "failed",
-                error_message: `Downloader service rejected request: ${response.status}`,
-              })
-              .eq("id", downloadJobId);
-            throw appErrors.DOWNLOADER_SERVICE_ERROR;
-          }
-
-          const downloaderResponse = await response.json();
-          console.log("Downloader service response:", downloaderResponse);
-          if (
-            downloaderResponse.status &&
-            downloaderResponse.status !== "processing" &&
-            downloaderResponse.status !== "completed"
-          ) {
-            console.warn(
-              `Downloader service returned status ${downloaderResponse.status} in initial response for job ${downloadJobId}. Expecting status update via DB.`
-            );
-          }
-        } catch (fetchError) {
+        // 2. Trigger the downloader service asynchronously (fire-and-forget)
+        // We don't await the full response, just initiate the request.
+        fetch(`${downloaderServiceUrl}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            youtube_url: youtubeUrl,
+            job_id: downloadJobId,
+          }),
+        }).catch(async (fetchError) => {
+          // Log the error, but don't block the main action from returning.
+          // The job status will remain 'pending' until the downloader updates it,
+          // or it might need manual intervention/retry logic later.
           console.error(
-            `Network error calling downloader service for job ${downloadJobId}:`,
+            `Failed to *initiate* fetch call to downloader service for job ${downloadJobId}:`,
             fetchError
           );
-          await supabaseServiceRoleClient
-            .from("download_jobs")
-            .update({
-              status: "failed",
-              error_message:
-                "Failed to trigger downloader service (network error)",
-            })
-            .eq("id", downloadJobId);
-          throw appErrors.DOWNLOADER_SERVICE_ERROR;
-        }
+          // Optionally: Update the job status to 'failed' immediately if triggering fails catastrophically
+          // await supabaseServiceRoleClient
+          //   .from("download_jobs")
+          //   .update({ status: 'failed', error_message: 'Failed to trigger downloader service' })
+          //   .eq('id', downloadJobId);
+        });
 
+        // 3. Return success to the client immediately
+        // The client will rely on Realtime updates for the actual download status.
         console.log(
-          `Successfully initiated download job ${downloadJobId} for video ${videoId}`
+          `Successfully requested download job ${downloadJobId} for video ${videoId}. Returning control to client.`
         );
         return {
           success: true,
           data: {
             videoId: videoId,
             downloadJobId: downloadJobId,
-            status: "initiated",
+            status: "initiated", // Indicate the process has started, not completed
           },
         };
       } catch (error) {
