@@ -1183,7 +1183,6 @@ export const requestTranscriptionSegment = protectedAction
             .single();
 
           if (insertError && insertError.code === "23505") {
-            // This case should ideally be less frequent now, but handle it. Fetch the existing ID.
             console.warn(
               `Race condition inserting segment ${videoId} (${startTime}-${endTime}). Fetching existing ID.`
             );
