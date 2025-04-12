@@ -264,7 +264,6 @@ export const startVideoProcessing = protectedAction
             );
             // Proceed without metadata, columns should allow NULL
           }
-          // --- End Fetch Metadata ---
 
           // Ensure a title exists, falling back to a default
           const videoTitle = fetchedTitle || "Untitled Video";
