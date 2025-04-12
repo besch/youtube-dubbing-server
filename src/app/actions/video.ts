@@ -25,7 +25,6 @@ import {
 } from "@/lib/openai-tts";
 
 // Constants
-const DOWNLOAD_SERVICE_URL = process.env.DOWNLOADER_SERVICE_URL;
 const AUDIO_SEGMENTER_URL = process.env.AUDIO_SEGMENTER_URL;
 const AUDIO_SEGMENTER_SECRET_KEY = process.env.AUDIO_SEGMENTER_SECRET_KEY;
 // Use the imported constant for Zod enum definition
@@ -35,7 +34,6 @@ const OPENAI_TTS_VOICES_ARRAY = Array.from(VALID_TTS_VOICES) as [
 ];
 
 // --- Environment Variable Checks ---
-if (!DOWNLOAD_SERVICE_URL) console.error("DOWNLOADER_SERVICE_URL is not set.");
 if (!AUDIO_SEGMENTER_URL) console.error("AUDIO_SEGMENTER_URL is not set.");
 if (!AUDIO_SEGMENTER_SECRET_KEY)
   console.error("AUDIO_SEGMENTER_SECRET_KEY is not set.");
@@ -340,15 +338,21 @@ export const startVideoProcessing = protectedAction
 
         // 2. Trigger the downloader service asynchronously (fire-and-forget)
         // We don't await the full response, just initiate the request.
+        const requestBody = {
+          youtube_url: youtubeUrl,
+          job_id: downloadJobId, // This should be the correct ID
+        };
+        console.log(
+          "[startVideoProcessing] Body OBJECT being sent to downloader:",
+          requestBody
+        );
+
         fetch(`${downloaderServiceUrl}`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            youtube_url: youtubeUrl,
-            job_id: downloadJobId,
-          }),
+          body: JSON.stringify(requestBody), // Send the logged object
         }).catch(async (fetchError) => {
           // Log the error, but don't block the main action from returning.
           // The job status will remain 'pending' until the downloader updates it,
