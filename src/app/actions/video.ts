@@ -272,7 +272,7 @@ export const startVideoProcessing = protectedAction
             .from("videos")
             .insert({
               youtube_id: youtubeId,
-              title: videoTitle, // Use the guaranteed title
+              title: videoTitle,
               thumbnail_url: fetchedThumbnailUrl,
               duration: duration, // Duration might still be null
             })
