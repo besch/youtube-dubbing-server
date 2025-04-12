@@ -317,6 +317,11 @@ export const startVideoProcessing = protectedAction
           `Creating new download job ${downloadJobId} for video ${videoId}`
         );
 
+        // ADD THIS LOG:
+        console.log(
+          `[startVideoProcessing] About to fetch downloader service. Job ID: ${downloadJobId}, URL: ${youtubeUrl}`
+        );
+
         // 1. Insert the job record first
         const { error: insertJobError } = await supabase
           .from("download_jobs")
