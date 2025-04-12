@@ -174,7 +174,6 @@ export const startVideoProcessing = protectedAction
       try {
         const supabase = supabaseServiceRoleClient;
 
-        // Use const for variables not reassigned
         const { data: existingVideo, error: videoCheckError } = await supabase
           .from("videos")
           .select("id")
