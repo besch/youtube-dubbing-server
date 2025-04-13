@@ -136,7 +136,7 @@ const startVideoProcessingSchema = z.object({
 });
 
 interface StartProcessingOutput {
-  videoId: string; // UUID from our DB
+  videoId: string;
   downloadJobId: string; // UUID for the download job
   status: "initiated" | "exists"; // Indicates if processing started or video already exists
 }
