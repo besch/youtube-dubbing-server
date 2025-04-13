@@ -148,7 +148,6 @@ export const startVideoProcessing = protectedAction
       parsedInput,
       ctx,
     }): Promise<ActionResponse<StartProcessingOutput>> => {
-      // Use type assertion for ctx.user.id
       const userId = (ctx as { user: User }).user.id;
       const { youtubeUrl } = parsedInput;
 
