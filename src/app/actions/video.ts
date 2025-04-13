@@ -236,7 +236,7 @@ export const startVideoProcessing = protectedAction
 
           try {
             const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(
-              youtubeUrl // Use the original full URL
+              youtubeUrl
             )}&format=json`;
             console.log(`Fetching oEmbed metadata from: ${oembedUrl}`);
             const oembedResponse = await fetch(oembedUrl);
