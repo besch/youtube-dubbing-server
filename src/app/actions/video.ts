@@ -272,7 +272,7 @@ export const startVideoProcessing = protectedAction
               youtube_id: youtubeId,
               title: videoTitle,
               thumbnail_url: fetchedThumbnailUrl,
-              duration: duration, // Duration might still be null
+              duration: duration,
             })
             .select("id")
             .single();
