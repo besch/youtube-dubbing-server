@@ -232,7 +232,7 @@ export const startVideoProcessing = protectedAction
           let fetchedTitle: string | null = null;
           let fetchedThumbnailUrl: string | null = null;
           // Duration is not provided by oEmbed, keep as null for now
-          const duration: number | null = null;
+          const duration: number | null = null; // Duration remains hard to get reliably here
 
           try {
             const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(
@@ -243,35 +243,40 @@ export const startVideoProcessing = protectedAction
 
             if (!oembedResponse.ok) {
               // Handle cases like private videos (401/403) or not found (404)
-              throw new Error(
-                `oEmbed request failed with status ${oembedResponse.status}`
+              // Log specific status for debugging
+              console.warn(
+                `oEmbed request for ${youtubeId} failed with status ${oembedResponse.status}.`
               );
+              // Don't throw an error here, just proceed without metadata.
+              // The video record will be created with defaults.
+            } else {
+              const oembedData = await oembedResponse.json();
+              fetchedTitle = oembedData.title || null; // Use null if undefined/empty
+              fetchedThumbnailUrl = oembedData.thumbnail_url || null; // Use null if undefined/empty
+              console.log(`Fetched oEmbed metadata for ${youtubeId}:`, {
+                title: fetchedTitle,
+                thumbnailUrl: fetchedThumbnailUrl,
+              });
             }
-
-            const oembedData = await oembedResponse.json();
-            fetchedTitle = oembedData.title || null;
-            fetchedThumbnailUrl = oembedData.thumbnail_url || null;
-            console.log(`Fetched oEmbed metadata for ${youtubeId}:`, {
-              title: fetchedTitle,
-              thumbnailUrl: fetchedThumbnailUrl,
-            });
           } catch (metaError: any) {
             console.warn(
-              `Failed to fetch metadata for ${youtubeId}:`,
+              `Failed to fetch or parse metadata for ${youtubeId}:`,
               metaError?.message || metaError
             );
-            // Proceed without metadata, columns should allow NULL
+            // Proceed without metadata, columns allow NULL
           }
 
+          // Use fetched title or default, ensure thumbnail is null if not fetched
           const videoTitle = fetchedTitle || "Untitled Video";
+          const videoThumbnail = fetchedThumbnailUrl; // Directly use null if not fetched
 
           const { data: newVideo, error: insertVideoError } = await supabase
             .from("videos")
             .insert({
               youtube_id: youtubeId,
-              title: videoTitle,
-              thumbnail_url: fetchedThumbnailUrl,
-              duration: duration,
+              title: videoTitle, // Use the fetched or default title
+              thumbnail_url: videoThumbnail, // Use the fetched or null thumbnail
+              duration: duration, // Still null for now
             })
             .select("id")
             .single();
