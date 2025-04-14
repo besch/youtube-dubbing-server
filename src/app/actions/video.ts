@@ -263,7 +263,6 @@ export const startVideoProcessing = protectedAction
             // Proceed without metadata, columns should allow NULL
           }
 
-          // Ensure a title exists, falling back to a default
           const videoTitle = fetchedTitle || "Untitled Video";
 
           const { data: newVideo, error: insertVideoError } = await supabase
