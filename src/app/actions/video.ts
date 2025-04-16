@@ -24,6 +24,7 @@ import {
   VALID_TTS_VOICES,
   type OpenAiTtsVoice,
 } from "@/lib/openai-tts";
+import { generateGoogleTts } from "@/lib/google-tts";
 
 // Constants
 const AUDIO_SEGMENTER_URL = process.env.AUDIO_SEGMENTER_URL;
@@ -396,12 +397,12 @@ export const startVideoProcessing = protectedAction
     }
   );
 
-// --- Action: Generate Audio Chunk (Revised) ---
+// --- Action: Generate Audio Chunk (Revised for Multi-TTS) ---
 const generateAudioChunkSchema = z
   .object({
     videoId: z.string().uuid(),
-    language: z.string(),
-    voice: z.string(), // Keep as string for flexibility, validation happens later
+    language: z.string(), // Simple language code (e.g., "en", "de")
+    voice: z.string(), // Voice identifier (e.g., "alloy", "en-US-Standard-A")
     startTime: z.number().min(0),
     endTime: z.number().min(0),
   })
@@ -413,37 +414,81 @@ const generateAudioChunkSchema = z
 export const generateAudioChunk = protectedAction
   .schema(generateAudioChunkSchema)
   .action(
-    async ({
-      parsedInput,
-      ctx,
-    }): Promise<ActionResponse<{ publicUrl: string }>> => {
+    async ({ parsedInput }): Promise<ActionResponse<{ publicUrl: string }>> => {
       const { videoId, language, voice, startTime, endTime } = parsedInput;
       const supabase = supabaseServiceRoleClient;
 
-      // Validate voice using the imported constant/type
-      if (!VALID_TTS_VOICES.has(voice as OpenAiTtsVoice)) {
-        return {
-          success: false,
-          error: new AppError(
-            AppErrorCode.INVALID_INPUT,
-            `Invalid voice specified: ${voice}`
-          ),
-        };
-      }
-      const ttsVoice = voice as OpenAiTtsVoice;
+      let ttsProvider: "openai" | "google";
+      let googleLangCode: string | undefined;
+      let googleVoiceName: string | undefined;
+      let openaiVoiceName: string | undefined;
 
+      // 1. Determine TTS provider and validate voice
+      const targetGoogleLangCode = config.google.simpleToGoogleMap[language];
+
+      if (
+        targetGoogleLangCode &&
+        config.google.languages[targetGoogleLangCode]
+      ) {
+        // Language is supported by Google TTS
+        ttsProvider = "google";
+        googleLangCode = targetGoogleLangCode;
+        const validGoogleVoices =
+          config.google.languages[googleLangCode].voices;
+        const isValidGoogleVoice = validGoogleVoices.some(
+          (v) => v.id === voice
+        );
+
+        if (!isValidGoogleVoice) {
+          return {
+            success: false,
+            error: new AppError(
+              AppErrorCode.INVALID_INPUT,
+              `Invalid Google voice '${voice}' for language '${language}' (${googleLangCode}). Valid voices: ${validGoogleVoices
+                .map((v) => v.id)
+                .join(", ")}`
+            ),
+          };
+        }
+        googleVoiceName = voice; // The voice ID is the Google voice name
+        console.log(
+          `Using Google TTS for language: ${language} (${googleLangCode}), voice: ${googleVoiceName}`
+        );
+      } else {
+        // Language is not supported by Google, fallback to OpenAI
+        ttsProvider = "openai";
+        const isValidOpenAiVoice = config.openai.voices.includes(voice);
+
+        if (!isValidOpenAiVoice) {
+          return {
+            success: false,
+            error: new AppError(
+              AppErrorCode.INVALID_INPUT,
+              `Invalid OpenAI voice specified: ${voice}. Valid voices: ${config.openai.voices.join(
+                ", "
+              )}`
+            ),
+          };
+        }
+        openaiVoiceName = voice; // The voice ID is the OpenAI voice name
+        console.log(
+          `Using OpenAI TTS for language: ${language}, voice: ${openaiVoiceName}`
+        );
+      }
+
+      // --- Existing logic with modifications --- //
       console.log(
-        `Generating audio chunk for: ${videoId}, Lang: ${language}, Voice: ${ttsVoice}, Time: ${startTime}-${endTime}`
+        `Generating audio chunk for: ${videoId}, Lang: ${language}, Voice: ${voice}, Time: ${startTime}-${endTime} using ${ttsProvider}`
       );
 
       try {
-        // 1. Check if exact chunk already exists
+        // 2. Check if exact chunk already exists (using the original voice identifier)
         const { data: existingChunk, error: checkError } = await supabase
-          .from("translated_audio_chunks") // Use string literal
+          .from("translated_audio_chunks")
           .select("storage_path")
           .eq("video_id", videoId)
-          .eq("language", language)
-          .eq("voice", ttsVoice)
+          .eq("language", language) // Use simple lang code for DB consistency
+          .eq("voice", voice) // Use the original voice identifier passed in
           .eq("chunk_start", startTime)
           .eq("chunk_end", endTime)
           .maybeSingle();
@@ -454,7 +499,6 @@ export const generateAudioChunk = protectedAction
             `DB error checking chunk: ${checkError.message}`
           );
 
-        // Use type assertion with generated type
         const existingPath = (
           existingChunk as Tables<"translated_audio_chunks"> | null
         )?.storage_path;
@@ -476,11 +520,11 @@ export const generateAudioChunk = protectedAction
           return { success: true, data: { publicUrl: urlData.signedUrl } };
         }
 
-        // 2. Fetch relevant COMPLETED transcription segments
+        // 3. Fetch relevant COMPLETED transcription segments (no change needed here)
         const { data: segmentsDataUntyped, error: segmentsError } =
           await supabase
             .from("transcription_segments")
-            .select("id, start_time, end_time, translations") // Select id, times, translations
+            .select("id, start_time, end_time, content, translations") // Include content for EN
             .eq("video_id", videoId)
             .eq("status", "completed")
             .lte("start_time", endTime)
@@ -493,7 +537,6 @@ export const generateAudioChunk = protectedAction
             `DB error fetching segments: ${segmentsError.message}`
           );
 
-        // Use type assertion as workaround for potentially stale generated types
         const segmentsData = segmentsDataUntyped as any[] | null;
 
         if (!segmentsData || segmentsData.length === 0) {
@@ -503,21 +546,19 @@ export const generateAudioChunk = protectedAction
           );
         }
 
-        // --- 3. Extract Text for the Specific Time Range & Language ---
+        // 4. Extract Text for the Specific Time Range & Language (no change needed here)
         let textToSynthesize = "";
-
         if (language === "en") {
           // If English, use the original transcription content
           const originalContents: ReplicateSegmentOutput[] = [];
           for (const segment of segmentsData) {
             if (!segment.content) {
-              // Throw specific error if original content is missing for EN
               console.warn(
                 `Original transcription content missing for segment ${segment.id} (${segment.start_time}-${segment.end_time}) needed for English TTS.`
               );
               throw new AppError(
                 AppErrorCode.DEPENDENCY_NOT_READY,
-                `Original transcription not ready for time ${segment.start_time}s.` // More accurate error
+                `Original transcription not ready for time ${segment.start_time}s.`
               );
             }
             originalContents.push(segment.content as ReplicateSegmentOutput);
@@ -531,18 +572,27 @@ export const generateAudioChunk = protectedAction
           // If not English, use the translated content
           const translatedContents: ReplicateSegmentOutput[] = [];
           for (const segment of segmentsData) {
-            const translation = segment.translations?.[language];
+            const translation = segment.translations?.[language]; // Use simple lang code
             if (!translation) {
               console.warn(
                 `Translation for '${language}' not found for segment ${segment.id} (${segment.start_time}-${segment.end_time}).`
               );
-              throw new AppError(
-                AppErrorCode.DEPENDENCY_NOT_READY,
-                `Translation for '${language}' not ready for time ${segment.start_time}s.`
-              );
+              // Check if original content exists to provide a more informative error
+              if (!segment.content) {
+                throw new AppError(
+                  AppErrorCode.DEPENDENCY_NOT_READY,
+                  `Neither original transcription nor translation for '${language}' ready for time ${segment.start_time}s.`
+                );
+              } else {
+                // Original exists, but translation doesn't. Try to translate on the fly?
+                // For now, consider it a dependency issue.
+                // TODO: Potentially trigger translation here if missing?
+                throw new AppError(
+                  AppErrorCode.DEPENDENCY_NOT_READY,
+                  `Translation for '${language}' not ready for time ${segment.start_time}s.`
+                );
+              }
             }
-            // Ensure the translation structure matches ReplicateSegmentOutput if needed
-            // This might require validation or adjustment depending on the actual structure
             translatedContents.push(translation as ReplicateSegmentOutput);
           }
           textToSynthesize = extractTextFromSegments(
@@ -555,35 +605,51 @@ export const generateAudioChunk = protectedAction
         if (!textToSynthesize.trim()) {
           throw new AppError(
             AppErrorCode.RECORD_NOT_FOUND,
-            `No translated text found for the precise time range ${startTime}-${endTime} in ${language}.`
+            `No text found for the time range ${startTime}-${endTime} in ${language}.` // Use simple lang code
           );
         }
 
         console.log(
-          `Text for TTS (${language}, ${ttsVoice}, ${startTime}-${endTime}): "${textToSynthesize.substring(
+          `Text for TTS (${ttsProvider}, ${language}, ${voice}, ${startTime}-${endTime}): "${textToSynthesize.substring(
             0,
             100
           )}..."`
         );
 
-        // 4. Call the refactored TTS function
-        const { audioBuffer, storagePath: chunkStoragePath } =
-          await generateOpenAiTts({
+        // 5. Call appropriate TTS function
+        let ttsResult: { audioBuffer: Buffer; storagePath: string };
+        if (ttsProvider === "google") {
+          ttsResult = await generateGoogleTts({
             text: textToSynthesize,
-            voice: ttsVoice,
+            languageCode: googleLangCode!, // Already validated and set
+            voiceName: googleVoiceName!, // Already validated and set
             videoId,
-            language,
             startTime,
             endTime,
           });
+        } else {
+          // ttsProvider === "openai"
+          ttsResult = await generateOpenAiTts({
+            text: textToSynthesize,
+            // Ensure voice is correctly typed for OpenAI function if needed
+            // Since validation passed, openaiVoiceName is a valid OpenAiTtsVoice implicitly
+            voice: openaiVoiceName as any, // Cast for now, or refine OpenAiTtsVoice type usage
+            videoId,
+            language, // Pass simple language code to OpenAI function if it uses it
+            startTime,
+            endTime,
+          });
+        }
 
-        // 5. Upload TTS chunk
+        const { audioBuffer, storagePath: chunkStoragePath } = ttsResult;
+
+        // 6. Upload TTS chunk
         console.log(`Uploading TTS chunk to: ${chunkStoragePath}`);
         const { error: uploadError } = await supabase.storage
           .from("translated-audio")
           .upload(chunkStoragePath, audioBuffer, {
             contentType: "audio/mpeg",
-            upsert: true,
+            upsert: true, // Use upsert in case of race conditions or retries
           });
 
         if (uploadError)
@@ -593,34 +659,38 @@ export const generateAudioChunk = protectedAction
           );
         console.log(`TTS chunk uploaded to: ${chunkStoragePath}`);
 
-        // 6. Insert record into translated_audio_chunks
+        // 7. Insert record into translated_audio_chunks
         const { error: dbInsertError } = await supabase
-          .from("translated_audio_chunks") // Use string literal
+          .from("translated_audio_chunks")
           .insert({
             video_id: videoId,
-            language: language,
-            voice: ttsVoice,
+            language: language, // Store simple lang code
+            voice: voice, // Store the original voice identifier
             chunk_start: startTime,
             chunk_end: endTime,
             storage_path: chunkStoragePath,
+            // is_favorite and expiry_at are handled by triggers/defaults
           });
 
+        // Handle potential race condition during insert (unique constraint violation)
         if (dbInsertError && dbInsertError.code !== "23505") {
           console.error(
             "DB Error inserting translated chunk record:",
             dbInsertError.message
           );
+          // Don't throw here, as upload succeeded. Maybe log and continue to return URL?
         } else if (dbInsertError?.code === "23505") {
           console.warn(
             `Race condition: translated_audio_chunk for ${chunkStoragePath} inserted concurrently.`
           );
+          // Proceed as if insert was successful, the record exists.
         }
 
-        // 7. Get signed URL for the new chunk
+        // 8. Get signed URL for the chunk (newly uploaded or existing due to race condition)
         const { data: finalUrlData, error: finalUrlError } =
           await supabase.storage
             .from("translated-audio")
-            .createSignedUrl(chunkStoragePath, 60 * 5);
+            .createSignedUrl(chunkStoragePath, 60 * 5); // 5 minute expiry
 
         if (finalUrlError)
           throw new AppError(
@@ -633,7 +703,7 @@ export const generateAudioChunk = protectedAction
             "Signed URL creation returned null (final)."
           );
 
-        console.log(`Returning new chunk URL: ${finalUrlData.signedUrl}`);
+        console.log(`Returning chunk URL: ${finalUrlData.signedUrl}`);
         return { success: true, data: { publicUrl: finalUrlData.signedUrl } };
       } catch (error: unknown) {
         console.error("Error generating audio chunk:", error);
@@ -653,12 +723,10 @@ export const generateAudioChunk = protectedAction
 
 // --- Action: Update History --- //
 const updateHistorySchema = z.object({
-  // Use dbVideoId for consistency with other actions?
-  // videoId: z.string().uuid(),
-  dbVideoId: z.string().uuid(), // Renaming input field
+  dbVideoId: z.string().uuid(),
   position: z.number().min(0),
-  language: z.string(),
-  voice: z.enum(OPENAI_TTS_VOICES_ARRAY), // Use the array derived from the set
+  language: z.string(), // Simple lang code
+  voice: z.string(), // Voice identifier
 });
 
 export const updateHistory = protectedAction
@@ -703,8 +771,8 @@ export const updateHistory = protectedAction
 // --- Toggle Favorite Action --- //
 const toggleFavoriteSchema = z.object({
   dbVideoId: z.string().uuid(),
-  language: z.string(),
-  voice: z.enum(OPENAI_TTS_VOICES_ARRAY), // Use the array derived from the set
+  language: z.string(), // Simple lang code
+  voice: z.string(), // Voice identifier
 });
 
 type ToggleFavoriteOutput = {
@@ -774,14 +842,10 @@ export const toggleFavorite = protectedAction
 
         return { success: true, data: { isFavorite: isNowFavorite } };
       } catch (error: unknown) {
-        console.error("Caught raw error in toggleFavorite action:", error); // Log the raw error
-        // Ensure we always throw an AppError
+        console.error("Caught raw error in toggleFavorite action:", error);
         if (error instanceof AppError) {
-          console.log("Re-throwing existing AppError:", error.toJSON()); // Log the AppError JSON
-          throw error; // Re-throw if already AppError
+          throw error;
         } else {
-          // Wrap other errors in a generic DATABASE_ERROR or UNEXPECTED_ERROR
-          // Check if it's likely a Supabase error structure (heuristic)
           let message = "Failed to toggle favorite status.";
           if (
             typeof error === "object" &&
@@ -789,17 +853,12 @@ export const toggleFavorite = protectedAction
             "message" in error &&
             typeof error.message === "string"
           ) {
-            message = error.message; // Use Supabase error message if available
+            message = error.message;
           }
-          console.log(`Wrapping error with message: '${message}'`); // Log the message being used
           const wrappedError = new AppError(
             AppErrorCode.DATABASE_ERROR,
             message
           );
-          console.log(
-            "Throwing newly wrapped AppError:",
-            wrappedError.toJSON()
-          ); // Log the wrapped AppError JSON
           throw wrappedError;
         }
       }
@@ -809,8 +868,8 @@ export const toggleFavorite = protectedAction
 // --- Get Favorite Status Action --- //
 const getFavoriteStatusSchema = z.object({
   dbVideoId: z.string().uuid(),
-  language: z.string(),
-  voice: z.enum(OPENAI_TTS_VOICES_ARRAY), // Use the array derived from the set
+  language: z.string(), // Simple lang code
+  voice: z.string(), // Voice identifier
 });
 
 // Output type is the same as ToggleFavoriteOutput
@@ -827,14 +886,9 @@ export const getFavoriteStatus = protectedAction
       const { dbVideoId, language, voice } = parsedInput;
 
       try {
-        // Check if favorite exists
-        const {
-          data: existingFavorite,
-          error: checkError,
-          count,
-        } = await supabaseServiceRoleClient
+        const { count, error: checkError } = await supabaseServiceRoleClient
           .from("favorites")
-          .select("id", { count: "exact", head: true }) // Just check existence efficiently
+          .select("id", { count: "exact", head: true })
           .eq("user_id", userId)
           .eq("video_id", dbVideoId)
           .eq("language", language)
@@ -853,7 +907,7 @@ export const getFavoriteStatus = protectedAction
         return { success: true, data: { isFavorite: isFavorite } };
       } catch (error) {
         console.error("Error in getFavoriteStatus action:", error);
-        throw error; // Let handleServerError manage it
+        throw error;
       }
     }
   );
