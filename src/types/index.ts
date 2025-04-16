@@ -1,7 +1,7 @@
 import { config } from "@/config";
 import { Database } from "./supabase";
 
-export type Voice = (typeof config.voices)[number];
+export type Voice = string;
 
 export interface Language {
   code: string;
