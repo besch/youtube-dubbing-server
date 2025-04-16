@@ -170,11 +170,10 @@ export function parseTranslationResponse(
 }
 
 /**
- * Calls the Gemini API to translate the provided text.
+ * Calls the Gemini API to translate the provided text formatted as subtitles.
  */
 export async function translateText(
   textToTranslate: string,
-  sourceLangName: string, // Full language name (e.g., "English")
   targetLangName: string // Full language name (e.g., "Spanish")
 ): Promise<string> {
   if (!model) {
@@ -188,7 +187,9 @@ export async function translateText(
     return "";
   }
 
-  const prompt = `Translate the following subtitles from ${sourceLangName} to ${targetLangName}.
+  // Updated prompt: Removed source language specification
+  const prompt = `Translate the following subtitles to ${targetLangName}.
+Detect the source language automatically.
 Maintain the exact same timing and numbering format. Respond ONLY with the translated subtitles in the specified format.
 Critical formatting rules:
 1. Each subtitle entry MUST be separated by exactly ONE empty line.
@@ -256,6 +257,89 @@ ${textToTranslate}
   } catch (error: any) {
     console.error("Error calling Gemini API:", error);
     // Check if it's a GoogleGenerativeAI error for more details
+    if (error?.message) {
+      throw new AppError(
+        AppErrorCode.SERVICE_ERROR,
+        `Gemini API error: ${error.message}`
+      );
+    } else {
+      throw new AppError(AppErrorCode.SERVICE_ERROR, "Gemini API call failed.");
+    }
+  }
+}
+
+/**
+ * Calls the Gemini API to translate a simple string of text.
+ */
+export async function translateSimpleText(
+  textToTranslate: string,
+  targetLangName: string // Full language name (e.g., "Spanish")
+): Promise<string> {
+  if (!model) {
+    throw new AppError(
+      AppErrorCode.CONFIGURATION_ERROR,
+      "Gemini AI model not initialized. Check API Key."
+    );
+  }
+  if (!textToTranslate) {
+    console.warn("translateSimpleText called with empty input.");
+    return "";
+  }
+
+  // Updated prompt: Removed source language specification
+  const prompt = `Translate the following text to ${targetLangName}.
+Detect the source language automatically.
+Respond ONLY with the translated text, without any additional formatting or explanations.
+
+Text:
+"${textToTranslate}"
+`;
+
+  try {
+    const result = await model.generateContent({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig,
+    });
+
+    const response = result.response;
+    if (
+      !response ||
+      !response.candidates ||
+      response.candidates.length === 0 ||
+      !response.candidates[0].content?.parts?.[0]?.text
+    ) {
+      if (response?.promptFeedback?.blockReason) {
+        console.error(
+          `Gemini simple translation blocked. Reason: ${response.promptFeedback.blockReason}`
+        );
+        throw new AppError(
+          AppErrorCode.SERVICE_ERROR,
+          `Gemini translation blocked: ${response.promptFeedback.blockReason}`
+        );
+      } else {
+        console.error(
+          "Gemini simple translation failed: Invalid response structure.",
+          JSON.stringify(response, null, 2)
+        );
+        throw new AppError(
+          AppErrorCode.SERVICE_ERROR,
+          "Gemini translation failed: Invalid response structure."
+        );
+      }
+    }
+
+    const finishReason = response.candidates[0].finishReason;
+    if (finishReason && finishReason !== "STOP") {
+      console.warn(
+        `Gemini simple translation finished with reason: ${finishReason}. Output might be incomplete.`
+      );
+    }
+
+    const translatedText = response.candidates[0].content.parts[0].text.trim();
+    // Remove potential quotes sometimes added by the model
+    return translatedText.replace(/^"|"$/g, "");
+  } catch (error: any) {
+    console.error("Error calling Gemini API for simple translation:", error);
     if (error?.message) {
       throw new AppError(
         AppErrorCode.SERVICE_ERROR,

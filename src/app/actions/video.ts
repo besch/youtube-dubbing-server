@@ -12,6 +12,7 @@ import {
   formatTranscriptionForTranslation,
   parseTranslationResponse,
   translateText,
+  translateSimpleText,
 } from "@/lib/translate";
 import {
   startReplicateTranscription,
@@ -1305,6 +1306,7 @@ export const translateSegmentContent = protectedAction
           `Segment ${segmentId} not found.`
         );
 
+      // Revert to using 'as any' due to persistent type issues
       const segmentData = segmentDataUntyped as any;
       // Cast safely, defaulting to an empty object if null/undefined
       const existingTranslations = (segmentData.translations ?? {}) as Record<
@@ -1379,13 +1381,12 @@ export const translateSegmentContent = protectedAction
         }
 
         console.log(
-          `Calling Translation Service (Gemini) to translate ${sourceLangName} to ${targetLangName} for segment ${segmentId}`
+          `Calling Translation Service (Gemini) to translate segment ${segmentId} to ${targetLangName}` // Updated log message
         );
 
-        // 4. Call Translation Service (Gemini)
+        // 4. Call Translation Service (Gemini) - Pass only target language
         const translatedText = await translateText(
           textToTranslate,
-          sourceLangName,
           targetLangName
         );
 
@@ -1429,7 +1430,7 @@ export const translateSegmentContent = protectedAction
         );
         const { error: updateError } = await supabase
           .from("transcription_segments")
-          .update({ translations: updatedTranslations as any }) // Keep 'as any' until types are updated
+          .update({ translations: updatedTranslations } as any) // Use 'as any' here too
           .eq("id", segmentId);
 
         // Log after the DB update, checking for errors
@@ -1747,6 +1748,169 @@ export const getSuggestedVideos = protectedAction
       } catch (error: unknown) {
         console.error(
           `Error in getSuggestedVideos action (excluding ${currentYoutubeId}):`,
+          error
+        );
+        const appErr =
+          error instanceof AppError ? error : appErrors.UNEXPECTED_ERROR;
+        return { success: false, error: appErr };
+      }
+    }
+  );
+
+// --- Action: Translate Video Title ---
+const translateVideoTitleSchema = z.object({
+  videoId: z.string().uuid(),
+  targetLanguage: z.string().length(2), // ISO 639-1 code
+});
+
+type TranslateVideoTitleOutput = {
+  translatedTitle: string | null; // Return the translated title or null if no translation needed/done
+};
+
+export const translateVideoTitle = protectedAction
+  .schema(translateVideoTitleSchema)
+  .action(
+    async ({
+      parsedInput,
+      ctx,
+    }): Promise<ActionResponse<TranslateVideoTitleOutput>> => {
+      const { videoId, targetLanguage } = parsedInput;
+      const supabase = supabaseServiceRoleClient;
+
+      console.log(
+        `Translating title for video ${videoId} to language: ${targetLanguage}`
+      );
+
+      try {
+        // 1. Fetch the video data including title and existing translations
+        const { data: videoData, error: fetchError } = await supabase
+          .from("videos")
+          .select("id, title, translated_titles") // Ensure 'translated_titles' is selected
+          .eq("id", videoId)
+          .single();
+
+        // Check for fetch error first
+        if (fetchError) {
+          console.error(`DB error fetching video ${videoId}:`, fetchError);
+          throw new AppError(
+            AppErrorCode.DATABASE_ERROR,
+            `DB error fetching video ${videoId}: ${fetchError.message}`
+          );
+        }
+
+        // Check if data is null (shouldn't happen if no error, but good practice)
+        if (!videoData) {
+          throw new AppError(
+            AppErrorCode.RECORD_NOT_FOUND,
+            `Video ${videoId} not found.`
+          );
+        }
+
+        // Revert to using 'as any' due to persistent type issues
+        const typedVideoData = videoData as any;
+
+        // --- Get Original Title and Existing Translations ---
+        const originalTitle = typedVideoData.title;
+        const existingTranslations = (typedVideoData.translated_titles ??
+          {}) as Record<string, string>; // Cast JSONB to expected type
+
+        // 2. Check if translation is needed
+        if (
+          !originalTitle ||
+          originalTitle.trim() === "" ||
+          targetLanguage === "en"
+        ) {
+          console.log(
+            `Skipping title translation for video ${videoId}: Original title empty, invalid, or target is English.`
+          );
+          return {
+            success: true,
+            data: {
+              translatedTitle: targetLanguage === "en" ? originalTitle : null,
+            },
+          };
+        }
+
+        // 3. Check if translation already exists
+        if (existingTranslations[targetLanguage]) {
+          console.log(
+            `Title translation for ${targetLanguage} already exists for video ${videoId}.`
+          );
+          return {
+            success: true,
+            data: {
+              translatedTitle: existingTranslations[targetLanguage],
+            },
+          };
+        }
+
+        // 4. Prepare for Translation (Assume source is English 'en' for now)
+        const sourceLangCode = "en"; // Assuming original YouTube title is English
+        const sourceLangName =
+          config.languages.find((l) => l.code === sourceLangCode)?.name ||
+          sourceLangCode;
+        const targetLangName =
+          config.languages.find((l) => l.code === targetLanguage)?.name ||
+          targetLanguage;
+
+        console.log(
+          `Calling Translation Service (Gemini) to translate title "${originalTitle}" from ${sourceLangName} to ${targetLangName} for video ${videoId}`
+        );
+
+        // 5. Call Translation Service (Use the new simple function)
+        const translatedTitleText = await translateSimpleText(
+          originalTitle,
+          targetLangName
+        );
+
+        if (!translatedTitleText || translatedTitleText.trim() === "") {
+          // Handle case where translation service returns empty string
+          console.warn(
+            `Translation service returned empty title for video ${videoId}`
+          );
+          // Optionally, return an error or just null data
+          return {
+            success: true, // Or false if empty translation is an error
+            data: { translatedTitle: null },
+          };
+          // Alternatively, throw new AppError(AppErrorCode.SERVICE_ERROR, "Translation service returned empty title.");
+        }
+
+        // 6. Update Database with the new title translation
+        const updatedTranslations = {
+          ...existingTranslations,
+          [targetLanguage]: translatedTitleText.trim(), // Store the trimmed translation
+        };
+
+        console.log(
+          `Updating video ${videoId} with translated title for ${targetLanguage}: "${translatedTitleText.trim()}"`
+        );
+        const { error: updateError } = await supabase
+          .from("videos")
+          .update({ translated_titles: updatedTranslations } as any) // Use 'as any' here too
+          .eq("id", videoId);
+
+        if (updateError) {
+          console.error(
+            `DB Update Error for video ${videoId} translated title:`, // Specific log
+            updateError
+          );
+          throw new AppError(
+            AppErrorCode.DATABASE_ERROR,
+            `DB error updating translated title for video ${videoId}: ${updateError.message}`
+          );
+        }
+
+        console.log(
+          `Successfully translated and stored title for ${targetLanguage} for video ${videoId}.`
+        );
+        return {
+          success: true,
+          data: { translatedTitle: translatedTitleText.trim() },
+        };
+      } catch (error: unknown) {
+        console.error(
+          `Error translating title for video ${videoId} to ${targetLanguage}:`,
           error
         );
         const appErr =

@@ -1,5 +1,3 @@
-
-
 SET statement_timeout = 0;
 SET lock_timeout = 0;
 SET idle_in_transaction_session_timeout = 0;
@@ -340,6 +338,7 @@ CREATE TABLE IF NOT EXISTS "public"."videos" (
     "description" "text",
     "thumbnail_url" "text",
     "duration" integer,
+    "translated_titles" jsonb DEFAULT '{}'::jsonb,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL
 );
