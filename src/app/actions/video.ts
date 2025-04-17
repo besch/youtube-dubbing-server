@@ -31,9 +31,7 @@ if (!AUDIO_SEGMENTER_SECRET_KEY)
   console.error("AUDIO_SEGMENTER_SECRET_KEY is not set.");
 if (!process.env.NEXT_PUBLIC_APP_URL)
   console.error("NEXT_PUBLIC_APP_URL is not set (needed for webhook).");
-if (!config.apiKeys.anthropic)
-  // Check for Anthropic key from config
-  console.error("ANTHROPIC_API_KEY is not set.");
+if (!config.apiKeys.anthropic) console.error("ANTHROPIC_API_KEY is not set.");
 
 // Helper to extract YouTube Video ID - throws error if not found
 function extractYoutubeVideoId(url: string): string {
