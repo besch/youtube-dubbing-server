@@ -16,7 +16,6 @@ import {
 } from "@/lib/translate";
 import {
   startReplicateTranscription,
-  type ReplicateSegment,
   type ReplicateSegmentOutput,
 } from "@/lib/replicate";
 import {
