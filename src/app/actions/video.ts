@@ -99,7 +99,7 @@ function extractTextFromSegments(
           sentenceStart >= 0 &&
           sentenceEnd >= 0 &&
           sentenceText &&
-          !addedSentences.has(sentenceText) // Check if already added
+          !addedSentences.has(sentenceText)
         ) {
           // Check for overlap: max(start1, start2) < min(end1, end2)
           if (
