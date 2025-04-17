@@ -339,6 +339,7 @@ CREATE TABLE IF NOT EXISTS "public"."videos" (
     "thumbnail_url" "text",
     "duration" integer,
     "translated_titles" jsonb DEFAULT '{}'::jsonb,
+    "processing_status" jsonb DEFAULT '{}'::jsonb, -- Tracks status like {"lang_voice": "status"}
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL
 );
@@ -993,3 +994,8 @@ ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TAB
 
 
 RESET ALL;
+
+
+
+ALTER TABLE public.videos
+COMMENT ON COLUMN public.videos.processing_status IS 'Tracks processing status per language-voice combination, e.g., {"es_nova": {"status": "generating_audio", "progress": 85}}';
