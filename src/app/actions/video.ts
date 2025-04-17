@@ -18,11 +18,7 @@ import {
   startReplicateTranscription,
   type ReplicateSegmentOutput,
 } from "@/lib/replicate";
-import {
-  generateOpenAiTts,
-  VALID_TTS_VOICES,
-  type OpenAiTtsVoice,
-} from "@/lib/openai-tts";
+import { generateOpenAiTts } from "@/lib/openai-tts";
 import { generateGoogleTts } from "@/lib/google-tts";
 
 // Constants
