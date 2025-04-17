@@ -30,7 +30,7 @@ The project allows users to watch YouTube videos with dynamically generated, dub
   ├── assets/
   ├── components/
   ├── constants/
-  ├── hooks/            # useAuth.ts, useSettings.ts
+  ├── hooks/            # useAuth.ts, useSettings.ts, useVideoSeekHandler.ts, ...
   ├── lib/              # API layer (api.ts)
   ├── store/            # Jotai state (index.ts, authAtom.ts)
   ├── types/            # Shared types (actions.ts, serverActions.ts, supabase.ts - copy)
@@ -49,58 +49,65 @@ The project allows users to watch YouTube videos with dynamically generated, dub
 ### 2.3. Video Player & On-the-Fly Audio Generation (Asynchronous/Webhook Flow)
 
 - **State Handling (`app/video/[id].tsx`):**
-  - Manages `loadingState`, `currentTime`, `playerState`, etc.
+  - Manages `currentTime`, `playerState`, `videoDuration`, etc.
   - **New:** Manages buffering state (`isBuffering`, `bufferingReason`, `isManuallyPaused`).
   - Stores completed **original** transcription segments: `transcriptionSegments: Map<number, {id: string, content: SegmentData}>` (keyed by start time).
   - Stores **translated** segments: `translatedSegments: Map<string, Map<number, SegmentData>>` (keyed by language, then start time).
   - Stores generated audio chunk data: `generatedChunks: Map<string, { publicUrl: string }>`.
-  - Tracks requested segment end times: `requestedTranscriptionEndTimes: Set<number>`.
-  - Tracks translation status per segment/language: `segmentTranslationState: Map<string, { [lang]: status }>`
-  - Tracks the maximum time transcribed: `maxTranscribedTime: number`.
+  - Tracks requested segment end times: `requestedTranscriptionEndTimes: Set<number>` (in `useVideoTranscription`).
+  - Tracks translation status per segment/language: `segmentTranslationState: Map<string, { [lang]: status }>` (in `useVideoTranslation`).
+  - Tracks the maximum time transcribed: `maxTranscribedTime: number` (in `useVideoTranscription`).
 - **Settings Integration:** Uses `useSettings` for initial language/voice/volume.
+- **Hook Integration:** Uses `useVideoDownload`, `useVideoTranscription`, `useVideoTranslation`, `useAudioGeneration`, `useAudioPlayback`, `useVideoHistory`, `useVideoProcessingStatus`, `useVideoSeekHandler`.
 - **Initialization:**
   - Calls `startVideoProcessingApi` (initiates full audio download via `youtube-download` service).
-  - Fetches any _pre-existing_ completed **original** transcription segments using `getCompletedTranscriptionSegmentsApi`.
-  - Subscribes to Supabase Realtime channel for `transcription_segments` table updates for the current video.
-  - Calls `requestTranscriptionSegmentApi` on the Next.js server for the initial segment (e.g., 0-180s). This action only _starts_ the transcription process and returns quickly.
-  - If initial segments were fetched and the target language is not the source ('en'), calls `translateSegmentContentApi` for those segments.
-- **Realtime Updates:** Listens to the Supabase Realtime channel (`transcription-segments-VIDEOID`).
+  - Fetches any _pre-existing_ completed **original** transcription segments using `getCompletedTranscriptionSegmentsApi` (via `useVideoTranscription`).
+  - Subscribes to Supabase Realtime channel for `transcription_segments` table updates for the current video (via `useVideoTranscription` and `useVideoTranslation`).
+  - Calls `requestTranscriptionSegmentApi` on the Next.js server for the initial segment (e.g., 0-180s) (via `useVideoTranscription`). This action only _starts_ the transcription process and returns quickly.
+  - If initial segments were fetched and the target language is not the source ('en'), calls `translateSegmentContentApi` for those segments (via `useVideoTranslation`).
+- **Realtime Updates (`useVideoTranscription`, `useVideoTranslation`):** Listens to the Supabase Realtime channel (`transcription-segments-VIDEOID`).
   - On receiving an UPDATE event:
-    - If `status = 'completed'` and `content` exists, updates the local `transcriptionSegments` map and `maxTranscribedTime`. If the target language is not the source ('en'), calls `translateSegmentContentApi` for this newly completed segment.
+    - If `status = 'completed'` and `content` exists, updates the local `transcriptionSegments` map and `maxTranscribedTime`. If the target language is not the source ('en'), triggers `translateSegmentContentApi` for this newly completed segment.
     - If `translations` field exists and contains data for a language, updates the `translatedSegments` map and `segmentTranslationState`.
-    - Checks `checkIfReadyToPlay` to see if initial transcription and required translation are available to transition `loadingState` to `ready`.
-- **Time Update & Buffering (`startCurrentTimeInterval`):**
-  - Runs periodically while the player is playing.
-  - Detects seeks based on `currentTime` jumps (`SEEK_THRESHOLD_SECONDS`).
-  - Throttles buffer checks using `BUFFER_CHECK_INTERVAL_SECONDS`.
-  - Calls `checkBufferingStatus` function with the `targetTime`.
-  - **`checkBufferingStatus` Logic:**
-    - Checks if transcription is available for `targetTime` in `transcriptionSegments`.
-    - If transcription needed, triggers `requestNextTranscriptionSegment` early.
-    - Checks if translation is available for `targetTime` in `translatedSegments` (or if language is 'en').
-    - If translation needed, triggers `triggerTranslation`.
-    - Checks if the corresponding audio chunk exists in `generatedChunks`.
-    - If audio chunk needed, triggers `generateAndStoreAudioChunk`.
-    - If any of the above are missing: Sets `isBuffering` to `true`, updates `bufferingReason`, pauses the YouTube player (`playerRef.current.pauseVideo()`) and the dubbing audio (`soundRef.current.pauseAsync()`).
+    - Checks `checkIfReadyToPlay` (in `useVideoTranslation`) to see if initial transcription and required translation are available to transition `translationLoadingState` to `ready`.
+- **Time Update & Buffering (`checkBufferingStatus` - conceptually part of player/playback logic):**
+  - Triggered by `currentTime` updates while playing.
+  - Detects need for data (transcription, translation, audio) based on lookahead times.
+  - **`checkBufferingStatus` Logic (Simplified View):**
+    - Checks if transcription is available for `targetTime` (or slightly ahead) in `transcriptionSegments`.
+    - If transcription needed (e.g., approaching `maxTranscribedTime`), triggers `requestNextTranscriptionSegment` early via `useVideoTranscription`'s lookahead.
+    - Checks if translation is available for `targetTime` (or slightly ahead) in `translatedSegments` (or if language is 'en').
+    - If translation needed (e.g., approaching lookahead boundary), triggers `triggerTranslation` via `useVideoTranslation`'s lookahead.
+    - Checks if the corresponding audio chunk exists in `generatedChunks` (or is generating).
+    - If audio chunk needed (e.g., approaching lookahead boundary), triggers `generateAndStoreAudioChunk` via `useAudioGeneration`'s lookahead.
+    - If any required data is missing: Sets `isBuffering` to `true`, updates `bufferingReason` (internal state/debug), pauses the YouTube player (`playerRef.current.pauseVideo()`) and the dubbing audio (`useAudioPlayback` handles pause based on player state/buffering).
     - If all are available and `isBuffering` was true: Sets `isBuffering` to `false`, resumes the YouTube player (`playerRef.current.playVideo()`) only if it wasn't manually paused by the user.
-- **Player State (`onPlayerStateChange`):**
-  - Distinguishes between manual pauses (`isManuallyPaused = true`) and pauses triggered by buffering (`isBuffering = true`).
-  - Controls the time interval (`startCurrentTimeInterval`, `stopCurrentTimeInterval`).
-  - Only resumes the player after buffering if `!isManuallyPaused`.
-- **Requesting Next Transcription Segment:** `useEffect` monitors `currentTime`.
-  - When `currentTime` approaches `maxTranscribedTime` (minus a buffer), it calls `requestTranscriptionSegmentApi` on the Next.js server for the _next_ time chunk (e.g., 180-360s), adding the end time to `requestedTranscriptionEndTimes`. The actual data arrives later via Realtime.
-- **Requesting Translation (Lookahead):** `checkAndRequestTranslation` function runs periodically.
+- **Seek Handling (`useVideoSeekHandler`):**
+  - `YouTubePlayer` component detects seeks (large `currentTime` jumps) and calls `onSeek` prop passed from `VideoPlayerScreen`.
+  - `VideoPlayerScreen` calls `handleSeek(targetTime)` from the hook.
+  - `handleSeek` function pauses the player, sets `isSeeking` state (shows overlay via `useVideoProcessingStatus`), and immediately calls `requestTranscriptionSegment` for the segment containing the `seekTargetTime`.
+  - The hook starts polling `checkSeekCompletion`.
+  - `checkSeekCompletion` verifies if transcription data exists (`transcriptionSegments`), translation is ready (`isTranslationReadyForTime`), and audio is ready (`isAudioChunkReady`) for the `seekTargetTime`.
+  - Once all data is ready, it sets `isSeeking` to false (hides overlay), resumes the player (`playerRef.current.playVideo()`), and stops polling.
+  - Includes a timeout to prevent indefinite seeking state.
+- **Player State (`onStateChange` in `YouTubePlayer`):**
+  - Relays state changes (`playing`, `paused`, `buffering`, etc.) to `VideoPlayerScreen`.
+  - Used by `useAudioPlayback` to sync dubbing audio.
+  - Used by `useVideoProcessingStatus` to display user-facing status.
+- **Requesting Next Transcription Segment (`useVideoTranscription` Lookahead):** `useEffect` monitors `currentTime`.
+  - When `currentTime` approaches `maxTranscribedTime` (minus a buffer), it calls `requestTranscriptionSegmentApi` for the _next_ time chunk.
+- **Requesting Translation (`useVideoTranslation` Lookahead):** `useEffect` monitors `currentTime` and `transcriptionSegments`.
   - Identifies original transcription segments within `currentTime + TRANSLATION_LOOKAHEAD`.
-  - If a segment within the lookahead needs translation for the current `language` (and isn't already pending/complete), calls `translateSegmentContentApi`.
-- **Audio Generation (TTS Trigger):** `manageAudioGeneration` looks ahead in the **`translatedSegments`** data for the current `language`.
-  - Finds the translated text corresponding to `currentTime + LOOKAHEAD_SECONDS`.
-  - Calls `generateAudioChunkApi` on the Next.js server, passing the _absolute_ start/end times of the required **translated** text snippet, along with the `language` and `voice`.
-- **Audio Playback:** `manageAudioPlayback` finds the **translated** segment for the current `language` that `currentTime` falls within.
-  - **Modified:** Halts playback and unloads sound if `isBuffering` becomes true.
-  - Uses `expo-av` to play the specific audio chunk URL (corresponding to the translated segment's time and selected voice), applying `dubbingVolume`.
+  - If a segment needs translation for the `targetLanguage`, calls `translateSegmentContentApi`.
+- **Audio Generation (`useAudioGeneration` Lookahead):** `useEffect` monitors `currentTime` and **`translatedSegments`**.
+  - Finds translated text snippets needed within `currentTime + AUDIO_GENERATION_LOOKAHEAD_SECONDS`.
+  - Calls `generateAudioChunkApi` for required snippets based on start/end times, language, and voice.
+- **Audio Playback (`useAudioPlayback`):** Finds the **translated** segment for the current `language` that `currentTime` falls within.
+  - Uses `expo-av` to manage loading and playing the specific audio chunk URL (from `generatedChunks`) corresponding to the target sentence, applying `dubbingVolume`.
+  - Pauses/resumes playback based on `playerState` and `isBuffering`.
 - **Language/Voice Changes:**
-  - **Language:** Clears `generatedChunks`, checks favorites, calls `checkAndRequestInitialTranslations` to trigger translation API calls for all existing transcription segments for the _new_ language.
-  - **Voice:** Clears `generatedChunks`, checks favorites, re-triggers `preloadInitialAudioChunks` and `manageAudioGeneration/Playback` for the new voice.
+  - Resets relevant state (e.g., `generatedChunks`, potentially `translatedSegments` for the old language).
+  - Triggers necessary API calls for the new language/voice (translation via lookahead, audio generation via lookahead).
 - **History/Favorites:** Calls `updateHistoryApi`, `toggleFavoriteApi`/`getFavoriteStatusApi`.
 
 ### 2.4. Settings Management (`app/(tabs)/settings.tsx`)
@@ -221,7 +228,7 @@ The project allows users to watch YouTube videos with dynamically generated, dub
 2.  **`youtube-download` -> Supabase:** Uploads full audio, updates `download_jobs`.
 3.  **Mobile App -> Server API:** On video load/after download -> `callServerAction('video/requestTranscriptionSegment', { videoId, startTime: 0, endTime: 180 })`.
 4.  **Server -> Audio Segmenter API:** Server calls `POST /segment-transcribe`.
-5.  **Audio Segmenter -> Supabase:** Downloads full audio, runs `ffmpeg`, uploads segment file.
+5.  **Audio Segmenter -> Supabase:** Downloads full audio, runs `ffmpeg`, uploads audio segment file.
 6.  **Audio Segmenter -> Server:** Returns `{ segment_storage_path: '...' }`.
 7.  **Server -> Supabase Storage:** Server gets signed URL for the audio segment.
 8.  **Server -> Replicate API:** Server calls `replicate.predictions.create` with signed URL and webhook URL.
@@ -230,26 +237,33 @@ The project allows users to watch YouTube videos with dynamically generated, dub
 11. **Replicate -> Server Webhook:** Replicate finishes -> POSTs result to `/api/webhooks/replicate`.
 12. **Server (Webhook):** Verifies signature, finds segment record, **adjusts timestamps**, updates `transcription_segments` (status: completed, stores adjusted `content`).
 13. **Supabase -> Mobile App (Realtime):** DB change triggers Realtime -> Mobile receives completed **original** segment -> Updates `transcriptionSegments` map & `maxTranscribedTime`.
-14. **Mobile App (Translation Trigger):** If selected `language` != source ('en'), Mobile calls `callServerAction('video/translateSegmentContent', { segmentId, targetLanguage: currentLanguage })`.
+14. **Mobile App (Translation Trigger):** If selected `language` != source ('en'), Mobile triggers `callServerAction('video/translateSegmentContent', { segmentId, targetLanguage: currentLanguage })` (often via lookahead logic in `useVideoTranslation`).
 15. **Server -> Anthropic API:** `translateSegmentContent` action calls Anthropic with formatted original text.
 16. **Server -> Supabase:** Action parses response and updates `translations` column in `transcription_segments` for the `segmentId`.
-17. **Supabase -> Mobile App (Realtime):** DB change triggers Realtime -> Mobile receives updated segment with data in `translations` field -> Updates `translatedSegments` map & `segmentTranslationState`. -> Calls `checkIfReadyToPlay`.
-18. **Mobile App (Playback):** Watches `currentTime`. `checkIfReadyToPlay` may transition `loadingState` to `ready`.
-19. **Mobile App -> Server API (TTS):** As needed (based on lookahead in **translated** segments) -> `callServerAction('video/generateAudioChunk', { videoId, lang: currentLanguage, voice, startTime, endTime })`.
+17. **Supabase -> Mobile App (Realtime):** DB change triggers Realtime -> Mobile receives updated segment with data in `translations` field -> Updates `translatedSegments` map & `segmentTranslationState`. -> Calls `checkIfReadyToPlay` (in `useVideoTranslation`).
+18. **Mobile App (Playback):** Watches `currentTime`. `useVideoTranslation`'s `checkIfReadyToPlay` may transition `translationLoadingState` to `ready`.
+19. **Mobile App -> Server API (TTS):** As needed (based on lookahead in **translated** segments via `useAudioGeneration`) -> `callServerAction('video/generateAudioChunk', { videoId, lang: currentLanguage, voice, startTime, endTime })`.
 20. **Server -> Supabase:** Finds relevant **translated** text from `transcription_segments` (`translations` column).
 21. **Server -> OpenAI API:** Calls TTS with extracted **translated** text and selected `voice`.
 22. **Server -> Supabase:** Uploads TTS audio to `translated-audio`, inserts record in `translated_audio_chunks`.
 23. **Server -> Mobile App:** Returns signed URL for the TTS chunk.
-24. **Mobile App:** Plays TTS audio chunk using `expo-av`.
-25. **Mobile App (Next Segment Trigger):** When `currentTime` nears `maxTranscribedTime`, go back to step 3 for the _next_ time range (triggers next transcription -> translation -> TTS cycle).
+24. **Mobile App:** Plays TTS audio chunk using `expo-av` (managed by `useAudioPlayback`).
+25. **Mobile App (Next Segment Trigger):** When `currentTime` nears `maxTranscribedTime` (or other lookahead boundaries are crossed), hooks automatically trigger requests for the next transcription segment (step 3), translation (step 14), and audio generation (step 19).
+26. **Mobile App (Seek):**
+    - User seeks in `YouTubePlayer`.
+    - `onSeek` callback triggers `handleSeek` in `useVideoSeekHandler`.
+    - Handler pauses player, shows overlay (`isSeeking` state), calls `requestTranscriptionSegment` (step 3) for the target time's segment.
+    - Realtime/polling updates (managed by hooks and seek handler polling) trigger translation (step 14) and TTS (step 19) for the seek target time range.
+    - Seek handler polling (`checkSeekCompletion`) detects when transcription data, translation, and audio are ready for the target time.
+    - Handler hides overlay (`isSeeking = false`), resumes player.
 
 ## 7. TODOs / Pending Items
 
-- **Fix Linter Errors:** Resolve remaining errors in `mobile/app/video/[id].tsx` related to optional chaining (`error?.message`) and `userId` type.
-- **Regenerate Supabase Types:** Update `database.types.ts` in both `server` and `mobile` projects to reflect schema changes (`translations` column).
-- **Commit Changes:** Stage and commit the recent server action additions and mobile app refactoring.
-- **Testing:** Perform end-to-end testing of the transcription -> translation -> TTS workflow.
-- Implement Mobile UI elements (e.g., scrubbing/progress bar).
+- **Fix Linter Errors:** Resolve remaining type comparison errors in `mobile/app/video/[id].tsx`.
+- **Refine Seek Completion Check:** Improve robustness of checks in `useVideoSeekHandler` (especially audio readiness).
+- **Regenerate Supabase Types:** Update `database.types.ts` in both `server` and `mobile` projects if schema changed recently.
+- **Testing:** Perform end-to-end testing of the transcription -> translation -> TTS workflow, including seek functionality.
+- Implement Mobile UI elements (e.g., improved scrubbing/progress bar feedback).
 - Implement webhook signature verification (`REPLICATE_WEBHOOK_SECRET`).
 - Review/configure Supabase Storage policies.
 - Review/improve logging across all services.
