@@ -28,11 +28,6 @@ import { generateGoogleTts } from "@/lib/google-tts";
 // Constants
 const AUDIO_SEGMENTER_URL = process.env.AUDIO_SEGMENTER_URL;
 const AUDIO_SEGMENTER_SECRET_KEY = process.env.AUDIO_SEGMENTER_SECRET_KEY;
-// Use the imported constant for Zod enum definition
-const OPENAI_TTS_VOICES_ARRAY = Array.from(VALID_TTS_VOICES) as [
-  OpenAiTtsVoice,
-  ...OpenAiTtsVoice[]
-];
 
 // --- Environment Variable Checks ---
 if (!AUDIO_SEGMENTER_URL) console.error("AUDIO_SEGMENTER_URL is not set.");
