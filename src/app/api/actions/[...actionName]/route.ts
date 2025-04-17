@@ -13,19 +13,13 @@ import {
   getSuggestedVideos,
   translateVideoTitle,
   initiateVideoProcessingJob,
-} from "@/app/actions/video"; // Import specific actions
-// Import other actions as they are created
-// import { toggleFavorite } from '@/app/actions/userVideoData'
+} from "@/app/actions/video";
 
-import { ActionResponse, AppError, AppErrorCode } from "@/app/actions/actions";
+import { AppError, AppErrorCode } from "@/app/actions/actions";
 
-// Define the shape of the action functions we expect
-// Using `any` here is acceptable as the execution logic will handle the specific result structure.
-type ActionFunction = (input: any) => Promise<any>; // Keep it simple
+type ActionFunction = (input: any) => Promise<any>;
 
-// Map action names to the actual server action functions
 const actionRegistry: Record<string, ActionFunction> = {
-  // video actions
   "video/startVideoProcessing": startVideoProcessing,
   "video/requestTranscriptionSegment": requestTranscriptionSegment,
   "video/getCompletedTranscriptionSegments": getCompletedTranscriptionSegments,
@@ -39,13 +33,6 @@ const actionRegistry: Record<string, ActionFunction> = {
   "video/getSuggestedVideos": getSuggestedVideos,
   "video/translateVideoTitle": translateVideoTitle,
   "video/initiateVideoProcessingJob": initiateVideoProcessingJob,
-
-  // user/favorites actions
-  // 'user/toggleFavorite': toggleFavorite as any, // Add when implemented
-  // 'user/getFavoriteStatus': getFavoriteStatus as any, // Add when implemented
-
-  // user/history actions
-  // 'user/updateHistory': updateHistory as any, // Add when implemented
 };
 
 export async function POST(request: NextRequest) {
