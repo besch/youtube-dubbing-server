@@ -1972,7 +1972,7 @@ const initiateVideoProcessingJobSchema = z.object({
   // Option 2: Configuration object
   processingTargets: z
     .record(
-      z.string(), // Language code (e.g., "es")
+      z.string(), // Language code (e.g., "en")
       z.object({ voice: z.string() }) // Voice for that language
     )
     .refine((val) => Object.keys(val).length > 0, {
