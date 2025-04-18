@@ -1962,7 +1962,7 @@ export const translateVideoTitle = protectedAction
     }
   );
 
-// --- New Action: Initiate Video Processing Job (Called by Client) ---
+// --- Initiate Video Processing Job (Called by Client) ---
 const initiateVideoProcessingJobSchema = z.object({
   youtubeUrl: z.string().url("Invalid YouTube URL"),
   // Define how target languages/voices are specified.
