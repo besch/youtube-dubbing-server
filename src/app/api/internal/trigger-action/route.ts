@@ -82,14 +82,11 @@ export async function POST(request: NextRequest) {
   );
   try {
     // Call the internal action function directly
-    // These actions are built with publicAction, so they handle their own schema validation and error wrapping
     const result = await actionFunction(payload);
 
     // The result should be in the ActionResponse format { success: boolean, data?: T, error?: AppErrorJSON }
-    // Return the result object directly
-    return NextResponse.json(result, {
-      status: result.success ? 200 : 400, // Use 400 for failed actions, 200 for success
-    });
+    // Always return 200 OK, and let the caller check the `success` flag in the body.
+    return NextResponse.json(result, { status: 200 });
   } catch (error: any) {
     // This catch block might be less likely to be hit if actions handle errors internally,
     // but it's good for catching unexpected issues during the call itself.
