@@ -2210,3 +2210,103 @@ export const initiateVideoProcessingJob = protectedAction
       }
     }
   );
+
+// --- Action: Get Completed Audio Chunks ---
+const getCompletedAudioChunksSchema = z.object({
+  videoId: z.string().uuid(),
+  language: z.string(),
+  voice: z.string(),
+});
+
+// Define the expected output structure, similar to GenerateAudioChunkOutput but as an array element
+interface CompletedAudioChunkOutput {
+  storagePath: string;
+  publicUrl: string;
+  startTime: number;
+  endTime: number;
+  durationMs?: number | null; // Optional duration if available
+}
+
+export const getCompletedAudioChunks = protectedAction
+  .schema(getCompletedAudioChunksSchema)
+  .action(
+    async ({
+      parsedInput,
+      // ctx, // No user context needed for the query itself
+    }): Promise<ActionResponse<CompletedAudioChunkOutput[]>> => {
+      const { videoId, language, voice } = parsedInput;
+      const supabase = supabaseServiceRoleClient;
+
+      console.log(
+        `Fetching completed audio chunks for: ${videoId}, Lang: ${language}, Voice: ${voice}`
+      );
+
+      try {
+        // Fetch chunk records from the database
+        const { data: chunks, error: fetchError } = await supabase
+          .from("translated_audio_chunks")
+          .select("id, storage_path, chunk_start, chunk_end") // Select necessary fields
+          .eq("video_id", videoId)
+          .eq("language", language)
+          .eq("voice", voice)
+          .order("chunk_start", { ascending: true });
+
+        if (fetchError) {
+          throw new AppError(
+            AppErrorCode.DATABASE_ERROR,
+            `DB error fetching audio chunks: ${fetchError.message}`
+          );
+        }
+
+        if (!chunks || chunks.length === 0) {
+          console.log("No completed audio chunks found.");
+          return { success: true, data: [] }; // Return empty array if none found
+        }
+
+        // Generate signed URLs for each chunk
+        const signedUrlPromises = chunks.map(async (chunk) => {
+          const { data: urlData, error: urlError } = await supabase.storage
+            .from("translated-audio")
+            .createSignedUrl(chunk.storage_path, 60 * 5); // 5-minute expiry
+
+          if (urlError || !urlData?.signedUrl) {
+            console.error(
+              `Failed to create signed URL for chunk ${chunk.id} (${chunk.storage_path}): ${urlError?.message}`
+            );
+            // Return null or a placeholder if a single URL fails?
+            // For now, return null and filter out later.
+            return null;
+          }
+
+          return {
+            storagePath: chunk.storage_path,
+            publicUrl: urlData.signedUrl,
+            startTime: chunk.chunk_start,
+            endTime: chunk.chunk_end,
+            // durationMs: null, // durationMs is not stored in this table currently
+          };
+        });
+
+        const resultsWithNulls = await Promise.all(signedUrlPromises);
+        // Filter out any null results from failed URL generations
+        const finalResults = resultsWithNulls.filter(
+          (result): result is CompletedAudioChunkOutput => result !== null
+        );
+
+        console.log(`Found and signed ${finalResults.length} audio chunks.`);
+        return { success: true, data: finalResults };
+      } catch (error: unknown) {
+        console.error("Error fetching completed audio chunks:", error);
+        const appErr =
+          error instanceof AppError
+            ? error
+            : new AppError(
+                AppErrorCode.UNEXPECTED_ERROR,
+                error instanceof Error
+                  ? error.message
+                  : "Unknown error fetching audio chunks"
+              );
+        return { success: false, error: appErr };
+      }
+    }
+  );

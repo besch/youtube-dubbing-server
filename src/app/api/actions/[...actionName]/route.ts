@@ -13,6 +13,7 @@ import {
   getSuggestedVideos,
   translateVideoTitle,
   initiateVideoProcessingJob,
+  getCompletedAudioChunks,
 } from "@/app/actions/video";
 
 import { AppError, AppErrorCode } from "@/app/actions/actions";
@@ -33,6 +34,7 @@ const actionRegistry: Record<string, ActionFunction> = {
   "video/getSuggestedVideos": getSuggestedVideos,
   "video/translateVideoTitle": translateVideoTitle,
   "video/initiateVideoProcessingJob": initiateVideoProcessingJob,
+  "video/getCompletedAudioChunks": getCompletedAudioChunks,
 };
 
 export async function POST(request: NextRequest) {
