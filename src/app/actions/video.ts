@@ -1983,7 +1983,7 @@ const initiateVideoProcessingJobSchema = z.object({
 interface InitiateProcessingOutput {
   videoId: string;
   downloadJobId: string | null; // Can be null if download already exists
-  initialProcessingStatus: Record<string, any>; // The initial status object set
+  initialProcessingStatus: Record<string, any>;
 }
 
 export const initiateVideoProcessingJob = protectedAction
