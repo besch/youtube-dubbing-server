@@ -150,41 +150,61 @@ serve(async (req) => {
 
     // --- Logic for Each Target Process (Language/Voice) ---
     for (const langVoiceKey of targetProcesses) {
-      const [language, voice] = langVoiceKey.split("_"); // Assumes format "lang_voice"
-      const needsTranslation = language !== "en"; // Assuming 'en' is the source
+      const [language, voice] = langVoiceKey.split("_");
+      const needsTranslation = language !== "en";
 
-      // Update Status (Example - refine this)
-      // const currentProcessStatus = processingConfig[langVoiceKey]?.status;
-      // ... logic to update processingConfig[langVoiceKey].status based on event ...
-      // Example: processingConfig[langVoiceKey].status = needsTranslation ? 'translating' : 'generating_audio';
-
-      // A) Handle Completed Transcription Segment
+      // Check 1: Did the segment just get completed?
       if (isCompletion) {
         if (needsTranslation) {
-          // Trigger Internal Translation
-          await triggerNextAction("internalTranslateSegmentContent", {
-            segmentId,
-            targetLanguage: language,
-          });
-          // Update status to 'translating'
-          processingConfig[langVoiceKey].status = "translating";
+          // Trigger Translation if not already present
+          if (!payload.record.translations?.[language]) {
+            console.log(
+              `Segment ${segmentId} completed, triggering translation to ${language}`
+            );
+            await triggerNextAction("internalTranslateSegmentContent", {
+              segmentId,
+              targetLanguage: language,
+            });
+            processingConfig[langVoiceKey].status = "translating";
+          } else {
+            // Translation already exists when segment completed, trigger audio directly
+            console.log(
+              `Segment ${segmentId} completed, translation ${language} exists, triggering audio generation`
+            );
+            await triggerNextAction("internalGenerateAudioChunk", {
+              videoId: dbVideoId,
+              language: language,
+              voice: voice,
+              startTime: segmentStartTime,
+              endTime: segmentEndTime,
+            });
+            processingConfig[langVoiceKey].status = "generating_audio";
+          }
         } else {
-          // Trigger Internal Audio Generation (using original content)
+          // English: Trigger Audio Generation directly upon segment completion
+          console.log(
+            `Segment ${segmentId} completed (EN), triggering audio generation`
+          );
           await triggerNextAction("internalGenerateAudioChunk", {
             videoId: dbVideoId,
-            language: language,
+            language: language, // "en"
             voice: voice,
             startTime: segmentStartTime,
             endTime: segmentEndTime,
           });
-          // Update status to 'generating_audio'
           processingConfig[langVoiceKey].status = "generating_audio";
         }
       }
-
-      // B) Handle Newly Available Translation (for the target language of this process)
-      if (hasNewTranslation && payload.record.translations?.[language]) {
-        // Trigger Internal Audio Generation (using translated content)
+      // Check 2: Was a translation just added for our target language?
+      // This handles the case where the function is re-triggered by the translation update
+      else if (
+        hasNewTranslation &&
+        payload.record.translations?.[language] && // Translation for *our* target lang is now present
+        !payload.old_record?.translations?.[language] // And it wasn't present before
+      ) {
+        console.log(
+          `Translation ${language} added for segment ${segmentId}, triggering audio generation`
+        );
         await triggerNextAction("internalGenerateAudioChunk", {
           videoId: dbVideoId,
           language: language,
@@ -192,7 +212,6 @@ serve(async (req) => {
           startTime: segmentStartTime,
           endTime: segmentEndTime,
         });
-        // Update status to 'generating_audio'
         processingConfig[langVoiceKey].status = "generating_audio";
       }
     }
