@@ -155,7 +155,7 @@ serve(async (req) => {
         Authorization: `Bearer ${FUNCTION_SECRET}`, // Authenticate server-to-server
       },
       body: JSON.stringify({
-        actionName: "requestTranscriptionSegment",
+        actionName: "internalRequestTranscriptionSegment",
         payload: actionPayload,
       }),
     });
@@ -163,16 +163,26 @@ serve(async (req) => {
     if (!response.ok) {
       const errorBody = await response.text();
       console.error(
-        `Error calling transcription action for ${dbVideoId}: ${response.status} ${response.statusText}`,
-        errorBody
+        `Error calling internal API (trigger-action -> internalRequestTranscriptionSegment): Status ${response.status}, Body: ${errorBody}`
       );
       throw new Error(
-        `Failed to trigger transcription action: ${response.status} ${errorBody}`
+        `Failed to trigger transcription via internal API. Status: ${response.status}`
       );
     }
 
     const result = await response.json();
-    console.log(`Transcription trigger response for ${dbVideoId}:`, result);
+    console.log("Internal API call result:", result);
+    // Check if the action itself reported failure
+    if (!result.success) {
+      console.error(
+        `Internal action internalRequestTranscriptionSegment failed:`,
+        result.error
+      );
+      // Throw an error to potentially retry the function or signal failure
+      throw new Error(
+        `Internal action internalRequestTranscriptionSegment failed.`
+      );
+    }
 
     // 7. Return Success
     return new Response(

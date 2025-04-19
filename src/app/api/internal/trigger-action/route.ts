@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import * as videoActions from "@/app/actions/video"; // Import all actions
+import * as videoInternalActions from "@/app/actions/videoInternal"; // Import internal actions
 import { z } from "zod";
 
 const SUPABASE_FUNCTION_SECRET = process.env.SUPABASE_FUNCTION_SECRET;
@@ -12,7 +12,8 @@ const triggerActionSchema = z.object({
 
 // Define a type for the actions map
 type ActionMap = {
-  [key: string]: (payload: any) => Promise<any>; // Adjust the action function signature if needed
+  // Adjust the action function signature if needed - internal actions don't have ctx
+  [key: string]: (payload: any) => Promise<any>;
 };
 
 export async function POST(request: NextRequest) {
@@ -56,16 +57,18 @@ export async function POST(request: NextRequest) {
   const { actionName, payload } = parsedBody.data;
 
   // 3. Map Action Name to Function
-  // Ensure the action name exists in our imported actions
-  const actions: ActionMap = videoActions as any; // Cast to ActionMap, ensure keys match exported function names
+  // Use the imported internal actions
+  const actions: ActionMap = videoInternalActions as any; // Cast to ActionMap
   const actionFunction = actions[actionName];
 
   if (typeof actionFunction !== "function") {
     console.error(
-      `Internal API Error: Action '${actionName}' not found or not a function.`
+      `Internal API Error: Action '${actionName}' not found or not a function in internal actions.`
     );
     return new NextResponse(
-      JSON.stringify({ error: `Action '${actionName}' not found` }),
+      JSON.stringify({
+        error: `Action '${actionName}' not found in internal actions`,
+      }),
       {
         status: 404, // Not Found
       }
@@ -75,28 +78,30 @@ export async function POST(request: NextRequest) {
   // 4. Execute the Action
   console.log(
     `Executing internal action: ${actionName} with payload:`,
-    payload
+    JSON.stringify(payload, null, 2) // Stringify payload for better logging
   );
   try {
-    // Note: These actions originally used next-safe-action.
-    // Calling them directly bypasses the safe-action client setup (middleware, input schema validation within safe-action).
-    // We are relying on the Supabase Function to provide the correct payload structure.
-    // We might need to adapt the actions slightly or add validation here if necessary.
+    // Call the internal action function directly
+    // These actions are built with publicAction, so they handle their own schema validation and error wrapping
     const result = await actionFunction(payload);
 
-    // The result might be in the ActionResponse format { success: boolean, data?: T, error?: AppError }
-    // Or it might be the direct return value if the action wasn't originally a safe-action.
-    // We return the entire result object.
-    return NextResponse.json(result, { status: 200 });
+    // The result should be in the ActionResponse format { success: boolean, data?: T, error?: AppErrorJSON }
+    // Return the result object directly
+    return NextResponse.json(result, {
+      status: result.success ? 200 : 400, // Use 400 for failed actions, 200 for success
+    });
   } catch (error: any) {
+    // This catch block might be less likely to be hit if actions handle errors internally,
+    // but it's good for catching unexpected issues during the call itself.
     console.error(
-      `Internal API Error executing action '${actionName}':`,
+      `Internal API Error during execution of action '${actionName}':`,
       error
     );
+    // Return a generic 500 error
     return new NextResponse(
       JSON.stringify({
-        error: `Failed to execute action '${actionName}'`,
-        details: error.message,
+        error: `Unexpected error executing action '${actionName}'`,
+        details: error.message, // Include error message if available
       }),
       {
         status: 500,

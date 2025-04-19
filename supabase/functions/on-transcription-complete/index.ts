@@ -161,22 +161,21 @@ serve(async (req) => {
       // A) Handle Completed Transcription Segment
       if (isCompletion) {
         if (needsTranslation) {
-          // Trigger Translation
-          await triggerNextAction("translateSegmentContent", {
+          // Trigger Internal Translation
+          await triggerNextAction("internalTranslateSegmentContent", {
             segmentId,
             targetLanguage: language,
           });
           // Update status to 'translating'
           processingConfig[langVoiceKey].status = "translating";
         } else {
-          // Trigger Audio Generation (using original content)
-          await triggerNextAction("generateAudioChunk", {
+          // Trigger Internal Audio Generation (using original content)
+          await triggerNextAction("internalGenerateAudioChunk", {
             videoId: dbVideoId,
             language: language,
             voice: voice,
-            startTime: segmentStartTime, // Needs the actual start/end of the sentences within the segment
+            startTime: segmentStartTime,
             endTime: segmentEndTime,
-            // segmentId: segmentId // Pass segmentId to fetch original content
           });
           // Update status to 'generating_audio'
           processingConfig[langVoiceKey].status = "generating_audio";
@@ -185,14 +184,13 @@ serve(async (req) => {
 
       // B) Handle Newly Available Translation (for the target language of this process)
       if (hasNewTranslation && payload.record.translations?.[language]) {
-        // Trigger Audio Generation (using translated content)
-        await triggerNextAction("generateAudioChunk", {
+        // Trigger Internal Audio Generation (using translated content)
+        await triggerNextAction("internalGenerateAudioChunk", {
           videoId: dbVideoId,
           language: language,
           voice: voice,
-          startTime: segmentStartTime, // Needs the actual start/end of the sentences within the segment
+          startTime: segmentStartTime,
           endTime: segmentEndTime,
-          // segmentId: segmentId // Pass segmentId and language to fetch translated content
         });
         // Update status to 'generating_audio'
         processingConfig[langVoiceKey].status = "generating_audio";
@@ -223,7 +221,7 @@ serve(async (req) => {
       );
 
       if (nextStartTime < nextEndTime) {
-        await triggerNextAction("requestTranscriptionSegment", {
+        await triggerNextAction("internalRequestTranscriptionSegment", {
           videoId: dbVideoId,
           startTime: nextStartTime,
           endTime: nextEndTime,

@@ -197,7 +197,7 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
 2.  **Server:** Checks `videos.processing_status`. If needed, creates/updates video record, inserts `download_jobs` record (status: pending), updates `videos.processing_status` (e.g., `{ "es_nova": { "status": "pending" } }`). Returns `{ videoId, initialProcessingStatus }`.
 3.  **Server -> Downloader Service:** Triggers download via POST request.
 4.  **Mobile App (Realtime):** Subscribes to `videos` table for `videoId`. Receives initial `processing_status` update. Displays "Preparing..." via `useVideoProcessingStatus`.
-5.  **Downloader Service -> Supabase:** Downloads audio, uploads to `youtube-audio` bucket, updates `download_jobs` status to `completed`.
+5.  **Downloader Service -> Supabase:** Downloads audio, uploads to `youtube-audio` bucket, updates `download_jobs` status to `completed` and sets `storage_path`, **updates `videos` table with audio `duration`**.
 6.  **Supabase Trigger -> Supabase Function (`on-download-complete`):** Triggered by `download_jobs` update.
 7.  **Supabase Function -> Server API (`/api/internal`):** Calls internal action `triggerTranscription` with `videoId` and audio path. Updates `videos.processing_status` (e.g., `{ "es_nova": { "status": "transcribing" } }`).
 8.  **Mobile App (Realtime):** Receives `processing_status` update -> Displays "Transcribing...".
