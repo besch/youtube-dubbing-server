@@ -57,12 +57,23 @@ async function triggerNextAction(actionName: string, payload: any) {
 }
 
 serve(async (req) => {
+  // Handle CORS preflight requests
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
 
+  let requestPayload;
   try {
-    const payload: TranscriptionSegmentPayload = await req.json();
+    // Log raw request body first
+    const rawBody = await req.text();
+    console.log("[on-transcription-complete] Raw Request Body:", rawBody);
+    requestPayload = JSON.parse(rawBody);
+    console.log(
+      "[on-transcription-complete] Parsed Payload:",
+      JSON.stringify(requestPayload, null, 2)
+    );
+
+    const payload: TranscriptionSegmentPayload = requestPayload; // Assign after logging
 
     // --- Validation ---
     // We care about segments becoming 'completed' or translations being added
@@ -152,14 +163,24 @@ serve(async (req) => {
     for (const langVoiceKey of targetProcesses) {
       const [language, voice] = langVoiceKey.split("_");
       const needsTranslation = language !== "en";
+      const currentStatus = processingConfig[langVoiceKey]?.status;
+      console.log(
+        `[on-transcription-complete] Processing target: ${langVoiceKey}, Current Status: ${currentStatus}, Needs Translation: ${needsTranslation}`
+      ); // Log status per target
 
       // Check 1: Did the segment just get completed?
       if (isCompletion) {
         if (needsTranslation) {
-          // Trigger Translation if not already present
-          if (!payload.record.translations?.[language]) {
+          // Trigger Translation only if needed and not already started/done
+          if (
+            !payload.record.translations?.[language] &&
+            currentStatus !== "translating" &&
+            currentStatus !== "generating_audio" &&
+            currentStatus !== "completed" &&
+            currentStatus !== "failed"
+          ) {
             console.log(
-              `Segment ${segmentId} completed, triggering translation to ${language}`
+              `Segment ${segmentId} completed, status is '${currentStatus}', triggering translation to ${language}`
             );
             await triggerNextAction("internalTranslateSegmentContent", {
               segmentId,
@@ -167,43 +188,58 @@ serve(async (req) => {
             });
             processingConfig[langVoiceKey].status = "translating";
           } else {
-            // Translation already exists when segment completed, trigger audio directly
+            // Translation already exists or process is further along, check if audio needs triggering
+            if (
+              payload.record.translations?.[language] && // Check if translation exists now
+              currentStatus !== "generating_audio" &&
+              currentStatus !== "completed" &&
+              currentStatus !== "failed"
+            ) {
+              console.log(
+                `Segment ${segmentId} completed, translation ${language} exists (or process advanced), status '${currentStatus}', triggering audio generation`
+              );
+              await triggerNextAction("internalGenerateAudioChunk", {
+                videoId: dbVideoId,
+                language: language,
+                voice: voice,
+                startTime: segmentStartTime,
+                endTime: segmentEndTime,
+              });
+              processingConfig[langVoiceKey].status = "generating_audio";
+            }
+          }
+        } else {
+          // English: Trigger Audio Generation directly upon segment completion if not already done
+          if (
+            currentStatus !== "generating_audio" &&
+            currentStatus !== "completed" &&
+            currentStatus !== "failed"
+          ) {
             console.log(
-              `Segment ${segmentId} completed, translation ${language} exists, triggering audio generation`
+              `Segment ${segmentId} completed (EN), status '${currentStatus}', triggering audio generation`
             );
             await triggerNextAction("internalGenerateAudioChunk", {
               videoId: dbVideoId,
-              language: language,
+              language: language, // "en"
               voice: voice,
               startTime: segmentStartTime,
               endTime: segmentEndTime,
             });
             processingConfig[langVoiceKey].status = "generating_audio";
           }
-        } else {
-          // English: Trigger Audio Generation directly upon segment completion
-          console.log(
-            `Segment ${segmentId} completed (EN), triggering audio generation`
-          );
-          await triggerNextAction("internalGenerateAudioChunk", {
-            videoId: dbVideoId,
-            language: language, // "en"
-            voice: voice,
-            startTime: segmentStartTime,
-            endTime: segmentEndTime,
-          });
-          processingConfig[langVoiceKey].status = "generating_audio";
         }
       }
       // Check 2: Was a translation just added for our target language?
-      // This handles the case where the function is re-triggered by the translation update
       else if (
         hasNewTranslation &&
         payload.record.translations?.[language] && // Translation for *our* target lang is now present
-        !payload.old_record?.translations?.[language] // And it wasn't present before
+        currentStatus === "translating"
       ) {
         console.log(
-          `Translation ${language} added for segment ${segmentId}, triggering audio generation`
+          `[on-transcription-complete] Entering 'hasNewTranslation' block for ${langVoiceKey}. Current Status: ${currentStatus}`
+        );
+        console.log(
+          `Translation ${language} added for segment ${segmentId}, status was 'translating', triggering audio generation`
         );
         await triggerNextAction("internalGenerateAudioChunk", {
           videoId: dbVideoId,
@@ -212,11 +248,15 @@ serve(async (req) => {
           startTime: segmentStartTime,
           endTime: segmentEndTime,
         });
-        processingConfig[langVoiceKey].status = "generating_audio";
+        processingConfig[langVoiceKey].status = "generating_audio"; // Update status
       }
     }
 
-    // --- Update Video Processing Status in DB ---
+    // --- Update Video Processing Status in DB --- (Ensure this happens AFTER loop)
+    console.log(
+      "Final processing status before DB update:",
+      JSON.stringify(processingConfig)
+    );
     const { error: updateError } = await supabaseAdmin
       .from("videos")
       .update({ processing_status: processingConfig })
