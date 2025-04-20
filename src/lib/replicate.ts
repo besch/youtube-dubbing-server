@@ -80,6 +80,8 @@ export async function startReplicateTranscription(
         "84d2ad2d6194fe98a17d2b60bef1c7f910c46b2f6fd38996ca457afd9c8abfcb",
       input: {
         audio_file: audioUrl,
+        align_output: true,
+        diarization: true,
       },
       webhook: REPLICATE_WEBHOOK_URL,
       webhook_events_filter: ["completed"], // Ensure this matches what webhook handler expects
