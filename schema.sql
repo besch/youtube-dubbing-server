@@ -999,3 +999,88 @@ RESET ALL;
 
 ALTER TABLE public.videos
 COMMENT ON COLUMN public.videos.processing_status IS 'Tracks processing status per language-voice combination, e.g., {"es_nova": {"status": "generating_audio", "progress": 85}}';
+
+-- TRUNCATE TABLE public.download_jobs CASCADE;
+-- TRUNCATE TABLE public.transcription_segments CASCADE;
+-- TRUNCATE TABLE public.translated_audio_chunks CASCADE;
+-- TRUNCATE TABLE public.videos CASCADE;
+-- TRUNCATE TABLE public.history CASCADE;
+-- TRUNCATE TABLE public.favorites CASCADE;
+
+-- New Triggers for Backend Processing Pipeline
+
+-- Trigger for Transcription Completion
+-- Drop the trigger if it already exists
+DROP TRIGGER IF EXISTS trigger_on_transcription_complete ON public.transcription_segments;
+
+-- Create the trigger
+CREATE TRIGGER trigger_on_transcription_complete
+AFTER UPDATE ON public.transcription_segments
+FOR EACH ROW
+-- Only run if the status is updated TO 'completed' FROM a different status
+WHEN (
+  NEW.status = 'completed'::public.job_status -- Adjust or remove cast if needed
+  AND OLD.status <> 'completed'::public.job_status -- Adjust or remove cast if needed
+)
+-- Execute the http_request function to call the Edge Function
+EXECUTE FUNCTION supabase_functions.http_request(
+    'https://zzsjgheaghjdjqaupbxa.supabase.co/functions/v1/on-transcription-complete', -- Function URL
+    'POST',
+    '{"Content-Type": "application/json", "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp6c2pnaGVhZ2hqZGpxYXVwYnhhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjU2NDIxNiwiZXhwIjoyMDU4MTQwMjE2fQ.lTiP5rOWppot7H95frtD4KHfMIyUgEOdki6854pGVSY"}', -- Headers (WARNING: HARDCODED SECRET)
+    '{}', -- Body (Function parses the actual payload)
+    10000 -- Timeout
+);
+
+-- Trigger for Transcription Translation Updates
+DROP TRIGGER IF EXISTS trigger_on_transcription_translation_update ON public.transcription_segments;
+
+-- Create a NEW trigger specifically for translation updates
+CREATE TRIGGER trigger_on_transcription_translation_update
+AFTER UPDATE ON public.transcription_segments
+FOR EACH ROW
+-- Only run if the translations column actually changed
+WHEN (NEW.translations IS DISTINCT FROM OLD.translations)
+-- Execute the same http_request function to call the same Edge Function
+EXECUTE FUNCTION supabase_functions.http_request(
+    'https://zzsjgheaghjdjqaupbxa.supabase.co/functions/v1/on-transcription-complete', -- Function URL (Same as before)
+    'POST',
+    '{"Content-Type": "application/json", "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp6c2pnaGVhZ2hqZGpxYXVwYnhhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjU2NDIxNiwiZXhwIjoyMDU4MTQwMjE2fQ.lTiP5rOWppot7H95frtD4KHfMIyUgEOdki6854pGVSY"}', -- Headers (WARNING: HARDCODED SECRET)
+    '{}', -- Body (Function parses the actual payload)
+    10000 -- Timeout
+);
+
+-- Trigger for Audio Chunk Insertion
+-- Drop the trigger if it already exists
+DROP TRIGGER IF EXISTS trigger_on_audio_chunk_insert ON public.translated_audio_chunks;
+
+-- Create the trigger
+CREATE TRIGGER trigger_on_audio_chunk_insert
+AFTER INSERT ON public.translated_audio_chunks -- Trigger on INSERT
+FOR EACH ROW                                    -- For every new row
+-- Execute the http_request function to call the Edge Function
+EXECUTE FUNCTION supabase_functions.http_request(
+    'https://zzsjgheaghjdjqaupbxa.supabase.co/functions/v1/on-audio-chunk-complete', -- Function URL
+    'POST',
+    '{"Content-Type": "application/json", "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp6c2pnaGVhZ2hqZGpxYXVwYnhhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjU2NDIxNiwiZXhwIjoyMDU4MTQwMjE2fQ.lTiP5rOWppot7H95frtD4KHfMIyUgEOdki6854pGVSY"}', -- Headers (WARNING: HARDCODED SECRET)
+    '{}', -- Body (Function parses the actual payload)
+    10000 -- Timeout
+);
+
+
+-- Trigger for Download Completion
+-- Drop the trigger if it exists
+DROP TRIGGER IF EXISTS trigger_on_download_complete ON public.download_jobs;
+
+-- Create the trigger
+CREATE TRIGGER trigger_on_download_complete
+AFTER UPDATE ON public.download_jobs
+FOR EACH ROW
+-- Only run if status becomes completed AND storage_path is set
+WHEN (NEW.status = 'completed' AND OLD.status <> 'completed' AND NEW.storage_path IS NOT NULL)
+EXECUTE FUNCTION supabase_functions.http_request(
+    'https://zzsjgheaghjdjqaupbxa.supabase.co/functions/v1/on-download-complete', -- Function URL
+    'POST',
+    '{"Content-Type": "application/json", "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp6c2pnaGVhZ2hqZGpxYXVwYnhhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjU2NDIxNiwiZXhwIjoyMDU4MTQwMjE2fQ.lTiP5rOWppot7H95frtD4KHfMIyUgEOdki6854pGVSY"}', -- Headers (WARNING: HARDCODED SECRET)
+    '{}', -- Body (Function parses the actual payload)
+    10000 -- Timeout
+);
