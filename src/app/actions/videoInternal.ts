@@ -682,93 +682,77 @@ export const internalGenerateAudioChunk = publicAction
           return { success: true, data: { storagePath: existingPath } };
         }
 
-        // 3. Fetch the *specific* COMPLETED transcription segment matching start/end times
-        // MODIFICATION START: Fetch only the exact segment
-        const { data: segmentDataUntyped, error: segmentError } = await supabase
-          .from("transcription_segments")
-          .select("id, content, translations") // Fetch content and translations
-          .eq("video_id", videoId)
-          .eq("status", "completed")
-          .eq("start_time", startTime) // Exact match for start time
-          .eq("end_time", endTime) // Exact match for end time
-          .single(); // Expect exactly one segment
+        // 3. Fetch relevant COMPLETED transcription segments
+        const { data: segmentsDataUntyped, error: segmentsError } =
+          await supabase
+            .from("transcription_segments")
+            .select("id, start_time, end_time, content, translations")
+            .eq("video_id", videoId)
+            .eq("status", "completed")
+            .lte("start_time", endTime) // Segment starts before or at chunk end
+            .gte("end_time", startTime) // Segment ends after or at chunk start
+            .order("start_time", { ascending: true });
 
-        if (segmentError) {
-          // Handle case where the specific segment isn't found or isn't completed
-          if (segmentError.code === "PGRST116") {
-            // PostgREST code for "Requested range not satisfiable" (0 rows)
-            throw new AppError(
-              AppErrorCode.DEPENDENCY_NOT_READY,
-              `Specific transcription segment for ${videoId}, time ${startTime}-${endTime} not found or not completed.`
-            );
-          }
-          // Handle other potential DB errors
+        if (segmentsError)
           throw new AppError(
             AppErrorCode.DATABASE_ERROR,
-            `DB error fetching specific segment: ${segmentError.message}`
+            `DB error fetching segments: ${segmentsError.message}`
           );
-        }
 
-        if (!segmentDataUntyped) {
-          // Should be caught by .single() error, but double-check
+        const segmentsData = segmentsDataUntyped as any[] | null;
+
+        if (!segmentsData || segmentsData.length === 0) {
           throw new AppError(
             AppErrorCode.DEPENDENCY_NOT_READY,
-            `Specific transcription segment for ${videoId}, time ${startTime}-${endTime} not found or not completed (data null).`
+            `Completed transcription/translation not available for ${videoId}, time ${startTime}-${endTime}.`
           );
         }
 
-        const segmentData = segmentDataUntyped as any; // Use 'as any' for simplicity
-
-        // 4. Extract Text for the Specific Segment
+        // 4. Extract Text for the Specific Time Range & Language
         let textToSynthesize = "";
         if (language === "en") {
-          const originalContent =
-            segmentData.content as ReplicateSegmentOutput | null;
-          if (
-            !originalContent?.segments ||
-            originalContent.segments.length === 0
-          ) {
+          const originalContents = segmentsData
+            .map((s) => s.content as ReplicateSegmentOutput | null)
+            .filter((c) => c !== null);
+          if (originalContents.length === 0) {
             throw new AppError(
               AppErrorCode.DEPENDENCY_NOT_READY,
-              `Original transcription content missing or empty for segment ${segmentData.id} (${startTime}-${endTime}) (EN).`
+              `Original transcription content missing for ${videoId}, time ${startTime}-${endTime} (EN).`
             );
           }
-          // Extract text ONLY from this segment's content
-          textToSynthesize = originalContent.segments
-            .map((s) => s.text?.trim() ?? "")
-            .join(" ");
+          textToSynthesize = extractTextFromSegments(
+            originalContents,
+            startTime,
+            endTime
+          );
         } else {
-          const translation = segmentData.translations?.[
-            language
-          ] as ReplicateSegmentOutput | null;
-          if (!translation?.segments || translation.segments.length === 0) {
-            // Check if original content exists but translation is missing
-            if (segmentData.content) {
-              console.warn(
-                `Translation '${language}' missing for segment ${segmentData.id}, original content exists. Attempting on-the-fly translation is not implemented here.`
-              );
-            }
+          const translatedContents = segmentsData
+            .map(
+              (s) => s.translations?.[language] as ReplicateSegmentOutput | null
+            )
+            .filter((t) => t !== null);
+          if (translatedContents.length === 0) {
             throw new AppError(
               AppErrorCode.DEPENDENCY_NOT_READY,
-              `Translation '${language}' not found or empty for segment ${segmentData.id} (${startTime}-${endTime}).`
+              `Translation '${language}' not found for ${videoId}, time ${startTime}-${endTime}.`
             );
           }
-          // Extract text ONLY from this segment's translation
-          textToSynthesize = translation.segments
-            .map((s) => s.text?.trim() ?? "")
-            .join(" ");
+          textToSynthesize = extractTextFromSegments(
+            translatedContents,
+            startTime,
+            endTime
+          );
         }
-        // MODIFICATION END
 
         if (!textToSynthesize.trim()) {
           // Create a silent/empty chunk instead of throwing an error?
           // For now, treat as error to investigate why text is missing.
           console.warn(
-            `INTERNAL ACTION: No text found for TTS in ${language} for ${videoId} (${startTime}-${endTime}). Segment ID: ${segmentData.id}`
+            `INTERNAL ACTION: No text found for TTS in ${language} for ${videoId} (${startTime}-${endTime}). Segments fetched: ${segmentsData.length}`
           );
           throw new AppError(
-            AppErrorCode.INVALID_INPUT, // Or a more specific code?
-            `No text extracted from segment ${segmentData.id} for time range ${startTime}-${endTime} in ${language}.`
+            AppErrorCode.INVALID_INPUT, // Or a more specific code? RECORD_NOT_FOUND?
+            `No text found for the time range ${startTime}-${endTime} in ${language}.`
           );
         }
 

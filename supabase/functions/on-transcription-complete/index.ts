@@ -198,14 +198,41 @@ serve(async (req) => {
               console.log(
                 `Segment ${segmentId} completed, translation ${language} exists (or process advanced), status '${currentStatus}', triggering audio generation`
               );
-              await triggerNextAction("internalGenerateAudioChunk", {
-                videoId: dbVideoId,
-                language: language,
-                voice: voice,
-                startTime: segmentStartTime,
-                endTime: segmentEndTime,
-              });
-              processingConfig[langVoiceKey].status = "generating_audio";
+              // --- Modification Start: Iterate through translated segments ---
+              const translatedContent = payload.record.translations?.[language];
+              if (
+                translatedContent?.segments &&
+                Array.isArray(translatedContent.segments)
+              ) {
+                processingConfig[langVoiceKey].status = "generating_audio"; // Set status before looping
+                for (const subSegment of translatedContent.segments) {
+                  if (
+                    subSegment.start !== undefined &&
+                    subSegment.end !== undefined
+                  ) {
+                    console.log(
+                      `   -> Triggering TTS for sub-segment ${subSegment.start}-${subSegment.end}`
+                    );
+                    await triggerNextAction("internalGenerateAudioChunk", {
+                      videoId: dbVideoId,
+                      language: language,
+                      voice: voice,
+                      startTime: subSegment.start,
+                      endTime: subSegment.end,
+                    });
+                  } else {
+                    console.warn(
+                      `Skipping sub-segment in ${segmentId} due to missing start/end:`,
+                      subSegment
+                    );
+                  }
+                }
+              } else {
+                console.error(
+                  `Could not find valid translated segments array for ${segmentId}, lang ${language}`
+                );
+              }
+              // --- Modification End ---
             }
           }
         } else {
@@ -218,14 +245,41 @@ serve(async (req) => {
             console.log(
               `Segment ${segmentId} completed (EN), status '${currentStatus}', triggering audio generation`
             );
-            await triggerNextAction("internalGenerateAudioChunk", {
-              videoId: dbVideoId,
-              language: language, // "en"
-              voice: voice,
-              startTime: segmentStartTime,
-              endTime: segmentEndTime,
-            });
-            processingConfig[langVoiceKey].status = "generating_audio";
+            // --- Modification Start: Iterate through original segments ---
+            const originalContent = payload.record.content;
+            if (
+              originalContent?.segments &&
+              Array.isArray(originalContent.segments)
+            ) {
+              processingConfig[langVoiceKey].status = "generating_audio"; // Set status before looping
+              for (const subSegment of originalContent.segments) {
+                if (
+                  subSegment.start !== undefined &&
+                  subSegment.end !== undefined
+                ) {
+                  console.log(
+                    `   -> Triggering TTS for sub-segment ${subSegment.start}-${subSegment.end}`
+                  );
+                  await triggerNextAction("internalGenerateAudioChunk", {
+                    videoId: dbVideoId,
+                    language: language, // "en"
+                    voice: voice,
+                    startTime: subSegment.start,
+                    endTime: subSegment.end,
+                  });
+                } else {
+                  console.warn(
+                    `Skipping sub-segment in ${segmentId} due to missing start/end:`,
+                    subSegment
+                  );
+                }
+              }
+            } else {
+              console.error(
+                `Could not find valid original segments array for ${segmentId}`
+              );
+            }
+            // --- Modification End ---
           }
         }
       }
@@ -233,7 +287,7 @@ serve(async (req) => {
       else if (
         hasNewTranslation &&
         payload.record.translations?.[language] && // Translation for *our* target lang is now present
-        currentStatus === "translating"
+        currentStatus === "translating" // Ensure we only trigger if we were waiting for translation
       ) {
         console.log(
           `[on-transcription-complete] Entering 'hasNewTranslation' block for ${langVoiceKey}. Current Status: ${currentStatus}`
@@ -241,14 +295,41 @@ serve(async (req) => {
         console.log(
           `Translation ${language} added for segment ${segmentId}, status was 'translating', triggering audio generation`
         );
-        await triggerNextAction("internalGenerateAudioChunk", {
-          videoId: dbVideoId,
-          language: language,
-          voice: voice,
-          startTime: segmentStartTime,
-          endTime: segmentEndTime,
-        });
-        processingConfig[langVoiceKey].status = "generating_audio"; // Update status
+        // --- Modification Start: Iterate through newly translated segments ---
+        const translatedContent = payload.record.translations?.[language];
+        if (
+          translatedContent?.segments &&
+          Array.isArray(translatedContent.segments)
+        ) {
+          processingConfig[langVoiceKey].status = "generating_audio"; // Update status before looping
+          for (const subSegment of translatedContent.segments) {
+            if (
+              subSegment.start !== undefined &&
+              subSegment.end !== undefined
+            ) {
+              console.log(
+                `   -> Triggering TTS for sub-segment ${subSegment.start}-${subSegment.end}`
+              );
+              await triggerNextAction("internalGenerateAudioChunk", {
+                videoId: dbVideoId,
+                language: language,
+                voice: voice,
+                startTime: subSegment.start,
+                endTime: subSegment.end,
+              });
+            } else {
+              console.warn(
+                `Skipping sub-segment in ${segmentId} due to missing start/end:`,
+                subSegment
+              );
+            }
+          }
+        } else {
+          console.error(
+            `Could not find valid translated segments array for ${segmentId}, lang ${language} (after translation update)`
+          );
+        }
+        // --- Modification End ---
       }
     }
 
