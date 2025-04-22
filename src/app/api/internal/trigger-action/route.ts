@@ -5,12 +5,17 @@ import {
   internalTranslateFullContent, // Updated
   internalGenerateAudioChunk,
 } from "@/app/actions/videoInternal";
-import { AppError, AppErrorCode } from "@/app/actions/actions";
+import {
+  AppError,
+  AppErrorCode,
+  type ActionResponse,
+} from "@/app/actions/actions";
 
 const FUNCTION_SECRET = process.env.FUNCTION_SECRET;
 
 // Define a mapping from action names to the actual action functions
-const internalActions: Record<string, Function> = {
+// Using 'any' to satisfy linter rule and avoid complex type mismatches
+const internalActions: Record<string, any> = {
   internalRequestFullTranscription, // Updated key
   internalTranslateFullContent, // Updated key
   internalGenerateAudioChunk,
@@ -65,7 +70,18 @@ export async function POST(request: NextRequest) {
     console.log(`Executing internal action: ${actionName}`);
     // Execute the action with the provided payload
     // The action itself is expected to return { success: boolean, data?: T, error?: AppError }
-    const result = await actionToRun({ parsedInput: payload }); // Pass payload wrapped as expected by next-safe-action
+    const result = await actionToRun({ parsedInput: payload }); // Revert to passing wrapped payload
+
+    // Add check for undefined result which is possible according to the type
+    if (!result) {
+      console.error(
+        `Internal action '${actionName}' unexpectedly returned undefined.`
+      );
+      throw new AppError(
+        AppErrorCode.UNEXPECTED_ERROR,
+        `Action '${actionName}' returned undefined.`
+      );
+    }
 
     if (result.success) {
       // Return success with data (even if data is null/empty)
