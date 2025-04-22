@@ -130,19 +130,37 @@ export async function POST(request: NextRequest) {
     }
     // --- End next-safe-action specific error checks --- //
 
-    if (result.success) {
-      // Return success with data (even if data is null/empty)
+    // Check if the action succeeded (result.data is present)
+    if (result.data) {
+      // Check if the action's internal logic returned an error
+      if (result.data.success === false && result.data.error) {
+        console.error(
+          `Internal action '${actionName}' returned a failure:`,
+          result.data.error
+        );
+        return NextResponse.json(
+          { success: false, error: result.data.error },
+          { status: 400 } // Or 500 depending on error type?
+        );
+      }
+      // Action succeeded
+      console.log(`Internal action '${actionName}' executed successfully.`);
       return NextResponse.json({ success: true, data: result.data ?? null });
     } else {
-      // Action returned a controlled error (AppError)
+      // Action failed without specific validation/server errors (unexpected)
       console.error(
-        `Internal action '${actionName}' failed:`,
-        JSON.stringify(result.error)
+        `Internal action '${actionName}' failed unexpectedly. Raw result:`,
+        JSON.stringify(result)
       );
-      // Return the structured AppError from the action
       return NextResponse.json(
-        { success: false, error: result.error },
-        { status: 400 } // Use 400 for controlled action errors
+        {
+          success: false,
+          error: {
+            code: AppErrorCode.UNEXPECTED_ERROR,
+            message: `Action '${actionName}' failed unexpectedly.`,
+          },
+        },
+        { status: 500 }
       );
     }
   } catch (error: unknown) {
