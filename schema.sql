@@ -1039,23 +1039,27 @@ EXECUTE FUNCTION supabase_functions.http_request(
     10000 -- Timeout
 );
 
--- Trigger for Transcription Translation Updates
 DROP TRIGGER IF EXISTS trigger_on_transcription_translation_update ON public.transcription_segments;
 
--- Recreate trigger for translation updates, calling the NEW on-translation-complete function
-CREATE TRIGGER trigger_on_translation_complete -- Renamed trigger
+-- Create the trigger with the CORRECT function URL
+CREATE TRIGGER trigger_on_transcription_translation_update
 AFTER UPDATE ON public.transcription_segments
 FOR EACH ROW
 -- Only run if the translations column actually changed
 WHEN (NEW.translations IS DISTINCT FROM OLD.translations)
--- Execute the http_request function to call the NEW Edge Function
+-- Execute the http_request function to call the correct Edge Function
 EXECUTE FUNCTION supabase_functions.http_request(
-    '{{ NEXT_PUBLIC_SUPABASE_FUNCTION_URL }}/on-translation-complete', -- NEW Function URL placeholder
+    -- VVV CORRECT URL VVV --
+    'https://zzsjgheaghjdjqaupbxa.supabase.co/functions/v1/on-translation-complete', -- Correct Function URL
+    -- ^^^ CORRECT URL ^^^ --
     'POST',
-    '{"Content-Type": "application/json", "Authorization": "Bearer {{ SUPABASE_SERVICE_ROLE_KEY }}"}', -- Use placeholder
+    '{"Content-Type": "application/json", "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp6c2pnaGVhZ2hqZGpxYXVwYnhhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjU2NDIxNiwiZXhwIjoyMDU4MTQwMjE2fQ.lTiP5rOWppot7H95frtD4KHfMIyUgEOdki6854pGVSY"}', -- Headers (WARNING: HARDCODED SECRET)
     '{}', -- Body (Function parses the actual payload)
     10000 -- Timeout
 );
+
+COMMENT ON TRIGGER trigger_on_transcription_translation_update ON public.transcription_segments
+IS 'Calls the on-translation-complete function when the translations column is updated.';
 
 -- Trigger for Audio Chunk Insertion
 -- Drop the trigger if it already exists
