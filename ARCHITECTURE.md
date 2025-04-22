@@ -177,11 +177,14 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
 
 ### 3.5. Supabase Functions (`supabase/functions/`)
 
-- **Purpose:** Orchestrate the backend processing steps, triggered by database changes or external webhooks.
+- **Purpose:** Orchestrate the backend processing steps, triggered by database changes (via `supabase_functions.http_request` in DB triggers) or external webhooks.
 - **Examples:**
-  - `on-download-complete`: Triggered when `download_jobs` status becomes `completed`. Fetches audio path, calls an internal server action (via `/api/internal`) to start transcription (e.g., call Replicate). Updates `videos.processing_status`.
-  - `on-transcription-complete`: Triggered by Replicate webhook (which might update `transcription_segments` status). Fetches transcription, calls internal server action to trigger translation (if needed) and TTS generation for segments/chunks. Updates `videos.processing_status`.
-  - `on-audio-chunk-complete`: Triggered when a row is inserted/updated in `translated_audio_chunks`. Updates `videos.processing_status` (progress, potential completion).
+  - `on-download-complete`: Triggered by `download_jobs` update (status -> `completed`). Fetches video duration, updates `videos.processing_status` (for relevant targets) to `transcribing`, and calls the internal action `internalRequestTranscriptionSegment` to trigger the **first** transcription segment request (e.g., 0-180s).
+  - `on-transcription-complete`: Triggered by `transcription_segments` update (status -> `completed` OR `translations` field changes).
+    - Processes the completed segment: Calls `internalTranslateSegmentContent` (if needed) and `internalGenerateAudioChunk` for the time range of the _completed_ segment.
+    - **Triggers the next step:** If the segment completion was for the original transcription (`status` changed to `completed`) and the segment's `end_time` is less than the video's total `duration`, it calls `internalRequestTranscriptionSegment` again to request the **next** time chunk (e.g., requests 180-360s after 0-180s completes). This creates the sequential processing chain.
+    - Updates `videos.processing_status` based on actions initiated (e.g., to `translating` or `generating_audio`).
+  - `on-audio-chunk-complete`: Triggered by `translated_audio_chunks` inserts. Updates `videos.processing_status` (calculates progress based on completed chunks vs. video duration). If all chunks for a language/voice are determined to be complete, it sets the status to `completed`.
 
 ## 4. Downloader Service (`youtube-download/`)
 
@@ -189,27 +192,29 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
 
 ## 5. Audio Segmenter Service (`audio-segmenter/`)
 
-- **DEPRECATED/REMOVED:** This service is likely no longer required if transcription happens on the full audio file downloaded by `youtube-download`. The server/transcription service handles the full audio directly.
+- **DEPRECATED/REMOVED:** This service is no longer required. The new backend processing flow handles audio segmentation based on time intervals during the sequential transcription process, managed by Supabase Functions (`on-download-complete`, `on-transcription-complete`) and the `internalRequestTranscriptionSegment` server action. The original full audio downloaded by `youtube-download` is used directly.
 
 ## 6. Communication Flow (Backend-Driven Processing)
 
 1.  **Mobile App -> Server API:** User selects video/language/voice -> `callServerAction('video/initiateVideoProcessingJob', { youtubeUrl, processingTargets: { 'es_nova': {...} } })`.
-2.  **Server:** Checks `videos.processing_status`. If needed, creates/updates video record, inserts `download_jobs` record (status: pending), updates `videos.processing_status` (e.g., `{ "es_nova": { "status": "pending" } }`). Returns `{ videoId, initialProcessingStatus }`.
+2.  **Server (`initiateVideoProcessingJob`):** Checks `videos.processing_status`. If needed, creates/updates video record, inserts `download_jobs` record (status: pending), updates `videos.processing_status` (e.g., `{ "es_nova": { "status": "pending" } }`). Returns `{ videoId, initialProcessingStatus }`.
 3.  **Server -> Downloader Service:** Triggers download via POST request.
 4.  **Mobile App (Realtime):** Subscribes to `videos` table for `videoId`. Receives initial `processing_status` update. Displays "Preparing..." via `useVideoProcessingStatus`.
-5.  **Downloader Service -> Supabase:** Downloads audio, uploads to `youtube-audio` bucket, updates `download_jobs` status to `completed` and sets `storage_path`, **updates `videos` table with audio `duration`**.
-6.  **Supabase Trigger -> Supabase Function (`on-download-complete`):** Triggered by `download_jobs` update.
-7.  **Supabase Function -> Server API (`/api/internal`):** Calls internal action `triggerTranscription` with `videoId` and audio path. Updates `videos.processing_status` (e.g., `{ "es_nova": { "status": "transcribing" } }`).
-8.  **Mobile App (Realtime):** Receives `processing_status` update -> Displays "Transcribing...".
-9.  **Server (Internal Action):** Calls Replicate API with full audio URL and webhook. Updates DB (e.g., links Replicate job to video).
-10. **Replicate -> Server Webhook (`/api/webhooks/replicate`):** Replicate finishes -> POSTs result.
-11. **Server (Webhook):** Verifies signature, processes transcription, updates `transcription_segments` table (status: completed, stores content).
-12. **Supabase Trigger -> Supabase Function (`on-transcription-complete` - Example):** Triggered by `transcription_segments` update.
-13. **Supabase Function -> Server API (`/api/internal`):** Calls internal actions `triggerTranslation` (if lang != 'en') and `triggerTTS`. Updates `videos.processing_status` (e.g., `{ "es_nova": { "status": "generating_audio" } }`).
-14. **Mobile App (Realtime):** Receives `processing_status` update -> Displays "Generating Audio...". Listens for completed `transcription_segments` / `translated_audio_chunks` via separate Realtime subscriptions to populate local data maps.
-15. **Server (Internal Actions):** Calls Anthropic for translation (updates `transcription_segments.translations`), calls OpenAI/Google TTS for chunks, uploads audio to `translated-audio`, inserts records into `translated_audio_chunks`.
-16. **Supabase Trigger -> Supabase Function (`on-audio-chunk-complete`):** Triggered by `translated_audio_chunks` inserts/updates.
-17. **Supabase Function:** Calculates progress based on completed chunks vs. video duration. Updates `videos.processing_status` with progress. If all chunks are done, sets status to `completed`.
+5.  **Downloader Service -> Supabase:** Downloads audio, uploads to `youtube-audio` bucket, updates `download_jobs` status to `completed`, sets `storage_path`, updates `videos` table with audio `duration`.
+6.  **Supabase Trigger (`trigger_on_download_complete`) -> Supabase Function (`on-download-complete`):** Triggered by `download_jobs` update.
+7.  **`on-download-complete` Function:** Updates `processing_status` to `transcribing` for relevant targets. Calls internal action `internalRequestTranscriptionSegment` via `/api/internal` to request transcription for the **first segment** (e.g., 0-180s).
+8.  **Mobile App (Realtime):** Receives `processing_status` update (`transcribing`) -> Displays "Transcribing...".
+9.  **Server (`internalRequestTranscriptionSegment`):** Gets audio segment URL, calls Replicate API for transcription of that segment, updates `transcription_segments` table (links Replicate ID, status: `processing`).
+10. **Replicate -> Server Webhook (`/api/webhooks/replicate`):** Replicate finishes -> POSTs result for the segment.
+11. **Server (Webhook):** Verifies signature, processes transcription result for the segment, updates the corresponding `transcription_segments` row (status: `completed`, stores `content`).
+12. **Supabase Trigger (`trigger_on_transcription_complete` / `trigger_on_transcription_translation_update`) -> Supabase Function (`on-transcription-complete`):** Triggered by the `transcription_segments` update.
+13. **`on-transcription-complete` Function:**
+    - **Processes current segment:** Calls `internalTranslateSegmentContent` (if needed) and `internalGenerateAudioChunk` via `/api/internal` for the time range of the _just completed_ segment (e.g., 0-180s). Updates `processing_status` (e.g., to `translating` or `generating_audio`).
+    - **Triggers next segment:** If the segment just completed (`status` changed) and its `end_time` < `videoDuration`, it calls `internalRequestTranscriptionSegment` again for the _next_ time range (e.g., 180-360s).
+14. **Mobile App (Realtime):** Receives `processing_status` updates (`translating`, `generating_audio`...). Listens for newly completed `transcription_segments` / `translated_audio_chunks` via separate Realtime subscriptions to populate local data maps.
+15. **Server (Internal Actions - `internalTranslateSegmentContent`, `internalGenerateAudioChunk`):** Performs translation (updates `translations` field), generates TTS audio, uploads to `translated-audio`, inserts records into `translated_audio_chunks`.
+16. **Supabase Trigger (`trigger_on_audio_chunk_insert`) -> Supabase Function (`on-audio-chunk-complete`):** Triggered by `translated_audio_chunks` inserts.
+17. **`on-audio-chunk-complete` Function:** Calculates progress based on completed chunks vs. video duration. Updates `videos.processing_status` with progress. If all chunks are done, sets status to `completed`.
 18. **Mobile App (Realtime):** Receives `processing_status` updates (progress, eventual completion). Plays available audio chunks via `useAudioPlayback` as `currentTime` advances.
 19. **Mobile App (Seek):**
     - User seeks.
@@ -219,15 +224,12 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
 
 ## 7. TODOs / Pending Items
 
-- **Implement Supabase Functions:** Define and implement `on-download-complete`, `on-transcription-complete`, `on-audio-chunk-complete` (and potentially others).
-- **Define Internal Server Actions:** Create actions within `server/src/app/actions/` specifically for triggering transcription, translation, TTS, to be called by Supabase Functions.
-- **Secure Internal API:** Ensure `/api/internal/trigger-action` route is properly secured using `FUNCTION_SECRET`.
-- **Refine Status Updates:** Ensure `videos.processing_status` is updated correctly at each stage by the backend/functions.
-- **Refine Completion Check:** Implement robust logic in the backend (likely within Supabase Functions or triggered actions) to determine when _all_ necessary audio chunks for a language/voice are generated before marking `processing_status` as `completed`.
-- **Refine Seek Completion Check:** Ensure `useVideoSeekHandler` reliably checks for the _existence_ of pre-generated data.
-- **Remove `audio-segmenter`:** Deprecate and remove the service and related calls if full audio transcription is confirmed. Update storage bucket usage.
+- **Refine Supabase Functions:** Review and test the implemented logic in `on-download-complete`, `on-transcription-complete`, `on-audio-chunk-complete`.
+- **Review Internal Server Actions:** Ensure `videoInternal.ts` actions are robust.
+- **Error Handling:** Improve error handling and status updates (`failed` status) within the backend pipeline (Supabase Functions, Server Actions).
+- **Remove `audio-segmenter`:** Service is removed. Ensure all related code/references are cleaned up. Update storage bucket policies if needed (remove `transcription-segments` bucket if unused).
 - **Regenerate Supabase Types:** Update `database.types.ts` in `server` and `mobile` after schema changes (adding `processing_status`).
 - **Testing:** Thoroughly test the end-to-end backend processing flow and client interaction.
-- **Error Handling:** Implement robust error handling within the backend pipeline (e.g., setting `failed` status in `processing_status` with error messages).
+- **Error Handling:** Improve error handling and status updates (`failed` status) within the backend pipeline (Supabase Functions, Server Actions).
 - Review/configure Supabase Storage policies.
 - Review/improve logging across all services.
