@@ -1,20 +1,26 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   startVideoProcessing,
+  initiateVideoProcessingJob,
+} from "@/app/actions/video/processing";
+import {
   requestTranscriptionSegment,
   getCompletedTranscriptionSegments,
+} from "@/app/actions/transcription/segments";
+import {
   generateAudioChunk,
-  updateHistory,
+  getCompletedAudioChunks,
+} from "@/app/actions/audio/generation";
+import { updateHistory, getHistory } from "@/app/actions/user/history";
+import {
   toggleFavorite,
   getFavoriteStatus,
-  translateSegmentContent,
   getFavorites,
-  getHistory,
-  getSuggestedVideos,
+} from "@/app/actions/user/favorites";
+import {
+  translateSegmentContent,
   translateVideoTitle,
-  initiateVideoProcessingJob,
-  getCompletedAudioChunks,
-} from "@/app/actions/video";
+} from "@/app/actions/translation/translation";
 
 import { AppError, AppErrorCode } from "@/app/actions/actions";
 
@@ -31,7 +37,6 @@ const actionRegistry: Record<string, ActionFunction> = {
   "video/translateSegmentContent": translateSegmentContent,
   "video/getFavorites": getFavorites,
   "video/getHistory": getHistory,
-  "video/getSuggestedVideos": getSuggestedVideos,
   "video/translateVideoTitle": translateVideoTitle,
   "video/initiateVideoProcessingJob": initiateVideoProcessingJob,
   "video/getCompletedAudioChunks": getCompletedAudioChunks,
