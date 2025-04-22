@@ -84,6 +84,46 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // --- Check for next-safe-action specific errors --- //
+    if (result.validationError) {
+      console.error(
+        `Internal action '${actionName}' failed due to input validation:`,
+        JSON.stringify(result.validationError)
+      );
+      // Return validation error details
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: AppErrorCode.INVALID_INPUT,
+            message: "Input validation failed",
+            details: result.validationError,
+          },
+        },
+        { status: 400 }
+      );
+    }
+
+    if (result.serverError) {
+      console.error(
+        `Internal action '${actionName}' failed due to a server error before execution:`,
+        JSON.stringify(result.serverError)
+      );
+      // Return server error details
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: AppErrorCode.UNEXPECTED_ERROR,
+            message: "Server error during action setup",
+            details: result.serverError,
+          },
+        },
+        { status: 500 }
+      );
+    }
+    // --- End next-safe-action specific error checks --- //
+
     if (result.success) {
       // Return success with data (even if data is null/empty)
       return NextResponse.json({ success: true, data: result.data ?? null });
