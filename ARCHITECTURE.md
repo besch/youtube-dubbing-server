@@ -87,6 +87,7 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
   - Finds the completed audio chunk (from `generatedChunks`) corresponding to `currentTime`.
   - Uses `expo-av` to load and play the chunk URL.
   - Pauses/resumes/syncs rate based on `playerState`.
+  - **Note:** A previous issue caused a brief audio jump at the start of chunk playback due to immediate corrective seeking. This was resolved by increasing `SEEK_TOLERANCE_MS` in `usePlaybackController` (used internally by `useAudioPlayback`) to make it less sensitive to initial minor timing discrepancies.
 - **Language/Voice Changes:**
   - When user selects a new language/voice:
     - Checks if the `processing_status` for the new combination indicates completion or ongoing processing.
