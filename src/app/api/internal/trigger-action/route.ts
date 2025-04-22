@@ -89,10 +89,11 @@ export async function POST(request: NextRequest) {
     }
 
     // --- Check for next-safe-action specific errors --- //
-    if (result.validationError) {
+    // Check for PLURAL validationErrors
+    if (result.validationErrors) {
       console.error(
         `Internal action '${actionName}' failed due to input validation:`,
-        JSON.stringify(result.validationError)
+        JSON.stringify(result.validationErrors) // Log plural
       );
       // Return validation error details
       return NextResponse.json(
@@ -101,13 +102,14 @@ export async function POST(request: NextRequest) {
           error: {
             code: AppErrorCode.INVALID_INPUT,
             message: "Input validation failed",
-            details: result.validationError,
+            details: result.validationErrors, // Use plural
           },
         },
         { status: 400 }
       );
     }
 
+    // Check for singular serverError
     if (result.serverError) {
       console.error(
         `Internal action '${actionName}' failed due to a server error before execution:`,
