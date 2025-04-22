@@ -11,7 +11,8 @@ import {
   type ActionResponse,
 } from "@/app/actions/actions";
 
-const FUNCTION_SECRET = process.env.FUNCTION_SECRET;
+// Read the correct environment variable name used in Vercel
+const FUNCTION_SECRET = process.env.SUPABASE_FUNCTION_SECRET;
 
 // Define a mapping from action names to the actual action functions
 // Using 'any' to satisfy linter rule and avoid complex type mismatches
