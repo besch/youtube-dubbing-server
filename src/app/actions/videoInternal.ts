@@ -16,103 +16,9 @@ import type { Tables } from "@/types/supabase";
 import { generateOpenAiTts } from "@/lib/openai-tts";
 import { generateGoogleTts } from "@/lib/google-tts";
 
-// --- Helper: Call Audio Segmenter Microservice (Copied from video.ts) ---
-// Constants
-const AUDIO_SEGMENTER_URL = process.env.AUDIO_SEGMENTER_URL;
-const AUDIO_SEGMENTER_SECRET_KEY = process.env.AUDIO_SEGMENTER_SECRET_KEY;
-
-// Check if the environment variables are set
-if (!AUDIO_SEGMENTER_URL) {
-  console.error("AUDIO_SEGMENTER_URL environment variable is not set.");
-}
-if (!AUDIO_SEGMENTER_SECRET_KEY) {
-  console.error("AUDIO_SEGMENTER_SECRET_KEY environment variable is not set.");
-}
-
-async function getAudioSegmentPath(
-  videoId: string,
-  startTime: number,
-  endTime: number
-): Promise<string> {
-  if (!AUDIO_SEGMENTER_URL || !AUDIO_SEGMENTER_SECRET_KEY) {
-    console.error("Audio Segmenter URL or Secret Key not configured!");
-    throw new AppError(
-      AppErrorCode.CONFIGURATION_ERROR,
-      "Audio Segmenter not configured"
-    );
-  }
-
-  // Workaround for segmenter validation: send a tiny positive value if startTime is 0
-  const segmenterStartTime = startTime === 0 ? 0.01 : startTime;
-
-  console.log(
-    `InternalAction: Calling Audio Segmenter at ${AUDIO_SEGMENTER_URL} for video ${videoId} (Sent Time: ${segmenterStartTime}-${endTime}, Original Start: ${startTime})`
-  );
-  try {
-    const response = await fetch(`${AUDIO_SEGMENTER_URL}/segment-transcribe`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-Key": AUDIO_SEGMENTER_SECRET_KEY,
-      },
-      body: JSON.stringify({
-        video_id: videoId,
-        start_time: segmenterStartTime, // Use the adjusted start time here
-        end_time: endTime,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-      console.error(
-        `InternalAction: Audio Segmenter Error (${response.status}): ${errorBody}`
-      );
-      let detailMessage = `Status ${response.status}: ${errorBody}`;
-      try {
-        const parsedError = JSON.parse(errorBody);
-        if (typeof parsedError.detail === "string") {
-          detailMessage = parsedError.detail;
-        } else {
-          detailMessage = JSON.stringify(parsedError);
-        }
-      } catch {
-        // Parsing failed
-      }
-      throw new AppError(
-        AppErrorCode.AUDIO_SEGMENTER_ERROR,
-        `Audio Segmenter failed: ${detailMessage}`
-      );
-    }
-
-    const data = await response.json();
-    if (!data.segment_storage_path) {
-      console.error(
-        "InternalAction: Audio Segmenter response missing segment_storage_path:",
-        data
-      );
-      throw new AppError(
-        AppErrorCode.SERVICE_ERROR,
-        "Audio Segmenter did not return segment path"
-      );
-    }
-    console.log(
-      `InternalAction: Audio Segmenter returned path: ${data.segment_storage_path}`
-    );
-    return data.segment_storage_path;
-  } catch (error: unknown) {
-    console.error("InternalAction: Error calling Audio Segmenter:", error);
-    if (error instanceof AppError) throw error;
-    const message =
-      error instanceof Error ? error.message : "Unknown communication error";
-    throw new AppError(
-      AppErrorCode.SERVICE_ERROR,
-      `Failed to communicate with Audio Segmenter: ${message}`
-    );
-  }
-}
-
-// --- Helper Function: Extract Text from Segments for Time Range (Copied from video.ts) ---
-// Needs ReplicateSegmentOutput type from imports below
+// --- Helper Function: Extract Text from Segments for Time Range ---
+// NOTE: This function might need adjustments later depending on how
+// internalGenerateAudioChunk uses it with the full transcription data.
 function extractTextFromSegments(
   segmentsOutputs: (ReplicateSegmentOutput | null | undefined)[],
   targetStartTime: number,
@@ -134,6 +40,7 @@ function extractTextFromSegments(
           sentenceText &&
           !addedSentences.has(sentenceText)
         ) {
+          // Check for overlap between sentence time and target time range
           if (
             Math.max(sentenceStart, targetStartTime) <
             Math.min(sentenceEnd, targetEndTime)
@@ -149,71 +56,90 @@ function extractTextFromSegments(
 }
 // --- End Helper Function ---
 
-// --- Action: Internal Request Transcription Segment ---
-const internalRequestTranscriptionSegmentSchema = z
-  .object({
-    videoId: z.string().uuid(),
-    startTime: z.number().min(0),
-    endTime: z
-      .number()
-      .min(0)
-      .refine((val) => val > 0, { message: "End time must be greater than 0" }),
-  })
-  .refine((data) => data.endTime > data.startTime, {
-    message: "End time must be greater than start time",
-    path: ["endTime"],
-  });
+// --- Action: Internal Request FULL Transcription ---
+const internalRequestFullTranscriptionSchema = z.object({
+  videoId: z.string().uuid(),
+  audioStoragePath: z.string().min(1, "Audio storage path cannot be empty"), // Path from download_jobs
+});
 
 // Use publicAction - no user context needed
-export const internalRequestTranscriptionSegment = publicAction
-  .schema(internalRequestTranscriptionSegmentSchema)
+export const internalRequestFullTranscription = publicAction
+  .schema(internalRequestFullTranscriptionSchema)
   .action(
     async ({ parsedInput }): Promise<ActionResponse<{ success: boolean }>> => {
-      // No ctx needed
-      const { videoId, startTime, endTime } = parsedInput;
+      const { videoId, audioStoragePath } = parsedInput;
       const supabase = supabaseServiceRoleClient; // Use service role client directly
 
       console.log(
-        `INTERNAL ACTION: Requesting transcription segment for video ${videoId} from ${startTime} to ${endTime}`
+        `INTERNAL ACTION: Requesting FULL transcription for video ${videoId} using audio path: ${audioStoragePath}`
       );
 
       try {
+        // 1. Fetch Video Duration
         console.log(
-          `InternalRequestSegment: Checking for existing segment: Video=${videoId}, Start=${startTime}, End=${endTime}`
+          `RequestFullTranscription: Fetching duration for video ${videoId}`
         );
-        // 1. Check if segment already exists/processing
-        const { data: existingSegment, error: checkError } = await supabase
-          .from("transcription_segments")
-          .select("id, status")
-          .eq("video_id", videoId)
-          .eq("start_time", startTime)
-          .eq("end_time", endTime)
-          .maybeSingle();
+        const { data: videoData, error: videoError } = await supabase
+          .from("videos")
+          .select("duration")
+          .eq("id", videoId)
+          .single();
+
+        if (videoError)
+          throw new AppError(
+            AppErrorCode.DATABASE_ERROR,
+            `DB error fetching video ${videoId}: ${videoError.message}`
+          );
+        if (
+          !videoData ||
+          typeof videoData.duration !== "number" ||
+          videoData.duration <= 0
+        )
+          throw new AppError(
+            AppErrorCode.RECORD_NOT_FOUND,
+            `Video ${videoId} not found or duration is invalid (${videoData?.duration}).`
+          );
+
+        const videoDuration = videoData.duration;
+        console.log(
+          `RequestFullTranscription: Video duration: ${videoDuration}`
+        );
+
+        // 2. Check if transcription already exists/processing for this video
+        console.log(
+          `RequestFullTranscription: Checking for existing transcription record: Video=${videoId}`
+        );
+        const { data: existingTranscription, error: checkError } =
+          await supabase
+            .from("transcription_segments") // Still using this table name
+            .select("id, status")
+            .eq("video_id", videoId) // Check only by video_id
+            .maybeSingle();
 
         if (checkError) {
           throw new AppError(
             AppErrorCode.DATABASE_ERROR,
-            `DB error checking segment: ${checkError.message}`
+            `DB error checking transcription: ${checkError.message}`
           );
         }
 
-        let dbSegmentId: string | undefined; // Use undefined initially
+        let dbSegmentId: string | undefined; // ID of the single transcription row
         let shouldProceed = true;
 
-        if (existingSegment) {
+        if (existingTranscription) {
           if (
-            existingSegment.status === "completed" ||
-            existingSegment.status === "processing"
+            existingTranscription.status === "completed" ||
+            existingTranscription.status === "processing"
           ) {
             console.log(
-              `InternalRequestSegment: Found existing segment for ${videoId} (${startTime}-${endTime}). Status: ${existingSegment.status}. Skipping.`
+              `RequestFullTranscription: Found existing transcription for ${videoId}. Status: ${existingTranscription.status}. Skipping.`
             );
             shouldProceed = false;
           } else {
             console.log(
-              `InternalRequestSegment: Found existing segment for ${videoId} (${startTime}-${endTime}) with status '${existingSegment.status}'. Proceeding to update and start Replicate job.`
+              `RequestFullTranscription: Found existing transcription for ${videoId} with status '${existingTranscription.status}'. Proceeding to update and start Replicate job.`
             );
-            dbSegmentId = existingSegment.id;
+            dbSegmentId = existingTranscription.id;
           }
         }
 
@@ -221,150 +147,150 @@ export const internalRequestTranscriptionSegment = publicAction
           return { success: true, data: { success: true } };
         }
 
-        // 2. Get audio segment path from microservice
+        // 3. Get signed URL for the FULL audio
+        // ASSUMPTION: audioStoragePath is the path within the 'youtube-audio' bucket
+        const fullAudioBucket = "youtube-audio";
         console.log(
-          `InternalRequestSegment: Calling getAudioSegmentPath for video ${videoId} (${startTime}-${endTime})`
-        );
-        const segmentStoragePath = await getAudioSegmentPath(
-          videoId,
-          startTime,
-          endTime
-        );
-        console.log(
-          `InternalRequestSegment: Received segmentStoragePath: ${segmentStoragePath}`
-        );
-
-        // 3. Get signed URL for the segment
-        console.log(
-          `InternalRequestSegment: Getting signed URL for path: ${segmentStoragePath}`
+          `RequestFullTranscription: Getting signed URL for path: ${audioStoragePath} in bucket ${fullAudioBucket}`
         );
         const { data: urlData, error: urlError } = await supabase.storage
-          .from("transcription-segments")
-          .createSignedUrl(segmentStoragePath, 60 * 5);
+          .from(fullAudioBucket)
+          .createSignedUrl(audioStoragePath, 60 * 15); // Increased expiry to 15 mins for potentially large files
 
         if (urlError)
           throw new AppError(
             AppErrorCode.SUPABASE_STORAGE_ERROR,
-            `Failed to get signed URL: ${urlError.message}`
+            `Failed to get signed URL for ${audioStoragePath}: ${urlError.message}`
           );
         if (!urlData?.signedUrl)
           throw new AppError(
             AppErrorCode.SUPABASE_STORAGE_ERROR,
             "Signed URL creation returned no URL."
           );
-        const segmentSignedUrl = urlData.signedUrl;
+        const fullAudioSignedUrl = urlData.signedUrl;
         console.log(
-          `InternalRequestSegment: Got signed URL: ${segmentSignedUrl.substring(
+          `RequestFullTranscription: Got signed URL: ${fullAudioSignedUrl.substring(
             0,
             100
           )}...`
         );
 
-        // 4. Insert or identify existing segment ID
+        // 4. Insert or identify existing transcription row ID
+        const transcriptionStartTime = 0;
+        const transcriptionEndTime = videoDuration;
+
         console.log(
-          `InternalRequestSegment: Ensuring DB record exists for segment ${videoId} (${startTime}-${endTime})`
+          `RequestFullTranscription: Ensuring DB record exists for transcription ${videoId} (${transcriptionStartTime}-${transcriptionEndTime})`
         );
 
         if (!dbSegmentId) {
+          // Insert new row
+          console.log(
+            `RequestFullTranscription: Inserting new transcription row for video ${videoId}`
+          );
           const { data: dbSegment, error: insertError } = await supabase
             .from("transcription_segments")
             .insert({
               video_id: videoId,
-              start_time: startTime,
-              end_time: endTime,
+              start_time: transcriptionStartTime,
+              end_time: transcriptionEndTime,
               status: "pending",
-              segment_storage_path: segmentStoragePath,
             })
             .select("id")
             .single();
 
           if (insertError && insertError.code === "23505") {
+            // 23505 = unique_violation
             console.warn(
-              `Race condition inserting segment ${videoId} (${startTime}-${endTime}). Fetching existing ID.`
+              `Race condition inserting transcription row for ${videoId}. Fetching existing ID.`
             );
             const { data: raceSegment, error: raceError } = await supabase
               .from("transcription_segments")
               .select("id")
-              .eq("video_id", videoId)
-              .eq("start_time", startTime)
-              .eq("end_time", endTime)
+              .eq("video_id", videoId) // Fetch by video_id
               .single();
             if (raceError || !raceSegment) {
               throw new AppError(
                 AppErrorCode.DATABASE_ERROR,
-                `Failed to fetch segment after insert race condition: ${
+                `Failed to fetch transcription row after insert race condition: ${
                   raceError?.message || "Not Found"
                 }`
               );
             }
             dbSegmentId = raceSegment.id;
+            console.log(
+              `RequestFullTranscription: Found existing ID after race: ${dbSegmentId}`
+            );
           } else if (insertError) {
             throw new AppError(
               AppErrorCode.DATABASE_ERROR,
-              `DB error inserting segment: ${insertError.message}`
+              `DB error inserting transcription row: ${insertError.message}`
             );
           } else if (!dbSegment) {
             throw new AppError(
               AppErrorCode.DATABASE_ERROR,
-              "Failed to insert segment record or get ID."
+              "Failed to insert transcription row or get ID."
             );
           } else {
             dbSegmentId = dbSegment.id;
+            console.log(
+              `RequestFullTranscription: Inserted new transcription row with ID: ${dbSegmentId}`
+            );
           }
-          console.log(
-            `InternalRequestSegment: Inserted/Confirmed DB segment record with ID: ${dbSegmentId}`
-          );
         } else {
           console.log(
-            `InternalRequestSegment: Using existing DB segment record with ID: ${dbSegmentId}`
+            `RequestFullTranscription: Using existing transcription row with ID: ${dbSegmentId}`
           );
         }
 
-        // 5. Start Replicate Transcription
+        // 5. Start Replicate Transcription for the full audio
         console.log(
-          `InternalRequestSegment: Attempting to start Replicate transcription for segment ${dbSegmentId} using URL starting with: ${segmentSignedUrl.substring(
+          `RequestFullTranscription: Attempting to start Replicate transcription for row ${dbSegmentId} using full audio URL: ${fullAudioSignedUrl.substring(
             0,
             100
           )}...`
         );
         const replicatePredictionId = await startReplicateTranscription(
-          segmentSignedUrl
+          fullAudioSignedUrl
         );
         console.log(
-          `InternalRequestSegment: Successfully started Replicate. Received Prediction ID: ${replicatePredictionId} for DB segment ${dbSegmentId}`
+          `RequestFullTranscription: Successfully started Replicate. Received Prediction ID: ${replicatePredictionId} for DB row ${dbSegmentId}`
         );
 
         // 6. Update DB record with Replicate ID (processing)
         console.log(
-          `InternalRequestSegment: Updating DB segment ${dbSegmentId} with Replicate ID ${replicatePredictionId}, segment path, and status 'processing'`
+          `RequestFullTranscription: Updating DB row ${dbSegmentId} with Replicate ID ${replicatePredictionId} and status 'processing'`
         );
         const { error: updateError } = await supabase
           .from("transcription_segments")
           .update({
             replicate_prediction_id: replicatePredictionId,
             status: "processing",
-            segment_storage_path: segmentStoragePath, // Update path in case it changed
+            start_time: transcriptionStartTime, // Ensure times are updated too
+            end_time: transcriptionEndTime,
+            error_message: null, // Clear any previous error
           })
           .eq("id", dbSegmentId!); // Use the determined segment ID
 
         if (updateError) {
           console.error(
-            `Failed to update segment ${dbSegmentId} with Replicate ID ${replicatePredictionId}:`,
+            `Failed to update transcription row ${dbSegmentId} with Replicate ID ${replicatePredictionId}:`,
             updateError.message
           );
+          // Attempt to cancel Replicate job? Difficult. Log and maybe mark as failed later?
           throw new AppError(
             AppErrorCode.DATABASE_ERROR,
-            `Failed to update segment status after starting Replicate: ${updateError.message}`
+            `Failed to update transcription status after starting Replicate: ${updateError.message}`
           );
         }
 
         console.log(
-          `InternalRequestSegment: Successfully updated/initiated segment ${dbSegmentId} for ${videoId} (${startTime}-${endTime}), Replicate ID: ${replicatePredictionId}`
+          `RequestFullTranscription: Successfully updated/initiated transcription row ${dbSegmentId} for ${videoId}, Replicate ID: ${replicatePredictionId}`
         );
         return { success: true, data: { success: true } };
       } catch (error: unknown) {
         console.error(
-          `InternalRequestSegment: Error caught in main try block:`,
+          `RequestFullTranscription: Error caught requesting full transcription for video ${videoId}:`,
           error
         );
         const appErr =
@@ -374,10 +300,10 @@ export const internalRequestTranscriptionSegment = publicAction
                 AppErrorCode.UNEXPECTED_ERROR,
                 error instanceof Error
                   ? error.message
-                  : "Unknown error in internalRequestTranscriptionSegment"
+                  : "Unknown error in internalRequestFullTranscription"
               );
         console.error(
-          `InternalRequestSegment: Returning failure response with error:`,
+          `RequestFullTranscription: Returning failure response with error:`,
           JSON.stringify(appErr, null, 2)
         );
         return { success: false, error: appErr };
@@ -385,41 +311,39 @@ export const internalRequestTranscriptionSegment = publicAction
     }
   );
 
-// --- Action: Internal Translate Segment Content ---
-const internalTranslateSegmentContentSchema = z.object({
-  segmentId: z.string().uuid(),
+// --- Action: Internal Translate Full Segment Content --- // Renamed Action
+const internalTranslateFullContentSchema = z.object({
+  segmentId: z.string().uuid(), // ID of the single transcription_segments row
   targetLanguage: z.string().length(2), // ISO 639-1 code
 });
 
-export const internalTranslateSegmentContent = publicAction
-  .schema(internalTranslateSegmentContentSchema)
+export const internalTranslateFullContent = publicAction // Renamed export
+  .schema(internalTranslateFullContentSchema)
   .action(async ({ parsedInput }): Promise<ActionResponse<null>> => {
-    // No ctx needed
     const { segmentId, targetLanguage } = parsedInput;
     const supabase = supabaseServiceRoleClient;
 
     console.log(
-      `INTERNAL ACTION: Translating segment ${segmentId} to language: ${targetLanguage}`
+      `INTERNAL ACTION: Translating FULL content for segment row ${segmentId} to language: ${targetLanguage}`
     );
 
     try {
-      // 1. Fetch the segment data
+      // 1. Fetch the transcription data (single row)
+      console.log(
+        `TranslateFullContent: Fetching transcription row ${segmentId}`
+      );
       const { data: segmentDataUntyped, error: fetchError } = await supabase
         .from("transcription_segments")
         .select("id, content, translations") // Fetch content and existing translations
         .eq("id", segmentId)
-        .single();
+        .single(); // Expect exactly one row
 
       if (fetchError)
         throw new AppError(
           AppErrorCode.DATABASE_ERROR,
-          `DB error fetching segment ${segmentId}: ${fetchError.message}`
+          `DB error fetching transcription row ${segmentId}: ${fetchError.message}`
         );
-      if (!segmentDataUntyped)
-        throw new AppError(
-          AppErrorCode.RECORD_NOT_FOUND,
-          `Segment ${segmentId} not found.`
-        );
+      // No need to check for null, single() throws if not found
 
       const segmentData = segmentDataUntyped as any; // Use 'as any' for simplicity
       const existingTranslations = (segmentData.translations ?? {}) as Record<
@@ -427,19 +351,23 @@ export const internalTranslateSegmentContent = publicAction
         ReplicateSegmentOutput
       >;
 
-      // Check if translation already exists
-      if (existingTranslations[targetLanguage]) {
+      // Check if translation already exists and is valid
+      if (
+        existingTranslations[targetLanguage] &&
+        Array.isArray(existingTranslations[targetLanguage]?.segments) &&
+        existingTranslations[targetLanguage].segments.length > 0
+      ) {
         console.log(
-          `>>> internalTranslateSegmentContent: Translation for ${targetLanguage} already exists for segment ${segmentId}. Skipping.`
+          `>>> TranslateFullContent: Translation for ${targetLanguage} already exists and seems valid for row ${segmentId}. Skipping.`
         );
         return { success: true, data: null };
       }
 
       console.log(
-        `>>> internalTranslateSegmentContent: Translation for ${targetLanguage} not found for segment ${segmentId}. Proceeding.`
+        `>>> TranslateFullContent: Translation for ${targetLanguage} not found or invalid for row ${segmentId}. Proceeding.`
       );
 
-      // 2. Validate content
+      // 2. Validate content structure
       let originalContent: ReplicateSegmentOutput | null = null;
       if (
         segmentData.content &&
@@ -452,14 +380,16 @@ export const internalTranslateSegmentContent = publicAction
       } else {
         throw new AppError(
           AppErrorCode.INVALID_INPUT,
-          `Segment ${segmentId} has invalid 'content' structure for translation.`
+          `Transcription row ${segmentId} has invalid 'content' structure for translation.`
         );
       }
 
       if (!originalContent?.segments || originalContent.segments.length === 0) {
         console.log(
-          `Segment ${segmentId} content is empty, skipping translation.`
+          `Transcription row ${segmentId} content is empty, skipping translation.`
         );
+        // Update translations field with empty object for this language? Or just succeed?
+        // Let's just succeed for now.
         return { success: true, data: null }; // Nothing to translate
       }
 
@@ -474,22 +404,46 @@ export const internalTranslateSegmentContent = publicAction
 
       if (sourceLangCode === targetLanguage) {
         console.log(
-          `Source and target language (${targetLanguage}) are the same for segment ${segmentId}. Skipping translation call.`
+          `Source and target language (${targetLanguage}) are the same for row ${segmentId}. Skipping translation call.`
         );
-        // Store original as 'translation' if needed, or just return success
+        // Store original as 'translation' if needed? For consistency, let's do it.
+        const updatedTranslations = {
+          ...existingTranslations,
+          [targetLanguage]: originalContent, // Store original content under the target language key
+        };
+        const { error: updateError } = await supabase
+          .from("transcription_segments")
+          .update({ translations: updatedTranslations } as any)
+          .eq("id", segmentId);
+        if (updateError) {
+          console.error(
+            `TranslateFullContent: DB Error storing original content as translation for ${segmentId}:`,
+            updateError
+          );
+          // Don't fail the whole action, just log it?
+        }
         return { success: true, data: null };
       }
 
+      // Format the *entire* transcription for translation
       const textToTranslate = formatTranscriptionForTranslation(
         originalContent.segments
       );
       if (!textToTranslate) {
-        console.log(`No text found to translate in segment ${segmentId}.`);
+        console.log(
+          `No text found to translate in transcription row ${segmentId}.`
+        );
         return { success: true, data: null };
       }
 
       console.log(
-        `Calling Translation Service (Gemini) to translate segment ${segmentId} to ${targetLangName}`
+        `Calling Translation Service (Gemini) to translate content from row ${segmentId} to ${targetLangName}`
+      );
+      console.log(
+        `Text to translate (first 100 chars): "${textToTranslate.substring(
+          0,
+          100
+        )}..."`
       );
 
       // 4. Call Translation Service
@@ -504,22 +458,28 @@ export const internalTranslateSegmentContent = publicAction
           "Translation service returned empty response."
         );
       }
+      console.log(
+        `Received translation (first 100 chars): "${translatedText.substring(
+          0,
+          100
+        )}..."`
+      );
 
       // 5. Parse Translation Response
       const parsedSegments = parseTranslationResponse(
         translatedText,
-        originalContent.segments
+        originalContent.segments // Pass original segments for timing alignment
       );
-      if (!parsedSegments) {
+      if (!parsedSegments || parsedSegments.length === 0) {
         throw new AppError(
           AppErrorCode.SERVICE_ERROR,
-          `Failed to parse translation response for segment ${segmentId}.`
+          `Failed to parse translation response or got empty segments for row ${segmentId}.`
         );
       }
 
       const translatedContent: ReplicateSegmentOutput = {
         segments: parsedSegments,
-        // Optional: detected_language: targetLanguage
+        detected_language: targetLanguage, // Set detected language to the target
       };
 
       // 6. Update Database
@@ -529,34 +489,34 @@ export const internalTranslateSegmentContent = publicAction
       };
 
       console.log(
-        `>>> internalTranslateSegmentContent: Updating DB for segment ${segmentId} with translations for language ${targetLanguage}`
+        `>>> TranslateFullContent: Updating DB for row ${segmentId} with FULL translation for language ${targetLanguage}`
       );
       const { error: updateError } = await supabase
         .from("transcription_segments")
-        .update({ translations: updatedTranslations } as any)
+        .update({ translations: updatedTranslations } as any) // Cast needed for JSONB update
         .eq("id", segmentId);
 
       if (updateError) {
         console.error(
-          `>>> internalTranslateSegmentContent: DB Update Error for segment ${segmentId}:`,
+          `>>> TranslateFullContent: DB Update Error for row ${segmentId}:`,
           updateError
         );
         throw new AppError(
           AppErrorCode.DATABASE_ERROR,
-          `DB error updating translations for segment ${segmentId}: ${updateError.message}`
+          `DB error updating translations for row ${segmentId}: ${updateError.message}`
         );
       }
 
       console.log(
-        `>>> internalTranslateSegmentContent: DB Update successful for segment ${segmentId}.`
+        `>>> TranslateFullContent: DB Update successful for row ${segmentId}.`
       );
       console.log(
-        `INTERNAL ACTION: Successfully translated and stored ${targetLanguage} for segment ${segmentId}.`
+        `INTERNAL ACTION: Successfully translated and stored FULL ${targetLanguage} content for row ${segmentId}.`
       );
       return { success: true, data: null };
     } catch (error: unknown) {
       console.error(
-        `INTERNAL ACTION: Error translating segment ${segmentId} to ${targetLanguage}:`,
+        `INTERNAL ACTION: Error translating full content for row ${segmentId} to ${targetLanguage}:`,
         error
       );
       const appErr =
@@ -566,7 +526,7 @@ export const internalTranslateSegmentContent = publicAction
               AppErrorCode.UNEXPECTED_ERROR,
               error instanceof Error
                 ? error.message
-                : "Unknown error in internalTranslateSegmentContent"
+                : "Unknown error in internalTranslateFullContent" // Updated name
             );
       return { success: false, error: appErr };
     }
@@ -578,8 +538,8 @@ const internalGenerateAudioChunkSchema = z
     videoId: z.string().uuid(),
     language: z.string(),
     voice: z.string(),
-    startTime: z.number().min(0),
-    endTime: z.number().min(0),
+    startTime: z.number().min(0), // Start time of the specific sub-segment
+    endTime: z.number().min(0), // End time of the specific sub-segment
   })
   .refine((data) => data.endTime > data.startTime, {
     message: "End time must be greater than start time",
@@ -592,8 +552,6 @@ export const internalGenerateAudioChunk = publicAction
     async ({
       parsedInput,
     }): Promise<ActionResponse<{ storagePath: string }>> => {
-      // No ctx needed
-      // Changed return type to storagePath as signedURL is short-lived and generated later
       const { videoId, language, voice, startTime, endTime } = parsedInput;
       const supabase = supabaseServiceRoleClient;
 
@@ -602,14 +560,12 @@ export const internalGenerateAudioChunk = publicAction
       let googleVoiceName: string | undefined;
       let openaiVoiceName: string | undefined;
 
-      // --- Revised TTS Provider Selection Logic ---
-      // 1. Check if it's a known OpenAI voice first
+      // --- TTS Provider Selection Logic (Unchanged) ---
       if (config.openai.voices.includes(voice)) {
         ttsProvider = "openai";
         openaiVoiceName = voice;
         console.log(`Using OpenAI TTS based on voice: ${openaiVoiceName}`);
       } else {
-        // 2. If not OpenAI, check if Google supports the language
         const targetGoogleLangCode = config.google.simpleToGoogleMap[language];
         if (
           targetGoogleLangCode &&
@@ -619,8 +575,6 @@ export const internalGenerateAudioChunk = publicAction
           googleLangCode = targetGoogleLangCode;
           const validGoogleVoices =
             config.google.languages[googleLangCode].voices;
-
-          // 3. Validate the voice against Google's voices for that language
           if (!validGoogleVoices.some((v) => v.id === voice)) {
             return {
               success: false,
@@ -637,7 +591,6 @@ export const internalGenerateAudioChunk = publicAction
             `Using Google TTS for language: ${language} (${googleLangCode}), voice: ${googleVoiceName}`
           );
         } else {
-          // 4. Neither OpenAI voice nor Google supported language/voice combo
           return {
             success: false,
             error: new AppError(
@@ -647,14 +600,14 @@ export const internalGenerateAudioChunk = publicAction
           };
         }
       }
-      // --- End Revised Logic ---
+      // --- End TTS Provider Selection ---
 
       console.log(
-        `INTERNAL ACTION: Generating audio chunk for: ${videoId}, Lang: ${language}, Voice: ${voice}, Time: ${startTime}-${endTime} using ${ttsProvider}`
+        `INTERNAL ACTION: Generating audio chunk for SUB-SEGMENT: ${videoId}, Lang: ${language}, Voice: ${voice}, Time: ${startTime}-${endTime} using ${ttsProvider}`
       );
 
       try {
-        // 2. Check if exact chunk already exists
+        // 2. Check if exact chunk already exists (Unchanged)
         const { data: existingChunk, error: checkError } = await supabase
           .from("translated_audio_chunks")
           .select("storage_path")
@@ -676,84 +629,107 @@ export const internalGenerateAudioChunk = publicAction
         )?.storage_path;
         if (existingPath) {
           console.log(
-            `INTERNAL ACTION: Audio chunk already exists at ${existingPath}. Skipping generation.`
+            `INTERNAL ACTION: Audio chunk ${startTime}-${endTime} already exists at ${existingPath}. Skipping generation.`
           );
-          // Return the existing storage path instead of generating a signed URL
           return { success: true, data: { storagePath: existingPath } };
         }
 
-        // 3. Fetch relevant COMPLETED transcription segments
-        const { data: segmentsDataUntyped, error: segmentsError } =
+        // 3. Fetch the SINGLE transcription row for the video
+        console.log(
+          `GenerateChunk: Fetching transcription row for video ${videoId}`
+        );
+        const { data: transcriptionDataUntyped, error: transcriptionError } =
           await supabase
             .from("transcription_segments")
-            .select("id, start_time, end_time, content, translations")
+            .select("id, content, translations") // Select needed fields
             .eq("video_id", videoId)
-            .eq("status", "completed")
-            .lte("start_time", endTime) // Segment starts before or at chunk end
-            .gte("end_time", startTime) // Segment ends after or at chunk start
-            .order("start_time", { ascending: true });
+            .eq("status", "completed") // Ensure transcription is complete
+            .single(); // Expect exactly one row
 
-        if (segmentsError)
+        if (transcriptionError)
           throw new AppError(
             AppErrorCode.DATABASE_ERROR,
-            `DB error fetching segments: ${segmentsError.message}`
+            `DB error fetching transcription for chunk gen: ${transcriptionError.message}`
           );
+        // No need to check for null, single() throws if not found
 
-        const segmentsData = segmentsDataUntyped as any[] | null;
+        const transcriptionData = transcriptionDataUntyped as any; // Use 'as any' for simplicity
 
-        if (!segmentsData || segmentsData.length === 0) {
-          throw new AppError(
-            AppErrorCode.DEPENDENCY_NOT_READY,
-            `Completed transcription/translation not available for ${videoId}, time ${startTime}-${endTime}.`
-          );
+        // 4. Extract Text for the Specific SUB-SEGMENT Time Range & Language
+        let textToSynthesize = "";
+        let sourceSegments:
+          | ReplicateSegmentOutput["segments"]
+          | undefined
+          | null = null;
+
+        if (language === "en") {
+          const originalContent =
+            transcriptionData.content as ReplicateSegmentOutput | null;
+          sourceSegments = originalContent?.segments;
+          if (!sourceSegments) {
+            throw new AppError(
+              AppErrorCode.DEPENDENCY_NOT_READY,
+              `Original transcription content missing or invalid for ${videoId} (EN).`
+            );
+          }
+        } else {
+          const translatedContent = transcriptionData.translations?.[
+            language
+          ] as ReplicateSegmentOutput | null;
+          sourceSegments = translatedContent?.segments;
+          if (!sourceSegments) {
+            throw new AppError(
+              AppErrorCode.DEPENDENCY_NOT_READY,
+              `Translation '${language}' not found or invalid for ${videoId}.`
+            );
+          }
         }
 
-        // 4. Extract Text for the Specific Time Range & Language
-        let textToSynthesize = "";
-        if (language === "en") {
-          const originalContents = segmentsData
-            .map((s) => s.content as ReplicateSegmentOutput | null)
-            .filter((c) => c !== null);
-          if (originalContents.length === 0) {
-            throw new AppError(
-              AppErrorCode.DEPENDENCY_NOT_READY,
-              `Original transcription content missing for ${videoId}, time ${startTime}-${endTime} (EN).`
-            );
-          }
-          textToSynthesize = extractTextFromSegments(
-            originalContents,
-            startTime,
-            endTime
-          );
+        // Find the specific sub-segment text matching startTime and endTime
+        const targetSegment = sourceSegments.find(
+          (s) =>
+            s.start !== undefined &&
+            Math.abs(s.start - startTime) < 0.01 && // Allow minor float differences
+            s.end !== undefined &&
+            Math.abs(s.end - endTime) < 0.01
+        );
+
+        if (targetSegment?.text) {
+          textToSynthesize = targetSegment.text.trim();
         } else {
-          const translatedContents = segmentsData
-            .map(
-              (s) => s.translations?.[language] as ReplicateSegmentOutput | null
-            )
-            .filter((t) => t !== null);
-          if (translatedContents.length === 0) {
-            throw new AppError(
-              AppErrorCode.DEPENDENCY_NOT_READY,
-              `Translation '${language}' not found for ${videoId}, time ${startTime}-${endTime}.`
-            );
-          }
+          console.warn(
+            `INTERNAL ACTION: Could not find exact sub-segment text for ${language}, ${startTime}-${endTime} in video ${videoId}. Attempting range extraction as fallback.`
+          );
+          // Fallback: Use the range extraction (might concatenate parts of adjacent segments)
+          // This helper needs the full ReplicateSegmentOutput structure, not just the segments array.
+          // Reconstruct the minimum needed structure for the helper.
+          const reconstructOutput: ReplicateSegmentOutput = {
+            segments: sourceSegments,
+          };
           textToSynthesize = extractTextFromSegments(
-            translatedContents,
+            [reconstructOutput],
             startTime,
             endTime
           );
         }
 
         if (!textToSynthesize.trim()) {
-          // Create a silent/empty chunk instead of throwing an error?
-          // For now, treat as error to investigate why text is missing.
           console.warn(
-            `INTERNAL ACTION: No text found for TTS in ${language} for ${videoId} (${startTime}-${endTime}). Segments fetched: ${segmentsData.length}`
+            `INTERNAL ACTION: No text found for TTS in ${language} for ${videoId} (${startTime}-${endTime}). Creating SILENT chunk.`
           );
-          throw new AppError(
-            AppErrorCode.INVALID_INPUT, // Or a more specific code? RECORD_NOT_FOUND?
-            `No text found for the time range ${startTime}-${endTime} in ${language}.`
-          );
+          // Instead of error, generate a silent chunk? This requires a silent audio file.
+          // For now, let's skip generating a chunk and return success, assuming the calling function handles gaps.
+          // Alternative: Throw error as before if silence is not desired.
+          return {
+            success: true,
+            // Indicate skipped generation? Need to adjust return type.
+            // For now, return a fake path or handle upstream. Let's return success with empty path.
+            data: { storagePath: "" }, // Caller must check for empty path
+          };
+          // throw new AppError(
+          //   AppErrorCode.INVALID_INPUT,
+          //   `No text found for the time range ${startTime}-${endTime} in ${language}.`
+          // );
         }
 
         console.log(
@@ -763,7 +739,7 @@ export const internalGenerateAudioChunk = publicAction
           )}..."`
         );
 
-        // 5. Call appropriate TTS function
+        // 5. Call appropriate TTS function (Unchanged)
         let ttsResult: { audioBuffer: Buffer; storagePath: string };
         if (ttsProvider === "google") {
           ttsResult = await generateGoogleTts({
@@ -787,7 +763,7 @@ export const internalGenerateAudioChunk = publicAction
 
         const { audioBuffer, storagePath: chunkStoragePath } = ttsResult;
 
-        // 6. Upload TTS chunk
+        // 6. Upload TTS chunk (Unchanged)
         console.log(
           `INTERNAL ACTION: Uploading TTS chunk to: ${chunkStoragePath}`
         );
@@ -807,7 +783,7 @@ export const internalGenerateAudioChunk = publicAction
           `INTERNAL ACTION: TTS chunk uploaded to: ${chunkStoragePath}`
         );
 
-        // 7. Insert record into translated_audio_chunks
+        // 7. Insert record into translated_audio_chunks (Unchanged)
         const { error: dbInsertError } = await supabase
           .from("translated_audio_chunks")
           .insert({
@@ -824,20 +800,23 @@ export const internalGenerateAudioChunk = publicAction
             "INTERNAL ACTION: DB Error inserting translated chunk record:",
             dbInsertError.message
           );
-          // Don't throw, log and continue
+          // Don't throw, log and continue? Or should upload be reverted?
         } else if (dbInsertError?.code === "23505") {
           console.warn(
             `INTERNAL ACTION: Race condition: translated_audio_chunk for ${chunkStoragePath} inserted concurrently.`
           );
         }
 
-        // 8. Return the storage path
+        // 8. Return the storage path (Unchanged)
         console.log(
           `INTERNAL ACTION: Returning chunk storage path: ${chunkStoragePath}`
         );
         return { success: true, data: { storagePath: chunkStoragePath } };
       } catch (error: unknown) {
-        console.error("INTERNAL ACTION: Error generating audio chunk:", error);
+        console.error(
+          `INTERNAL ACTION: Error generating audio chunk ${startTime}-${endTime}:`,
+          error
+        );
         const appErr =
           error instanceof AppError
             ? error
@@ -847,9 +826,9 @@ export const internalGenerateAudioChunk = publicAction
                   ? error.message
                   : "Unknown error in internalGenerateAudioChunk"
               );
+        // Consider how failures here should update processing_status
+        // For now, return error to the calling Supabase function
         return { success: false, error: appErr };
       }
     }
   );
-
-// TODO: Refactor common helper functions (e.g., extractTextFromSegments) if needed

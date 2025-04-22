@@ -293,24 +293,28 @@ ALTER TABLE "public"."profiles" OWNER TO "postgres";
 CREATE TABLE IF NOT EXISTS "public"."transcription_segments" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "video_id" "uuid" NOT NULL,
-    "start_time" double precision NOT NULL,
-    "end_time" double precision NOT NULL,
-    "status" "public"."job_status" DEFAULT 'pending'::"public"."job_status" NOT NULL,
-    "content" "jsonb",
-    "replicate_prediction_id" "text",
-    "segment_storage_path" "text",
+    "start_time" double precision NOT NULL, -- Represents start of full video (0)
+    "end_time" double precision NOT NULL, -- Represents end of full video (duration)
+    "status" "public"."job_status" DEFAULT 'pending'::"public"."job_status" NOT NULL, -- Status of full transcription
+    "content" "jsonb", -- Full transcription output
+    "replicate_prediction_id" "text", -- Replicate ID for the full transcription job
     "error_message" "text",
     "completed_at" timestamp with time zone,
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    "translations" "jsonb"
+    "translations" "jsonb" -- Stores full translations keyed by lang code
 );
 
 
 ALTER TABLE "public"."transcription_segments" OWNER TO "postgres";
 
 
-COMMENT ON COLUMN "public"."transcription_segments"."translations" IS 'Stores translations keyed by language code, e.g., {"ru": {"segments": [...]}}';
+COMMENT ON COLUMN "public"."transcription_segments"."start_time" IS 'Start time of the transcribed section (usually 0 for full transcription).';
+COMMENT ON COLUMN "public"."transcription_segments"."end_time" IS 'End time of the transcribed section (usually video duration for full transcription).';
+COMMENT ON COLUMN "public"."transcription_segments"."status" IS 'Status of the full transcription job.';
+COMMENT ON COLUMN "public"."transcription_segments"."content" IS 'Stores the full transcription output (e.g., from Replicate).';
+COMMENT ON COLUMN "public"."transcription_segments"."replicate_prediction_id" IS 'Stores the prediction ID from the transcription service (e.g., Replicate) for the full audio.';
+COMMENT ON COLUMN "public"."transcription_segments"."translations" IS 'Stores full translations keyed by language code, e.g., {"ru": {"segments": [...]}}';
 
 
 
@@ -394,7 +398,12 @@ ALTER TABLE ONLY "public"."transcription_segments"
 
 
 ALTER TABLE ONLY "public"."transcription_segments"
-    ADD CONSTRAINT "transcription_segments_video_id_start_time_end_time_key" UNIQUE ("video_id", "start_time", "end_time");
+    DROP CONSTRAINT IF EXISTS "transcription_segments_video_id_start_time_end_time_key";
+
+
+
+ALTER TABLE ONLY "public"."transcription_segments"
+    ADD CONSTRAINT "transcription_segments_video_id_key" UNIQUE ("video_id");
 
 
 
@@ -427,7 +436,7 @@ CREATE INDEX "idx_transcription_segments_replicate_id" ON "public"."transcriptio
 
 
 
-CREATE INDEX "idx_transcription_segments_video_time" ON "public"."transcription_segments" USING "btree" ("video_id", "start_time");
+DROP INDEX IF EXISTS "public"."idx_transcription_segments_video_time";
 
 
 
@@ -1019,14 +1028,13 @@ AFTER UPDATE ON public.transcription_segments
 FOR EACH ROW
 -- Only run if the status is updated TO 'completed' FROM a different status
 WHEN (
-  NEW.status = 'completed'::public.job_status -- Adjust or remove cast if needed
-  AND OLD.status <> 'completed'::public.job_status -- Adjust or remove cast if needed
+  NEW.status = 'completed'::public.job_status AND OLD.status <> 'completed'::public.job_status
 )
 -- Execute the http_request function to call the Edge Function
 EXECUTE FUNCTION supabase_functions.http_request(
-    'https://zzsjgheaghjdjqaupbxa.supabase.co/functions/v1/on-transcription-complete', -- Function URL
+    '{{ NEXT_PUBLIC_SUPABASE_FUNCTION_URL }}/on-transcription-complete', -- Use placeholder
     'POST',
-    '{"Content-Type": "application/json", "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp6c2pnaGVhZ2hqZGpxYXVwYnhhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjU2NDIxNiwiZXhwIjoyMDU4MTQwMjE2fQ.lTiP5rOWppot7H95frtD4KHfMIyUgEOdki6854pGVSY"}', -- Headers (WARNING: HARDCODED SECRET)
+    '{"Content-Type": "application/json", "Authorization": "Bearer {{ SUPABASE_SERVICE_ROLE_KEY }}"}', -- Use placeholder
     '{}', -- Body (Function parses the actual payload)
     10000 -- Timeout
 );
@@ -1034,17 +1042,17 @@ EXECUTE FUNCTION supabase_functions.http_request(
 -- Trigger for Transcription Translation Updates
 DROP TRIGGER IF EXISTS trigger_on_transcription_translation_update ON public.transcription_segments;
 
--- Create a NEW trigger specifically for translation updates
-CREATE TRIGGER trigger_on_transcription_translation_update
+-- Recreate trigger for translation updates, calling the NEW on-translation-complete function
+CREATE TRIGGER trigger_on_translation_complete -- Renamed trigger
 AFTER UPDATE ON public.transcription_segments
 FOR EACH ROW
 -- Only run if the translations column actually changed
 WHEN (NEW.translations IS DISTINCT FROM OLD.translations)
--- Execute the same http_request function to call the same Edge Function
+-- Execute the http_request function to call the NEW Edge Function
 EXECUTE FUNCTION supabase_functions.http_request(
-    'https://zzsjgheaghjdjqaupbxa.supabase.co/functions/v1/on-transcription-complete', -- Function URL (Same as before)
+    '{{ NEXT_PUBLIC_SUPABASE_FUNCTION_URL }}/on-translation-complete', -- NEW Function URL placeholder
     'POST',
-    '{"Content-Type": "application/json", "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp6c2pnaGVhZ2hqZGpxYXVwYnhhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjU2NDIxNiwiZXhwIjoyMDU4MTQwMjE2fQ.lTiP5rOWppot7H95frtD4KHfMIyUgEOdki6854pGVSY"}', -- Headers (WARNING: HARDCODED SECRET)
+    '{"Content-Type": "application/json", "Authorization": "Bearer {{ SUPABASE_SERVICE_ROLE_KEY }}"}', -- Use placeholder
     '{}', -- Body (Function parses the actual payload)
     10000 -- Timeout
 );
@@ -1059,9 +1067,9 @@ AFTER INSERT ON public.translated_audio_chunks -- Trigger on INSERT
 FOR EACH ROW                                    -- For every new row
 -- Execute the http_request function to call the Edge Function
 EXECUTE FUNCTION supabase_functions.http_request(
-    'https://zzsjgheaghjdjqaupbxa.supabase.co/functions/v1/on-audio-chunk-complete', -- Function URL
+    '{{ NEXT_PUBLIC_SUPABASE_FUNCTION_URL }}/on-audio-chunk-complete', -- Use placeholder
     'POST',
-    '{"Content-Type": "application/json", "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp6c2pnaGVhZ2hqZGpxYXVwYnhhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjU2NDIxNiwiZXhwIjoyMDU4MTQwMjE2fQ.lTiP5rOWppot7H95frtD4KHfMIyUgEOdki6854pGVSY"}', -- Headers (WARNING: HARDCODED SECRET)
+    '{"Content-Type": "application/json", "Authorization": "Bearer {{ SUPABASE_SERVICE_ROLE_KEY }}"}', -- Use placeholder
     '{}', -- Body (Function parses the actual payload)
     10000 -- Timeout
 );
@@ -1078,9 +1086,9 @@ FOR EACH ROW
 -- Only run if status becomes completed AND storage_path is set
 WHEN (NEW.status = 'completed' AND OLD.status <> 'completed' AND NEW.storage_path IS NOT NULL)
 EXECUTE FUNCTION supabase_functions.http_request(
-    'https://zzsjgheaghjdjqaupbxa.supabase.co/functions/v1/on-download-complete', -- Function URL
+    '{{ NEXT_PUBLIC_SUPABASE_FUNCTION_URL }}/on-download-complete', -- Use placeholder
     'POST',
-    '{"Content-Type": "application/json", "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp6c2pnaGVhZ2hqZGpxYXVwYnhhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjU2NDIxNiwiZXhwIjoyMDU4MTQwMjE2fQ.lTiP5rOWppot7H95frtD4KHfMIyUgEOdki6854pGVSY"}', -- Headers (WARNING: HARDCODED SECRET)
+    '{"Content-Type": "application/json", "Authorization": "Bearer {{ SUPABASE_SERVICE_ROLE_KEY }}"}', -- Use placeholder
     '{}', -- Body (Function parses the actual payload)
     10000 -- Timeout
 );

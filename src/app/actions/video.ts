@@ -914,71 +914,49 @@ export const getCompletedTranscriptionSegments = protectedAction
   .action(
     async ({
       parsedInput,
-      ctx,
-    }): Promise<ActionResponse<CompletedSegmentOutput[]>> => {
+    }): Promise<ActionResponse<CompletedSegmentOutput | null>> => {
       const { videoId } = parsedInput;
       const supabase = supabaseServiceRoleClient;
 
       console.log(
-        `Fetching completed transcription segments for video: ${videoId}`
+        `[Action] Fetching completed transcription for video: ${videoId}`
       );
 
       try {
-        // Use generated types
-        // **MODIFIED**: Added 'id' to select
-        const { data, error } = await supabase
-          .from("transcription_segments") // Use string literal
-          .select("id, start_time, end_time, content, translations") // Added 'id' and 'translations'
+        const { data: segmentData, error } = await supabase
+          .from("transcription_segments")
+          .select("id, start_time, end_time, content, translations, status") // Select needed fields
           .eq("video_id", videoId)
           .eq("status", "completed")
-          .order("start_time", { ascending: true });
+          .maybeSingle(); // Fetch single row
 
         if (error) {
-          throw new AppError(
-            AppErrorCode.DATABASE_ERROR,
-            `DB error fetching segments: ${error.message}`
+          console.error(
+            `[Action] DB Error fetching transcription for ${videoId}:`,
+            error.message
           );
+          throw appErrors.DATABASE_ERROR;
         }
 
-        // Ensure content is cast correctly or handled if null
-        const results: CompletedSegmentOutput[] = (
-          (data as Tables<"transcription_segments">[] | null) || []
-        ).map((segment) => {
-          let contentResult: ReplicateSegmentOutput | null = null;
-          if (
-            segment.content &&
-            typeof segment.content === "object" &&
-            !Array.isArray(segment.content)
-          ) {
-            // Assuming structure matches if it's an object
-            contentResult =
-              segment.content as unknown as ReplicateSegmentOutput; // Use unknown cast
-          }
-          // **MODIFIED**: Include id and translations in the result
-          return {
-            id: segment.id, // Include the id
-            start_time: segment.start_time,
-            end_time: segment.end_time,
-            content: contentResult,
-            translations: segment.translations, // Include translations
-          };
-        });
+        if (!segmentData) {
+          console.log(
+            `[Action] No completed transcription found for video ${videoId}.`
+          );
+          return { success: true, data: null }; // Return null if not found/completed
+        }
 
         console.log(
-          `Found ${results.length} completed segments for video ${videoId}`
+          `[Action] Found completed transcription for video ${videoId}.`
         );
-        return { success: true, data: results };
+        // Assuming CompletedSegmentOutput is compatible with the row structure
+        return { success: true, data: segmentData as CompletedSegmentOutput };
       } catch (error: unknown) {
-        console.error(`Error in getCompletedTranscriptionSegments:`, error);
         const appErr =
-          error instanceof AppError
-            ? error
-            : new AppError(
-                AppErrorCode.UNEXPECTED_ERROR,
-                error instanceof Error
-                  ? error.message
-                  : "Unknown error fetching segments"
-              );
+          error instanceof AppError ? error : appErrors.UNEXPECTED_ERROR;
+        console.error(
+          `[Action] Unexpected error fetching transcription for ${videoId}:`,
+          error
+        );
         return { success: false, error: appErr };
       }
     }

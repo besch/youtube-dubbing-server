@@ -1,108 +1,97 @@
-import { NextRequest, NextResponse } from "next/server";
-import * as videoInternalActions from "@/app/actions/videoInternal"; // Import internal actions
+import { type NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import {
+  internalRequestFullTranscription, // Updated
+  internalTranslateFullContent, // Updated
+  internalGenerateAudioChunk,
+} from "@/app/actions/videoInternal";
+import { AppError, AppErrorCode } from "@/app/actions/actions";
 
-const SUPABASE_FUNCTION_SECRET = process.env.SUPABASE_FUNCTION_SECRET;
+const FUNCTION_SECRET = process.env.FUNCTION_SECRET;
 
-// Define a schema for the expected request body
-const triggerActionSchema = z.object({
-  actionName: z.string(), // Name of the action function in video.ts
-  payload: z.any(), // The payload expected by the action
-});
-
-// Define a type for the actions map
-type ActionMap = {
-  // Adjust the action function signature if needed - internal actions don't have ctx
-  [key: string]: (payload: any) => Promise<any>;
+// Define a mapping from action names to the actual action functions
+const internalActions: Record<string, Function> = {
+  internalRequestFullTranscription, // Updated key
+  internalTranslateFullContent, // Updated key
+  internalGenerateAudioChunk,
 };
 
+// Define the schema for the request body
+const triggerActionSchema = z.object({
+  actionName: z.string(),
+  payload: z.any(), // Keep payload flexible, actions handle specific validation
+});
+
 export async function POST(request: NextRequest) {
-  // 1. Authentication: Verify the secret from the Supabase Function
-  const authorization = request.headers.get("Authorization");
-  if (authorization !== `Bearer ${SUPABASE_FUNCTION_SECRET}`) {
-    console.error("Unauthorized internal API call attempt");
-    return new NextResponse(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-    });
+  // 1. Authorization Check
+  const authHeader = request.headers.get("authorization");
+  if (authHeader !== `Bearer ${FUNCTION_SECRET}`) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   // 2. Parse and Validate Request Body
   let parsedBody;
   try {
     const body = await request.json();
-    parsedBody = triggerActionSchema.safeParse(body);
+    parsedBody = triggerActionSchema.parse(body);
+  } catch (error) {
+    console.error("Invalid request body:", error);
+    return NextResponse.json(
+      {
+        error:
+          error instanceof z.ZodError
+            ? error.format()
+            : "Invalid request format",
+      },
+      { status: 400 }
+    );
+  }
 
-    if (!parsedBody.success) {
+  const { actionName, payload } = parsedBody;
+
+  // 3. Find and Execute Action
+  const actionToRun = internalActions[actionName];
+
+  if (!actionToRun) {
+    console.error(`Unknown internal action requested: ${actionName}`);
+    return NextResponse.json(
+      { error: `Unknown action: ${actionName}` },
+      { status: 404 }
+    );
+  }
+
+  // 4. Execute the action and handle response
+  try {
+    console.log(`Executing internal action: ${actionName}`);
+    // Execute the action with the provided payload
+    // The action itself is expected to return { success: boolean, data?: T, error?: AppError }
+    const result = await actionToRun({ parsedInput: payload }); // Pass payload wrapped as expected by next-safe-action
+
+    if (result.success) {
+      // Return success with data (even if data is null/empty)
+      return NextResponse.json({ success: true, data: result.data ?? null });
+    } else {
+      // Action returned a controlled error (AppError)
       console.error(
-        "Invalid internal API request body:",
-        parsedBody.error.issues
+        `Internal action '${actionName}' failed:`,
+        JSON.stringify(result.error)
       );
-      return new NextResponse(
-        JSON.stringify({
-          error: "Invalid request body",
-          details: parsedBody.error.issues,
-        }),
-        {
-          status: 400,
-        }
+      // Return the structured AppError from the action
+      return NextResponse.json(
+        { success: false, error: result.error },
+        { status: 400 } // Use 400 for controlled action errors
       );
     }
-  } catch (error) {
-    console.error("Error parsing internal API request body:", error);
-    return new NextResponse(JSON.stringify({ error: "Invalid JSON body" }), {
-      status: 400,
-    });
-  }
-
-  const { actionName, payload } = parsedBody.data;
-
-  // 3. Map Action Name to Function
-  // Use the imported internal actions
-  const actions: ActionMap = videoInternalActions as any; // Cast to ActionMap
-  const actionFunction = actions[actionName];
-
-  if (typeof actionFunction !== "function") {
-    console.error(
-      `Internal API Error: Action '${actionName}' not found or not a function in internal actions.`
+  } catch (error: unknown) {
+    // Handle unexpected errors during action execution
+    console.error(`Unexpected error executing action '${actionName}':`, error);
+    const appErr = new AppError(
+      AppErrorCode.UNEXPECTED_ERROR,
+      error instanceof Error ? error.message : "Unknown internal server error"
     );
-    return new NextResponse(
-      JSON.stringify({
-        error: `Action '${actionName}' not found in internal actions`,
-      }),
-      {
-        status: 404, // Not Found
-      }
-    );
-  }
-
-  // 4. Execute the Action
-  console.log(
-    `Executing internal action: ${actionName} with payload:`,
-    JSON.stringify(payload, null, 2) // Stringify payload for better logging
-  );
-  try {
-    // Call the internal action function directly
-    const result = await actionFunction(payload);
-
-    // The result should be in the ActionResponse format { success: boolean, data?: T, error?: AppErrorJSON }
-    // Always return 200 OK, and let the caller check the `success` flag in the body.
-    return NextResponse.json(result, { status: 200 });
-  } catch (error: any) {
-    // This catch block might be less likely to be hit if actions handle errors internally,
-    // but it's good for catching unexpected issues during the call itself.
-    console.error(
-      `Internal API Error during execution of action '${actionName}':`,
-      error
-    );
-    // Return a generic 500 error
-    return new NextResponse(
-      JSON.stringify({
-        error: `Unexpected error executing action '${actionName}'`,
-        details: error.message, // Include error message if available
-      }),
-      {
-        status: 500,
-      }
+    return NextResponse.json(
+      { success: false, error: appErr },
+      { status: 500 }
     );
   }
 }

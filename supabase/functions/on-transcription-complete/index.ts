@@ -1,26 +1,34 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../utils/cors.ts";
+import type { Tables } from "../_shared/supabaseTypes.ts"; // Assuming types are generated/shared
+import type { ReplicateSegmentOutput } from "../_shared/replicateTypes.ts"; // Assuming types are shared
 
 // Define types for the incoming webhook payload
 interface TranscriptionSegmentPayload {
-  type: "UPDATE"; // Or potentially 'INSERT' if using a direct webhook
+  type: "UPDATE";
   table: "transcription_segments";
-  record: {
-    id: string;
-    video_id: string;
-    start_time: number;
-    end_time: number;
-    status: "pending" | "processing" | "completed" | "failed";
-    content: Record<string, any> | null; // Adjust content type as needed
-    translations: Record<string, any> | null; // JSONB column
-    error_message: string | null;
-  };
+  record: Tables<"transcription_segments">; // Use generated type
   old_record: {
-    status?: "pending" | "processing" | "completed" | "failed";
-    translations?: Record<string, any> | null;
+    status?: Tables<"transcription_segments">["status"];
+    translations?: Tables<"transcription_segments">["translations"];
   } | null;
 }
+
+interface VideoProcessingStatusDetail {
+  status:
+    | "pending"
+    | "downloading"
+    | "transcribing_full" // Use new status
+    | "translating_full" // Use new status
+    | "generating_audio"
+    | "completed"
+    | "failed";
+  progress?: number;
+  error_message?: string | null | undefined;
+  last_updated?: string;
+}
+type VideoProcessingStatus = Record<string, VideoProcessingStatusDetail>;
 
 const NEXTJS_API_URL = Deno.env.get("NEXTJS_API_URL");
 const FUNCTION_SECRET = Deno.env.get("FUNCTION_SECRET");
@@ -29,6 +37,13 @@ const FUNCTION_SECRET = Deno.env.get("FUNCTION_SECRET");
 async function triggerNextAction(actionName: string, payload: any) {
   const actionUrl = `${NEXTJS_API_URL}/api/internal/trigger-action`;
   console.log(`Triggering action '${actionName}' with payload:`, payload);
+
+  if (!NEXTJS_API_URL || !FUNCTION_SECRET) {
+    console.error(
+      "NEXTJS_API_URL or FUNCTION_SECRET env variables are not set."
+    );
+    throw new Error("Internal trigger action configuration missing.");
+  }
 
   const response = await fetch(actionUrl, {
     method: "POST",
@@ -45,7 +60,6 @@ async function triggerNextAction(actionName: string, payload: any) {
       `Error calling action '${actionName}': ${response.status} ${response.statusText}`,
       errorBody
     );
-    // Decide if the function should throw or just log the error
     throw new Error(
       `Failed to trigger action '${actionName}': ${response.status} ${errorBody}`
     );
@@ -53,6 +67,13 @@ async function triggerNextAction(actionName: string, payload: any) {
 
   const result = await response.json();
   console.log(`Action '${actionName}' trigger response:`, result);
+
+  // Check the success flag within the response body
+  if (!result.success) {
+    console.error(`Internal action ${actionName} failed:`, result.error);
+    const errorMessage = result.error?.message ?? JSON.stringify(result.error);
+    throw new Error(`Internal action ${actionName} failed: ${errorMessage}`);
+  }
   return result;
 }
 
@@ -62,36 +83,23 @@ serve(async (req) => {
     return new Response("ok", { headers: corsHeaders });
   }
 
-  let requestPayload;
   try {
-    // Log raw request body first
-    const rawBody = await req.text();
-    console.log("[on-transcription-complete] Raw Request Body:", rawBody);
-    requestPayload = JSON.parse(rawBody);
+    const payload: TranscriptionSegmentPayload = await req.json();
     console.log(
       "[on-transcription-complete] Parsed Payload:",
-      JSON.stringify(requestPayload, null, 2)
+      JSON.stringify(payload, null, 2)
     );
 
-    const payload: TranscriptionSegmentPayload = requestPayload; // Assign after logging
-
-    // --- Validation ---
-    // We care about segments becoming 'completed' or translations being added
+    // --- Validation --- //
+    // Only proceed if the full transcription just completed
     const isCompletion =
       payload.type === "UPDATE" &&
       payload.record.status === "completed" &&
       payload.old_record?.status !== "completed";
 
-    const hasNewTranslation =
-      payload.type === "UPDATE" &&
-      payload.record.translations &&
-      JSON.stringify(payload.record.translations) !==
-        JSON.stringify(payload.old_record?.translations);
-
-    if (!isCompletion && !hasNewTranslation) {
+    if (!isCompletion) {
       console.log(
-        "Ignoring irrelevant transcription update:",
-        payload.record.id
+        `[on-transcription-complete] Ignoring update for segment ${payload.record.id} - Not a completion event.`
       );
       return new Response(JSON.stringify({ message: "Irrelevant update" }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -100,16 +108,14 @@ serve(async (req) => {
     }
 
     const {
-      id: segmentId,
+      id: segmentId, // This is the ID of the single transcription_segments row
       video_id: dbVideoId,
-      start_time: segmentStartTime,
-      end_time: segmentEndTime,
     } = payload.record;
     console.log(
-      `Processing update for segment ${segmentId} (Video: ${dbVideoId}) - Completion: ${isCompletion}, New Translation: ${hasNewTranslation}`
+      `[on-transcription-complete] Full transcription COMPLETED for video ${dbVideoId} (Segment Row ID: ${segmentId}). Initiating next steps.`
     );
 
-    // --- Supabase Client ---
+    // --- Supabase Client --- //
     const supabaseAdmin = createClient(
       Deno.env.get("SUPABASE_URL") ?? "",
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
@@ -124,34 +130,32 @@ serve(async (req) => {
       }
     );
 
-    // --- Fetch Video Details (Duration & Target Processes) ---
+    // --- Fetch Video Details (Processing Status) --- //
     const { data: videoData, error: videoError } = await supabaseAdmin
       .from("videos")
-      .select("duration, processing_status") // Need processing_status to know which lang/voice combos are active
+      .select("processing_status") // Only need processing_status
       .eq("id", dbVideoId)
       .single();
 
-    if (videoError || !videoData || !videoData.duration) {
+    if (videoError || !videoData) {
       console.error(
-        `Error fetching video details for ${dbVideoId}:`,
+        `[on-transcription-complete] Error fetching video details for ${dbVideoId}:`,
         videoError
       );
       throw new Error(
-        `Failed to fetch video details or duration for ${dbVideoId}`
+        `Failed to fetch video details for ${dbVideoId} after transcription completion.`
       );
     }
 
-    const processingConfig = videoData.processing_status || {};
-    const videoDuration = videoData.duration;
+    const processingConfig = (videoData.processing_status ||
+      {}) as VideoProcessingStatus;
     const targetProcesses = Object.keys(processingConfig).filter(
-      (key) =>
-        processingConfig[key]?.status !== "completed" &&
-        processingConfig[key]?.status !== "failed"
+      (key) => processingConfig[key]?.status === "transcribing_full" // Only process targets waiting for transcription
     );
 
     if (targetProcesses.length === 0) {
       console.log(
-        `No active processes found for video ${dbVideoId}. Skipping further actions for segment ${segmentId}.`
+        `[on-transcription-complete] No processes in 'transcribing_full' state found for video ${dbVideoId}. Skipping further actions.`
       );
       return new Response(JSON.stringify({ message: "No active processes" }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -159,219 +163,150 @@ serve(async (req) => {
       });
     }
 
-    // --- Logic for Each Target Process (Language/Voice) ---
+    console.log(
+      `[on-transcription-complete] Found targets for video ${dbVideoId}:`,
+      targetProcesses
+    );
+
+    // Extract full transcription content
+    const fullTranscriptionContent = payload.record
+      .content as ReplicateSegmentOutput | null; // Use shared type
+
+    if (
+      !fullTranscriptionContent ||
+      !Array.isArray(fullTranscriptionContent.segments) ||
+      fullTranscriptionContent.segments.length === 0
+    ) {
+      console.error(
+        `[on-transcription-complete] Completed transcription for ${dbVideoId} (Segment ID: ${segmentId}) has no valid content. Marking targets as failed.`
+      );
+      // Mark relevant processes as failed
+      for (const langVoiceKey of targetProcesses) {
+        processingConfig[langVoiceKey] = {
+          ...processingConfig[langVoiceKey],
+          status: "failed",
+          error_message:
+            "Transcription completed but content was empty/invalid.",
+          last_updated: new Date().toISOString(),
+        };
+      }
+      await supabaseAdmin
+        .from("videos")
+        .update({ processing_status: processingConfig })
+        .eq("id", dbVideoId);
+      throw new Error("Transcription content missing or invalid.");
+    }
+
+    // --- Logic for Each Target Process (Language/Voice) --- //
+    let updateNeeded = false;
     for (const langVoiceKey of targetProcesses) {
       const [language, voice] = langVoiceKey.split("_");
-      const needsTranslation = language !== "en";
-      const currentStatus = processingConfig[langVoiceKey]?.status;
       console.log(
-        `[on-transcription-complete] Processing target: ${langVoiceKey}, Current Status: ${currentStatus}, Needs Translation: ${needsTranslation}`
-      ); // Log status per target
+        `[on-transcription-complete] Processing target: ${langVoiceKey}`
+      );
 
-      // Check 1: Did the segment just get completed?
-      if (isCompletion) {
-        if (needsTranslation) {
-          // Trigger Translation only if needed and not already started/done
+      if (language === "en") {
+        // --- English: Trigger Audio Generation directly --- //
+        console.log(
+          `[on-transcription-complete] Target ${langVoiceKey} is English. Triggering audio generation.`
+        );
+        processingConfig[langVoiceKey] = {
+          ...processingConfig[langVoiceKey],
+          status: "generating_audio", // Update status first
+          last_updated: new Date().toISOString(),
+        };
+        updateNeeded = true;
+
+        for (const subSegment of fullTranscriptionContent.segments) {
           if (
-            !payload.record.translations?.[language] &&
-            currentStatus !== "translating" &&
-            currentStatus !== "generating_audio" &&
-            currentStatus !== "completed" &&
-            currentStatus !== "failed"
+            subSegment.start !== undefined &&
+            subSegment.end !== undefined &&
+            subSegment.text?.trim() // Ensure there is text to synthesize
           ) {
             console.log(
-              `Segment ${segmentId} completed, status is '${currentStatus}', triggering translation to ${language}`
+              `   -> Triggering TTS for EN sub-segment ${subSegment.start}-${subSegment.end}`
             );
-            await triggerNextAction("internalTranslateSegmentContent", {
-              segmentId,
-              targetLanguage: language,
-            });
-            processingConfig[langVoiceKey].status = "translating";
-          } else {
-            // Translation already exists or process is further along, check if audio needs triggering
-            if (
-              payload.record.translations?.[language] && // Check if translation exists now
-              currentStatus !== "generating_audio" &&
-              currentStatus !== "completed" &&
-              currentStatus !== "failed"
-            ) {
-              console.log(
-                `Segment ${segmentId} completed, translation ${language} exists (or process advanced), status '${currentStatus}', triggering audio generation`
-              );
-              // --- Modification Start: Iterate through translated segments ---
-              const translatedContent = payload.record.translations?.[language];
-              if (
-                translatedContent?.segments &&
-                Array.isArray(translatedContent.segments)
-              ) {
-                processingConfig[langVoiceKey].status = "generating_audio"; // Set status before looping
-                for (const subSegment of translatedContent.segments) {
-                  if (
-                    subSegment.start !== undefined &&
-                    subSegment.end !== undefined
-                  ) {
-                    console.log(
-                      `   -> Triggering TTS for sub-segment ${subSegment.start}-${subSegment.end}`
-                    );
-                    await triggerNextAction("internalGenerateAudioChunk", {
-                      videoId: dbVideoId,
-                      language: language,
-                      voice: voice,
-                      startTime: subSegment.start,
-                      endTime: subSegment.end,
-                    });
-                  } else {
-                    console.warn(
-                      `Skipping sub-segment in ${segmentId} due to missing start/end:`,
-                      subSegment
-                    );
-                  }
-                }
-              } else {
-                console.error(
-                  `Could not find valid translated segments array for ${segmentId}, lang ${language}`
-                );
-              }
-              // --- Modification End ---
-            }
-          }
-        } else {
-          // English: Trigger Audio Generation directly upon segment completion if not already done
-          if (
-            currentStatus !== "generating_audio" &&
-            currentStatus !== "completed" &&
-            currentStatus !== "failed"
-          ) {
-            console.log(
-              `Segment ${segmentId} completed (EN), status '${currentStatus}', triggering audio generation`
-            );
-            // --- Modification Start: Iterate through original segments ---
-            const originalContent = payload.record.content;
-            if (
-              originalContent?.segments &&
-              Array.isArray(originalContent.segments)
-            ) {
-              processingConfig[langVoiceKey].status = "generating_audio"; // Set status before looping
-              for (const subSegment of originalContent.segments) {
-                if (
-                  subSegment.start !== undefined &&
-                  subSegment.end !== undefined
-                ) {
-                  console.log(
-                    `   -> Triggering TTS for sub-segment ${subSegment.start}-${subSegment.end}`
-                  );
-                  await triggerNextAction("internalGenerateAudioChunk", {
-                    videoId: dbVideoId,
-                    language: language, // "en"
-                    voice: voice,
-                    startTime: subSegment.start,
-                    endTime: subSegment.end,
-                  });
-                } else {
-                  console.warn(
-                    `Skipping sub-segment in ${segmentId} due to missing start/end:`,
-                    subSegment
-                  );
-                }
-              }
-            } else {
-              console.error(
-                `Could not find valid original segments array for ${segmentId}`
-              );
-            }
-            // --- Modification End ---
-          }
-        }
-      }
-      // Check 2: Was a translation just added for our target language?
-      else if (
-        hasNewTranslation &&
-        payload.record.translations?.[language] && // Translation for *our* target lang is now present
-        currentStatus === "translating" // Ensure we only trigger if we were waiting for translation
-      ) {
-        console.log(
-          `[on-transcription-complete] Entering 'hasNewTranslation' block for ${langVoiceKey}. Current Status: ${currentStatus}`
-        );
-        console.log(
-          `Translation ${language} added for segment ${segmentId}, status was 'translating', triggering audio generation`
-        );
-        // --- Modification Start: Iterate through newly translated segments ---
-        const translatedContent = payload.record.translations?.[language];
-        if (
-          translatedContent?.segments &&
-          Array.isArray(translatedContent.segments)
-        ) {
-          processingConfig[langVoiceKey].status = "generating_audio"; // Update status before looping
-          for (const subSegment of translatedContent.segments) {
-            if (
-              subSegment.start !== undefined &&
-              subSegment.end !== undefined
-            ) {
-              console.log(
-                `   -> Triggering TTS for sub-segment ${subSegment.start}-${subSegment.end}`
-              );
-              await triggerNextAction("internalGenerateAudioChunk", {
+            try {
+              // Don't await these individually, let them run in parallel
+              triggerNextAction("internalGenerateAudioChunk", {
                 videoId: dbVideoId,
-                language: language,
+                language: language, // "en"
                 voice: voice,
                 startTime: subSegment.start,
                 endTime: subSegment.end,
               });
-            } else {
-              console.warn(
-                `Skipping sub-segment in ${segmentId} due to missing start/end:`,
-                subSegment
+            } catch (ttsError) {
+              console.error(
+                `[on-transcription-complete] Failed to trigger TTS for ${langVoiceKey}, segment ${subSegment.start}-${subSegment.end}: ${ttsError.message}. Continuing...`
               );
+              // Optionally mark this specific target as failed?
+              // processingConfig[langVoiceKey].status = "failed";
+              // processingConfig[langVoiceKey].error_message = `TTS trigger failed for segment ${subSegment.start}-${subSegment.end}`;
             }
+          } else {
+            console.warn(
+              `[on-transcription-complete] Skipping EN sub-segment due to missing start/end/text:`,
+              subSegment
+            );
           }
-        } else {
-          console.error(
-            `Could not find valid translated segments array for ${segmentId}, lang ${language} (after translation update)`
-          );
         }
-        // --- Modification End ---
+      } else {
+        // --- Non-English: Trigger Full Translation --- //
+        console.log(
+          `[on-transcription-complete] Target ${langVoiceKey} requires translation. Triggering full translation to ${language}.`
+        );
+        processingConfig[langVoiceKey] = {
+          ...processingConfig[langVoiceKey],
+          status: "translating_full", // Update status first
+          last_updated: new Date().toISOString(),
+        };
+        updateNeeded = true;
+
+        try {
+          // Trigger translation for the entire content
+          await triggerNextAction("internalTranslateFullContent", {
+            segmentId: segmentId, // Pass the ID of the transcription_segments row
+            targetLanguage: language,
+          });
+        } catch (translateError) {
+          console.error(
+            `[on-transcription-complete] Failed to trigger translation for ${langVoiceKey}: ${translateError.message}. Marking as failed.`
+          );
+          // Mark this target as failed if triggering fails
+          processingConfig[langVoiceKey].status = "failed";
+          processingConfig[
+            langVoiceKey
+          ].error_message = `Failed to trigger translation: ${translateError.message}`;
+        }
       }
     }
 
-    // --- Update Video Processing Status in DB --- (Ensure this happens AFTER loop)
-    console.log(
-      "Final processing status before DB update:",
-      JSON.stringify(processingConfig)
-    );
-    const { error: updateError } = await supabaseAdmin
-      .from("videos")
-      .update({ processing_status: processingConfig })
-      .eq("id", dbVideoId);
-
-    if (updateError) {
-      console.error(
-        `Error updating video processing status for ${dbVideoId} after segment ${segmentId} update:`,
-        updateError
+    // --- Update Video Processing Status in DB --- //
+    if (updateNeeded) {
+      console.log(
+        "[on-transcription-complete] Updating video processing_status in DB:",
+        JSON.stringify(processingConfig)
       );
-      // Potentially throw, but maybe just log
-    }
+      const { error: updateError } = await supabaseAdmin
+        .from("videos")
+        .update({ processing_status: processingConfig })
+        .eq("id", dbVideoId);
 
-    // --- Trigger Next Transcription Segment (if applicable and completion event) ---
-    if (isCompletion && segmentEndTime < videoDuration) {
-      const SEGMENT_DURATION = 180;
-      const nextStartTime = segmentEndTime;
-      const nextEndTime = Math.min(
-        nextStartTime + SEGMENT_DURATION,
-        videoDuration
-      );
-
-      if (nextStartTime < nextEndTime) {
-        await triggerNextAction("internalRequestTranscriptionSegment", {
-          videoId: dbVideoId,
-          startTime: nextStartTime,
-          endTime: nextEndTime,
-        });
+      if (updateError) {
+        console.error(
+          `[on-transcription-complete] Error updating video processing status for ${dbVideoId}:`,
+          updateError
+        );
+        // Throw error here as subsequent steps depend on correct status
+        throw new Error(
+          "Failed to update video status after transcription completion."
+        );
       }
     }
 
-    // --- Return Success ---
+    // --- Return Success --- //
     return new Response(
-      JSON.stringify({ message: "Segment update processed" }),
+      JSON.stringify({ message: "Transcription processed" }),
       {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
         status: 200,
