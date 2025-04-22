@@ -21,7 +21,6 @@ import {
 import { generateOpenAiTts } from "@/lib/openai-tts";
 import { generateGoogleTts } from "@/lib/google-tts";
 
-// Constants
 const AUDIO_SEGMENTER_URL = process.env.AUDIO_SEGMENTER_URL;
 const AUDIO_SEGMENTER_SECRET_KEY = process.env.AUDIO_SEGMENTER_SECRET_KEY;
 
