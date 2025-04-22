@@ -69,11 +69,15 @@ export async function POST(request: NextRequest) {
   // 4. Execute the action and handle response
   try {
     console.log(`Executing internal action: ${actionName}`);
-    // Execute the action with the provided payload
-    // The action itself is expected to return { success: boolean, data?: T, error?: AppError }
-    const result = await actionToRun({ parsedInput: payload }); // Revert to passing wrapped payload
+    const result = await actionToRun({ parsedInput: payload }); // Call the action
 
-    // Add check for undefined result which is possible according to the type
+    // Log the entire result object received from the action execution
+    console.log(
+      `[DEBUG] Raw result from action '${actionName}':`,
+      JSON.stringify(result, null, 2)
+    );
+
+    // Check for undefined result
     if (!result) {
       console.error(
         `Internal action '${actionName}' unexpectedly returned undefined.`
