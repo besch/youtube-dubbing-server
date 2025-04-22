@@ -303,8 +303,13 @@ export const internalRequestFullTranscription = publicAction
                   : "Unknown error in internalRequestFullTranscription"
               );
         console.error(
-          `RequestFullTranscription: Returning failure response with error:`,
+          `RequestFullTranscription: Preparing failure response with error object:`,
           JSON.stringify(appErr, null, 2)
+        );
+        // Add detailed log before returning
+        console.log(
+          `[DEBUG] Returning error from internalRequestFullTranscription: success=false, error=`,
+          appErr
         );
         return { success: false, error: appErr };
       }
