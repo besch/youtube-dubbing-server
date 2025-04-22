@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
   // 4. Execute the action and handle response
   try {
     console.log(`Executing internal action: ${actionName}`);
-    const result = await actionToRun({ parsedInput: payload }); // Call the action
+    const result = await actionToRun(payload);
 
     // Log the entire result object received from the action execution
     console.log(
