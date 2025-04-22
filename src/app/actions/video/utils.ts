@@ -1,5 +1,3 @@
-"use server";
-
 import type { ReplicateSegmentOutput } from "@/lib/replicate";
 import { AppError, AppErrorCode } from "../actions";
 
