@@ -75,10 +75,8 @@ export const internalRequestFullTranscription = publicAction
       );
 
       try {
-        // 1. Fetch Video Duration
-        console.log(
-          `RequestFullTranscription: Fetching duration for video ${videoId}`
-        );
+        // === STEP 1: Fetch Video Duration ===
+        console.log(`[TryBlock] 1. Fetching video duration for ${videoId}...`);
         const { data: videoData, error: videoError } = await supabase
           .from("videos")
           .select("duration")
@@ -102,12 +100,12 @@ export const internalRequestFullTranscription = publicAction
 
         const videoDuration = videoData.duration;
         console.log(
-          `RequestFullTranscription: Video duration: ${videoDuration}`
+          `[TryBlock] 1. Fetched duration: ${videoDuration} for ${videoId}`
         );
 
-        // 2. Check if transcription already exists/processing for this video
+        // === STEP 2: Check Existing Transcription ===
         console.log(
-          `RequestFullTranscription: Checking for existing transcription record: Video=${videoId}`
+          `[TryBlock] 2. Checking for existing transcription record for ${videoId}...`
         );
         const { data: existingTranscription, error: checkError } =
           await supabase
@@ -143,16 +141,19 @@ export const internalRequestFullTranscription = publicAction
           }
         }
 
+        console.log(
+          `[TryBlock] 2. Existing transcription check complete. Status: ${existingTranscription?.status}, ShouldProceed: ${shouldProceed}`
+        );
+
         if (!shouldProceed) {
           return { success: true, data: { success: true } };
         }
 
-        // 3. Get signed URL for the FULL audio
-        // ASSUMPTION: audioStoragePath is the path within the 'youtube-audio' bucket
-        const fullAudioBucket = "youtube-audio";
+        // === STEP 3: Get Signed URL ===
         console.log(
-          `RequestFullTranscription: Getting signed URL for path: ${audioStoragePath} in bucket ${fullAudioBucket}`
+          `[TryBlock] 3. Getting signed URL for ${audioStoragePath}...`
         );
+        const fullAudioBucket = "youtube-audio";
         const { data: urlData, error: urlError } = await supabase.storage
           .from(fullAudioBucket)
           .createSignedUrl(audioStoragePath, 60 * 15); // Increased expiry to 15 mins for potentially large files
@@ -168,19 +169,14 @@ export const internalRequestFullTranscription = publicAction
             "Signed URL creation returned no URL."
           );
         const fullAudioSignedUrl = urlData.signedUrl;
-        console.log(
-          `RequestFullTranscription: Got signed URL: ${fullAudioSignedUrl.substring(
-            0,
-            100
-          )}...`
-        );
+        console.log(`[TryBlock] 3. Got signed URL for ${audioStoragePath}`);
 
-        // 4. Insert or identify existing transcription row ID
+        // === STEP 4: Ensure DB Record ===
+        // Declare variables before logging
         const transcriptionStartTime = 0;
         const transcriptionEndTime = videoDuration;
-
         console.log(
-          `RequestFullTranscription: Ensuring DB record exists for transcription ${videoId} (${transcriptionStartTime}-${transcriptionEndTime})`
+          `[TryBlock] 4. Ensuring DB record exists for transcription ${videoId} (${transcriptionStartTime}-${transcriptionEndTime})...`
         );
 
         if (!dbSegmentId) {
@@ -219,7 +215,7 @@ export const internalRequestFullTranscription = publicAction
             }
             dbSegmentId = raceSegment.id;
             console.log(
-              `RequestFullTranscription: Found existing ID after race: ${dbSegmentId}`
+              `[TryBlock] 4. Inserted/Found DB segment ID: ${dbSegmentId}`
             );
           } else if (insertError) {
             throw new AppError(
@@ -234,7 +230,7 @@ export const internalRequestFullTranscription = publicAction
           } else {
             dbSegmentId = dbSegment.id;
             console.log(
-              `RequestFullTranscription: Inserted new transcription row with ID: ${dbSegmentId}`
+              `[TryBlock] 4. Inserted/Found DB segment ID: ${dbSegmentId}`
             );
           }
         } else {
@@ -243,23 +239,20 @@ export const internalRequestFullTranscription = publicAction
           );
         }
 
-        // 5. Start Replicate Transcription for the full audio
+        // === STEP 5: Start Replicate ===
         console.log(
-          `RequestFullTranscription: Attempting to start Replicate transcription for row ${dbSegmentId} using full audio URL: ${fullAudioSignedUrl.substring(
-            0,
-            100
-          )}...`
+          `[TryBlock] 5. Starting Replicate transcription for row ${dbSegmentId}...`
         );
         const replicatePredictionId = await startReplicateTranscription(
           fullAudioSignedUrl
         );
         console.log(
-          `RequestFullTranscription: Successfully started Replicate. Received Prediction ID: ${replicatePredictionId} for DB row ${dbSegmentId}`
+          `[TryBlock] 5. Replicate started. Prediction ID: ${replicatePredictionId}`
         );
 
-        // 6. Update DB record with Replicate ID (processing)
+        // === STEP 6: Update DB Record ===
         console.log(
-          `RequestFullTranscription: Updating DB row ${dbSegmentId} with Replicate ID ${replicatePredictionId} and status 'processing'`
+          `[TryBlock] 6. Updating DB row ${dbSegmentId} with Replicate ID ${replicatePredictionId}...`
         );
         const { error: updateError } = await supabase
           .from("transcription_segments")
@@ -285,7 +278,7 @@ export const internalRequestFullTranscription = publicAction
         }
 
         console.log(
-          `RequestFullTranscription: Successfully updated/initiated transcription row ${dbSegmentId} for ${videoId}, Replicate ID: ${replicatePredictionId}`
+          `[TryBlock] 6. DB row ${dbSegmentId} updated successfully.`
         );
         return { success: true, data: { success: true } };
       } catch (error: unknown) {
