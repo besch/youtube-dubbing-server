@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { Tables } from "@/types/supabase";
 import { protectedAction } from "../safe-action";
 import { supabaseServiceRoleClient } from "@/lib/supabase/serviceRoleClient";
-import { ActionResponse, AppError, AppErrorCode, appErrors } from "../actions";
+import { ActionResponse, AppError, AppErrorCode } from "../actions";
 import { config } from "@/config";
 import { generateOpenAiTts } from "@/lib/openai-tts";
 import { generateGoogleTts } from "@/lib/google-tts";
