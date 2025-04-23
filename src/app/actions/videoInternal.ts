@@ -56,6 +56,73 @@ function extractTextFromSegments(
 }
 // --- End Helper Function ---
 
+// --- Helper: Trigger Internal Action via API ---
+// Replicates the logic used by Supabase functions to call internal Next.js actions
+async function triggerInternalAction(actionName: string, payload: any) {
+  const actionUrl = `${process.env.NEXTJS_API_URL}/api/internal/trigger-action`;
+  const functionSecret = process.env.SUPABASE_FUNCTION_SECRET;
+
+  if (!process.env.NEXTJS_API_URL || !functionSecret) {
+    console.error(
+      "triggerInternalAction: NEXTJS_API_URL or SUPABASE_FUNCTION_SECRET env variables are not set."
+    );
+    // Don't throw here, let the caller handle potential failures gracefully
+    // Throwing might stop spawning other jobs
+    return { success: false, error: "Internal trigger configuration missing." };
+  }
+
+  try {
+    console.log(
+      `Triggering internal action '${actionName}'... Payload keys:`,
+      Object.keys(payload)
+    );
+    const response = await fetch(actionUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${functionSecret}`,
+      },
+      body: JSON.stringify({ actionName, payload }),
+    });
+
+    // Check if the fetch itself failed
+    if (!response.ok) {
+      const errorBody = await response.text();
+      console.error(
+        `triggerInternalAction: Error calling action '${actionName}': ${response.status} ${response.statusText}`,
+        errorBody
+      );
+      return {
+        success: false,
+        error: `Failed to trigger action '${actionName}': ${response.status}`,
+      };
+    }
+
+    // Check the response body from the API route
+    const result = await response.json();
+    if (!result.success) {
+      console.error(
+        `triggerInternalAction: Internal action ${actionName} execution failed:`,
+        result.error
+      );
+      return {
+        success: false,
+        error: result.error ?? `Internal action ${actionName} failed.`,
+      };
+    }
+
+    console.log(`Successfully triggered internal action '${actionName}'.`);
+    return { success: true };
+  } catch (error: any) {
+    console.error(
+      `triggerInternalAction: Fetch error calling action '${actionName}':`,
+      error
+    );
+    return { success: false, error: error.message ?? "Unknown fetch error" };
+  }
+}
+// --- End Helper ---
+
 // --- Action: Internal Request FULL Transcription ---
 const internalRequestFullTranscriptionSchema = z.object({
   videoId: z.string().uuid(),
@@ -905,8 +972,9 @@ export const internalSpawnTtsJobs = publicAction
           return { success: true, data: { jobsTriggered: 0 } };
         }
 
-        // 3. Loop and trigger internalGenerateAudioChunk for each segment
+        // 3. Loop and trigger internalGenerateAudioChunk for each segment via API
         let jobsTriggered = 0;
+        let triggerErrors = 0;
         for (const subSegment of sourceSegments) {
           if (
             subSegment.start !== undefined &&
@@ -914,28 +982,28 @@ export const internalSpawnTtsJobs = publicAction
             subSegment.text?.trim() &&
             subSegment.end > subSegment.start
           ) {
-            console.log(
-              `   -> Spawning TTS job for ${language}/${voice} segment ${subSegment.start}-${subSegment.end}`
+            const payload = {
+              videoId: videoId,
+              language: language,
+              voice: voice,
+              startTime: subSegment.start,
+              endTime: subSegment.end,
+            };
+            // Call the helper function - DO NOT AWAIT
+            triggerInternalAction("internalGenerateAudioChunk", payload).then(
+              (result) => {
+                if (!result.success) {
+                  // Log errors from the async trigger call
+                  console.error(
+                    `INTERNAL ACTION: Failed to trigger TTS for ${language}/${voice}, segment ${subSegment.start}-${subSegment.end}:`,
+                    result.error
+                  );
+                  // Increment error count - maybe update status later?
+                  triggerErrors++;
+                }
+              }
             );
-            try {
-              // Call internalGenerateAudioChunk WITHOUT awaiting
-              // IMPORTANT: This relies on the internal action runner or background job system
-              // to handle these calls. If running directly, they might block.
-              // Since we trigger this via /api/internal, it should be fine.
-              internalGenerateAudioChunk({
-                videoId: videoId,
-                language: language,
-                voice: voice,
-                startTime: subSegment.start,
-                endTime: subSegment.end,
-              });
-              jobsTriggered++;
-            } catch (ttsTriggerError: any) {
-              // Log error but continue trying to spawn other jobs
-              console.error(
-                `INTERNAL ACTION: Failed to trigger TTS for ${language}/${voice}, segment ${subSegment.start}-${subSegment.end}: ${ttsTriggerError.message}`
-              );
-            }
+            jobsTriggered++;
           } else {
             console.warn(
               `INTERNAL ACTION: Skipping invalid segment for TTS spawning:`,
@@ -945,8 +1013,9 @@ export const internalSpawnTtsJobs = publicAction
         }
 
         console.log(
-          `INTERNAL ACTION: Finished spawning ${jobsTriggered} TTS jobs for ${videoId}, ${language}, ${voice}.`
+          `INTERNAL ACTION: Finished spawning ${jobsTriggered} TTS jobs for ${videoId}, ${language}, ${voice}. Trigger errors: ${triggerErrors}.`
         );
+        // Return success even if some triggers failed; progress relies on chunks being inserted
         return { success: true, data: { jobsTriggered } };
       } catch (error: unknown) {
         console.error(
