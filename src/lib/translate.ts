@@ -1,9 +1,5 @@
-import {
-  GoogleGenerativeAI,
-  HarmCategory,
-  HarmBlockThreshold,
-} from "@google/generative-ai";
-import type { ReplicateSegment } from "@/lib/replicate"; // Assuming ReplicateSegment is exported or moved
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import type { ReplicateSegment } from "@/lib/replicate";
 import { AppError, AppErrorCode } from "@/app/actions/actions";
 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
