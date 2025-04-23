@@ -54,7 +54,7 @@ function extractTextFromSegments(
   }
   return extractedText.trim();
 }
-// --- End Helper Function ---
+// --- End Helper Function --- //
 
 // --- Helper: Trigger Internal Action via API ---
 // Replicates the logic used by Supabase functions to call internal Next.js actions
