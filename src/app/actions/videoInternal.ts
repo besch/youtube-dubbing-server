@@ -830,3 +830,139 @@ export const internalGenerateAudioChunk = publicAction
       }
     }
   );
+
+// --- Action: Internal Spawn TTS Jobs ---
+const internalSpawnTtsJobsSchema = z.object({
+  videoId: z.string().uuid(),
+  language: z.string(),
+  voice: z.string(),
+});
+
+export const internalSpawnTtsJobs = publicAction
+  .schema(internalSpawnTtsJobsSchema)
+  .action(
+    async ({
+      parsedInput,
+    }): Promise<ActionResponse<{ jobsTriggered: number }>> => {
+      const { videoId, language, voice } = parsedInput;
+      const supabase = supabaseServiceRoleClient;
+
+      console.log(
+        `INTERNAL ACTION: Spawning TTS jobs for Video: ${videoId}, Lang: ${language}, Voice: ${voice}`
+      );
+
+      try {
+        // 1. Fetch the completed transcription row
+        const { data: transcriptionDataUntyped, error: transcriptionError } =
+          await supabase
+            .from("transcription_segments")
+            .select("id, content, translations")
+            .eq("video_id", videoId)
+            .eq("status", "completed") // Ensure it's actually done
+            .single();
+
+        if (transcriptionError) {
+          throw new AppError(
+            AppErrorCode.DATABASE_ERROR,
+            `DB error fetching transcription for TTS spawning: ${transcriptionError.message}`
+          );
+        }
+        const transcriptionData = transcriptionDataUntyped as any; // Use 'as any' for simplicity
+
+        // 2. Extract relevant segments
+        let sourceSegments:
+          | ReplicateSegmentOutput["segments"]
+          | undefined
+          | null = null;
+
+        if (language === "en") {
+          const originalContent =
+            transcriptionData.content as ReplicateSegmentOutput | null;
+          sourceSegments = originalContent?.segments;
+          if (!sourceSegments) {
+            throw new AppError(
+              AppErrorCode.DEPENDENCY_NOT_READY,
+              `Original transcription content missing or invalid for ${videoId} (EN) when spawning TTS.`
+            );
+          }
+        } else {
+          const translatedContent = transcriptionData.translations?.[
+            language
+          ] as ReplicateSegmentOutput | null;
+          sourceSegments = translatedContent?.segments;
+          if (!sourceSegments) {
+            throw new AppError(
+              AppErrorCode.DEPENDENCY_NOT_READY,
+              `Translation '${language}' not found or invalid for ${videoId} when spawning TTS.`
+            );
+          }
+        }
+
+        if (!sourceSegments || sourceSegments.length === 0) {
+          console.log(
+            `INTERNAL ACTION: No segments found for ${language} in video ${videoId}. No TTS jobs to trigger.`
+          );
+          return { success: true, data: { jobsTriggered: 0 } };
+        }
+
+        // 3. Loop and trigger internalGenerateAudioChunk for each segment
+        let jobsTriggered = 0;
+        for (const subSegment of sourceSegments) {
+          if (
+            subSegment.start !== undefined &&
+            subSegment.end !== undefined &&
+            subSegment.text?.trim() &&
+            subSegment.end > subSegment.start
+          ) {
+            console.log(
+              `   -> Spawning TTS job for ${language}/${voice} segment ${subSegment.start}-${subSegment.end}`
+            );
+            try {
+              // Call internalGenerateAudioChunk WITHOUT awaiting
+              // IMPORTANT: This relies on the internal action runner or background job system
+              // to handle these calls. If running directly, they might block.
+              // Since we trigger this via /api/internal, it should be fine.
+              internalGenerateAudioChunk({
+                videoId: videoId,
+                language: language,
+                voice: voice,
+                startTime: subSegment.start,
+                endTime: subSegment.end,
+              });
+              jobsTriggered++;
+            } catch (ttsTriggerError: any) {
+              // Log error but continue trying to spawn other jobs
+              console.error(
+                `INTERNAL ACTION: Failed to trigger TTS for ${language}/${voice}, segment ${subSegment.start}-${subSegment.end}: ${ttsTriggerError.message}`
+              );
+            }
+          } else {
+            console.warn(
+              `INTERNAL ACTION: Skipping invalid segment for TTS spawning:`,
+              subSegment
+            );
+          }
+        }
+
+        console.log(
+          `INTERNAL ACTION: Finished spawning ${jobsTriggered} TTS jobs for ${videoId}, ${language}, ${voice}.`
+        );
+        return { success: true, data: { jobsTriggered } };
+      } catch (error: unknown) {
+        console.error(
+          `INTERNAL ACTION: Error spawning TTS jobs for ${videoId}, ${language}, ${voice}:`,
+          error
+        );
+        const appErr =
+          error instanceof AppError
+            ? error
+            : new AppError(
+                AppErrorCode.UNEXPECTED_ERROR,
+                error instanceof Error
+                  ? error.message
+                  : "Unknown error in internalSpawnTtsJobs"
+              );
+        return { success: false, error: appErr };
+      }
+    }
+  );

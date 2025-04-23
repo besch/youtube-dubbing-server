@@ -4,6 +4,7 @@ import {
   internalRequestFullTranscription, // Updated
   internalTranslateFullContent, // Updated
   internalGenerateAudioChunk,
+  internalSpawnTtsJobs,
 } from "@/app/actions/videoInternal";
 import {
   AppError,
@@ -20,6 +21,7 @@ const internalActions: Record<string, any> = {
   internalRequestFullTranscription, // Updated key
   internalTranslateFullContent, // Updated key
   internalGenerateAudioChunk,
+  internalSpawnTtsJobs,
 };
 
 // Define the schema for the request body
