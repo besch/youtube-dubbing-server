@@ -1050,10 +1050,10 @@ WHEN (NEW.translations IS DISTINCT FROM OLD.translations)
 -- Execute the http_request function to call the correct Edge Function
 EXECUTE FUNCTION supabase_functions.http_request(
     -- VVV CORRECT URL VVV --
-    'https://zzsjgheaghjdjqaupbxa.supabase.co/functions/v1/on-translation-complete', -- Correct Function URL
+    '{{ NEXT_PUBLIC_SUPABASE_FUNCTION_URL }}/on-translation-complete', -- Use placeholder
     -- ^^^ CORRECT URL ^^^ --
     'POST',
-    '{"Content-Type": "application/json", "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp6c2pnaGVhZ2hqZGpxYXVwYnhhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc0MjU2NDIxNiwiZXhwIjoyMDU4MTQwMjE2fQ.lTiP5rOWppot7H95frtD4KHfMIyUgEOdki6854pGVSY"}', -- Headers (WARNING: HARDCODED SECRET)
+    '{"Content-Type": "application/json", "Authorization": "Bearer {{ SUPABASE_SERVICE_ROLE_KEY }}"}', -- Use placeholder
     '{}', -- Body (Function parses the actual payload)
     10000 -- Timeout
 );
