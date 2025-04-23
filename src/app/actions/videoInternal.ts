@@ -59,12 +59,12 @@ function extractTextFromSegments(
 // --- Helper: Trigger Internal Action via API ---
 // Replicates the logic used by Supabase functions to call internal Next.js actions
 async function triggerInternalAction(actionName: string, payload: any) {
-  const actionUrl = `${process.env.NEXTJS_API_URL}/api/internal/trigger-action`;
+  const actionUrl = `${process.env.NEXT_PUBLIC_APP_URL}/api/internal/trigger-action`;
   const functionSecret = process.env.SUPABASE_FUNCTION_SECRET;
 
-  if (!process.env.NEXTJS_API_URL || !functionSecret) {
+  if (!process.env.NEXT_PUBLIC_APP_URL || !functionSecret) {
     console.error(
-      "triggerInternalAction: NEXTJS_API_URL or SUPABASE_FUNCTION_SECRET env variables are not set."
+      "triggerInternalAction: NEXT_PUBLIC_APP_URL or SUPABASE_FUNCTION_SECRET env variables are not set."
     );
     // Don't throw here, let the caller handle potential failures gracefully
     // Throwing might stop spawning other jobs
