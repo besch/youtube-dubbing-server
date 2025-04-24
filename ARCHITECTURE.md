@@ -61,18 +61,20 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
   - `useVideoProcessingStatus`: Central hook to interpret `videos.processing_status` (including new statuses like `transcribing_full`, `translating_full`), player state, and errors to provide user-facing status messages and loading indicators.
   - `useVideoTranscription`: Fetches the existing completed **single** transcription row, subscribes to Realtime updates for that row. **Does not trigger transcription.**
   - `useVideoTranslation`: Fetches/manages translated segments based on Realtime updates to the single `transcription_segments.translations` field. **Does not trigger translation.**
-  - `useAudioGeneration`: Fetches existing completed audio chunks, subscribes to Realtime updates for _newly completed_ chunks. **Does not trigger audio generation.**
+  - `useAudioGeneration`: Manages the `generatedChunks` state. **Does not trigger audio generation.** Chunks are fetched via `fetchAudioChunks` when the backend status for the language/voice combination is detected as 'completed'. **REMOVED:** Realtime listening for individual chunk inserts within the hook.
   - `useAudioPlayback`: Plays available pre-generated audio chunks based on `currentTime`.
   - `useVideoSeekHandler`: Checks for the _existence_ of required data (from the single transcription row's `content` or `translations`, and `generatedChunks`) at the seek target time.
   - `useVideoHistory`, `useAuth`, `useSettings` (Largely unchanged).
 - **Initialization:**
   - Calls `initiateVideoProcessingJobApi` on the server, providing the YouTube URL and desired language/voice combinations. This triggers the entire backend pipeline if necessary.
   - Subscribes to Supabase Realtime channel for `videos` table updates (specifically `processing_status` column) for the current `dbVideoId` (via `useVideoProcessingStatus` or directly).
-  - Subscribes to `transcription_segments` (for the single row) and `translated_audio_chunks` Realtime channels to receive newly completed data (via respective hooks).
-  - Fetches any pre-existing completed data using `getCompletedTranscriptionSegmentsApi` (for the single row) and `getCompletedAudioChunksApi` (via hooks).
+  - Subscribes to `transcription_segments` (for the single row) Realtime channel to receive newly completed transcription/translation data.
+  - **REMOVED:** Subscription to `translated_audio_chunks` Realtime channel within `useAudioGeneration`.
+  - Fetches any pre-existing completed data using `getCompletedTranscriptionSegmentsApi` (for the single row) and `getCompletedAudioChunksApi`. The audio chunk fetch is triggered when the `videoProcessingStatus` for the current language/voice is detected as `completed` (either on initial load or through a Realtime update).
 - **Realtime Updates:**
-  - Primarily listens to `videos` table for changes in `processing_status` to update the UI state via `useVideoProcessingStatus`.
-  - Listens to the single `transcription_segments` row and `translated_audio_chunks` channel to populate local data (`transcriptionSegments`, `translatedSegments`, `generatedChunks`) as it becomes available from the backend process.
+  - Primarily listens to `videos` table for changes in `processing_status` to update the UI state via `useVideoProcessingStatus`. This 'completed' status update also triggers the fetch of audio chunks.
+  - Listens to the single `transcription_segments` row Realtime channel to populate local data (`transcriptionSegments`, `translatedSegments`).
+  - **REMOVED:** The app no longer directly populates `generatedChunks` via a Realtime subscription to `translated_audio_chunks` within the hook.
 - **Buffering:** Primarily handled by `useVideoProcessingStatus` based on the backend status (`generating_audio`, `transcribing_full`, `translating_full`, etc.) and player state. The app waits for the backend to make data available.
 - **Seek Handling (`useVideoSeekHandler`):**
   - `YouTubePlayer` detects seek -> `onSeek` prop -> `handleSeek(targetTime)`.
@@ -230,7 +232,7 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
     - Finds targets in `transcribing_full` state.
     - **For English targets:** Updates status to `generating_audio`. Triggers `internalGenerateAudioChunk` (via API) **in parallel** for all sub-segments in the `content`.
     - **For Non-English targets:** Updates status to `translating_full`. Triggers `internalTranslateFullContent` (via API) **once** per target language.
-14. **Mobile App (Realtime):** Receives `processing_status` updates (`translating_full`, `generating_audio`...). Listens for updates to the single `transcription_segments` row and `translated_audio_chunks` via separate Realtime subscriptions.
+14. **Mobile App (Realtime):** Receives `processing_status` updates (`translating_full`, `generating_audio`...). Listens for updates to the single `transcription_segments` row via Realtime subscription. When `processing_status` for the target lang/voice becomes `completed`, it triggers a fetch for all completed audio chunks.
 15. **Server (`internalTranslateFullContent`):** Translates text, updates the `translations` field in the single `transcription_segments` row.
 16. **Supabase Trigger (`trigger_on_transcription_translation_update`) -> Supabase Function (`on-translation-complete`):** Triggered by the `translations` field update.
 17. **`on-translation-complete` Function:**
@@ -239,7 +241,7 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
     - Triggers `internalGenerateAudioChunk` (via API) **in parallel** for all sub-segments in the _translated_ content for that language.
 18. **Server (`internalGenerateAudioChunk`):** Receives request for a sub-segment. Extracts text (original or translated), calls TTS (OpenAI/Google), uploads chunk, inserts record into `translated_audio_chunks`.
 19. **(Optional) Supabase Trigger (`trigger_on_audio_chunk_insert`) -> Supabase Function (`on-audio-chunk-complete`):** Updates `processing_status` progress/completion based on chunk count.
-20. **Mobile App (Realtime):** Receives `processing_status` updates (progress, eventual completion). Plays available audio chunks via `useAudioPlayback` as `currentTime` advances.
+20. **Mobile App (Realtime):** Receives `processing_status` updates (progress, eventual completion). Once the status is 'completed', it fetches the `generatedChunks`. Plays available audio chunks via `useAudioPlayback` as `currentTime` advances.
 21. **Mobile App (Seek):**
     - User seeks.
     - `handleSeek` pauses player, sets `isSeeking`.
