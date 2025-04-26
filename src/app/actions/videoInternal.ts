@@ -1089,21 +1089,20 @@ export const internalSpawnTtsJobs = publicAction
               startTime: subSegment.start,
               endTime: subSegment.end,
             };
-            // Call the helper function - AWAIT NOW
-            await triggerInternalAction(
-              "internalGenerateAudioChunk",
-              payload
-            ).then((result) => {
-              if (!result.success) {
-                // Log errors from the async trigger call
-                console.error(
-                  `INTERNAL ACTION: Failed to trigger TTS for ${language}/${voice}, segment ${subSegment.start}-${subSegment.end}:`,
-                  result.error
-                );
-                // Increment error count - maybe update status later?
-                triggerErrors++;
+            // Call the helper function - Fire-and-forget again
+            triggerInternalAction("internalGenerateAudioChunk", payload).then(
+              (result) => {
+                if (!result.success) {
+                  // Log errors from the async trigger call
+                  console.error(
+                    `INTERNAL ACTION: Failed to trigger TTS for ${language}/${voice}, segment ${subSegment.start}-${subSegment.end}:`,
+                    result.error
+                  );
+                  // Increment error count - maybe update status later?
+                  triggerErrors++;
+                }
               }
-            });
+            );
             jobsTriggered++;
           } else {
             console.warn(
