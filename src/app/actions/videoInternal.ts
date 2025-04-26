@@ -411,17 +411,44 @@ export const internalTranslateFullContent = publicAction // Renamed export
       // No need to check for null, single() throws if not found
 
       const segmentData = segmentDataUntyped as any; // Use 'as any' for simplicity
+      console.log(
+        `TranslateFullContent: Fetched segmentData for row ${segmentId}. Keys: ${Object.keys(
+          segmentData
+        )}`
+      );
+      // Add detailed log for content and translations
+      console.log(
+        `TranslateFullContent: segmentData.content keys (if object): ${
+          segmentData.content
+            ? Object.keys(segmentData.content)
+            : "null/undefined"
+        }`
+      );
+      console.log(
+        `TranslateFullContent: segmentData.translations keys (if object): ${
+          segmentData.translations
+            ? Object.keys(segmentData.translations)
+            : "null/undefined"
+        }`
+      );
+
       const existingTranslations = (segmentData.translations ?? {}) as Record<
         string,
         ReplicateSegmentOutput
       >;
 
-      // Check if translation already exists and is valid
-      if (
+      // Log check for existing translation
+      const translationAlreadyExists =
         existingTranslations[targetLanguage] &&
         Array.isArray(existingTranslations[targetLanguage]?.segments) &&
-        existingTranslations[targetLanguage].segments.length > 0
-      ) {
+        existingTranslations[targetLanguage].segments.length > 0;
+
+      console.log(
+        `TranslateFullContent: Checking existing translation for ${targetLanguage}: ${translationAlreadyExists}`
+      );
+
+      // Check if translation already exists and is valid
+      if (translationAlreadyExists) {
         console.log(
           `>>> TranslateFullContent: Translation for ${targetLanguage} already exists and seems valid for row ${segmentId}. Skipping.`
         );
@@ -442,7 +469,14 @@ export const internalTranslateFullContent = publicAction // Renamed export
         Array.isArray(segmentData.content.segments)
       ) {
         originalContent = segmentData.content as ReplicateSegmentOutput;
+        console.log(
+          `TranslateFullContent: Valid original content found with ${originalContent.segments?.length} segments.`
+        );
       } else {
+        console.error(
+          `TranslateFullContent: Invalid 'content' structure in row ${segmentId}. Content:`,
+          segmentData.content
+        );
         throw new AppError(
           AppErrorCode.INVALID_INPUT,
           `Transcription row ${segmentId} has invalid 'content' structure for translation.`
@@ -467,6 +501,10 @@ export const internalTranslateFullContent = publicAction // Renamed export
         config.languages.find((l) => l.code === targetLanguage)?.name ||
         targetLanguage;
 
+      console.log(
+        `TranslateFullContent: Source lang: ${sourceLangCode} (${sourceLangName}), Target lang: ${targetLanguage} (${targetLangName})`
+      );
+
       if (sourceLangCode === targetLanguage) {
         console.log(
           `Source and target language (${targetLanguage}) are the same for row ${segmentId}. Skipping translation call.`
@@ -476,6 +514,9 @@ export const internalTranslateFullContent = publicAction // Renamed export
           ...existingTranslations,
           [targetLanguage]: originalContent, // Store original content under the target language key
         };
+        console.log(
+          `TranslateFullContent: Storing original content as translation for ${targetLanguage}. Updating DB...`
+        );
         const { error: updateError } = await supabase
           .from("transcription_segments")
           .update({ translations: updatedTranslations } as any)
@@ -491,6 +532,7 @@ export const internalTranslateFullContent = publicAction // Renamed export
       }
 
       // Format the *entire* transcription for translation
+      console.log("TranslateFullContent: Formatting text for translation...");
       const textToTranslate = formatTranscriptionForTranslation(
         originalContent.segments
       );
@@ -502,10 +544,10 @@ export const internalTranslateFullContent = publicAction // Renamed export
       }
 
       console.log(
-        `Calling Translation Service (Gemini) to translate content from row ${segmentId} to ${targetLangName}`
+        `TranslateFullContent: Calling Translation Service (Gemini) to translate content from row ${segmentId} to ${targetLangName}`
       );
       console.log(
-        `Text to translate (first 100 chars): "${textToTranslate.substring(
+        `TranslateFullContent: Text to translate (first 100 chars): "${textToTranslate.substring(
           0,
           100
         )}..."`
@@ -516,6 +558,9 @@ export const internalTranslateFullContent = publicAction // Renamed export
         textToTranslate,
         targetLangName
       );
+      console.log(
+        `TranslateFullContent: Received response from translateText. Is empty: ${!translatedText}`
+      );
 
       if (!translatedText) {
         throw new AppError(
@@ -524,17 +569,24 @@ export const internalTranslateFullContent = publicAction // Renamed export
         );
       }
       console.log(
-        `Received translation (first 100 chars): "${translatedText.substring(
+        `TranslateFullContent: Received translation (first 100 chars): "${translatedText.substring(
           0,
           100
         )}..."`
       );
 
       // 5. Parse Translation Response
+      console.log("TranslateFullContent: Parsing translation response...");
       const parsedSegments = parseTranslationResponse(
         translatedText,
         originalContent.segments // Pass original segments for timing alignment
       );
+      console.log(
+        `TranslateFullContent: Parsed translation into ${
+          parsedSegments?.length ?? 0
+        } segments.`
+      );
+
       if (!parsedSegments || parsedSegments.length === 0) {
         throw new AppError(
           AppErrorCode.SERVICE_ERROR,
@@ -554,7 +606,9 @@ export const internalTranslateFullContent = publicAction // Renamed export
       };
 
       console.log(
-        `>>> TranslateFullContent: Updating DB for row ${segmentId} with FULL translation for language ${targetLanguage}`
+        `>>> TranslateFullContent: Preparing to update DB for row ${segmentId} with FULL translation for language ${targetLanguage}. Keys in updatedTranslations: ${Object.keys(
+          updatedTranslations
+        )}`
       );
       const { error: updateError } = await supabase
         .from("transcription_segments")
@@ -584,6 +638,9 @@ export const internalTranslateFullContent = publicAction // Renamed export
         `INTERNAL ACTION: Error translating full content for row ${segmentId} to ${targetLanguage}:`,
         error
       );
+      // Log the detailed error object
+      console.error("Caught Error Details:", JSON.stringify(error, null, 2));
+
       const appErr =
         error instanceof AppError
           ? error
