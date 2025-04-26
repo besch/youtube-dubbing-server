@@ -493,40 +493,32 @@ export const initiateVideoProcessingJob = protectedAction
             let targetInitialStatus: ProcessingStatusValue = "pending"; // Default
 
             if (isDownloadComplete && isTranscriptionComplete) {
-              if (langCode === "en") {
+              // Check if translation already exists in the fetched data
+              let translationExists = false;
+              if (
+                transcriptionData?.translations &&
+                typeof transcriptionData.translations === "object" &&
+                !Array.isArray(transcriptionData.translations) &&
+                transcriptionData.translations !== null
+              ) {
+                // Cast to a temporary variable first
+                const translationsObj =
+                  transcriptionData.translations as Record<string, any>;
+                translationExists = !!translationsObj[langCode]; // Check if the key exists and is truthy
+              }
+
+              if (translationExists) {
                 targetInitialStatus = "generating_audio";
                 targetsToSpawnTts.add(langVoiceKey);
                 console.log(
-                  `InitiateJob: Target ${langVoiceKey} initial status -> generating_audio (EN, Prereqs Met)`
+                  `InitiateJob: Target ${langVoiceKey} initial status -> generating_audio (Non-EN, Translation Exists)`
                 );
               } else {
-                // Check if translation already exists in the fetched data
-                let translationExists = false;
-                if (
-                  transcriptionData?.translations &&
-                  typeof transcriptionData.translations === "object" &&
-                  !Array.isArray(transcriptionData.translations) &&
-                  transcriptionData.translations !== null
-                ) {
-                  // Cast to a temporary variable first
-                  const translationsObj =
-                    transcriptionData.translations as Record<string, any>;
-                  translationExists = !!translationsObj[langCode]; // Check if the key exists and is truthy
-                }
-
-                if (translationExists) {
-                  targetInitialStatus = "generating_audio";
-                  targetsToSpawnTts.add(langVoiceKey);
-                  console.log(
-                    `InitiateJob: Target ${langVoiceKey} initial status -> generating_audio (Non-EN, Translation Exists)`
-                  );
-                } else {
-                  targetInitialStatus = "translating_full";
-                  languagesToTranslate.add(langCode);
-                  console.log(
-                    `InitiateJob: Target ${langVoiceKey} initial status -> translating_full (Non-EN, Translation Needed)`
-                  );
-                }
+                targetInitialStatus = "translating_full";
+                languagesToTranslate.add(langCode);
+                console.log(
+                  `InitiateJob: Target ${langVoiceKey} initial status -> translating_full (Non-EN, Translation Needed)`
+                );
               }
             } else {
               // Prerequisites not met, stays pending
