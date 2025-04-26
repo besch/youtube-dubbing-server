@@ -730,8 +730,8 @@ export const initiateVideoProcessingJob = protectedAction
             for (const langVoiceKey of targetsToSpawnTts) {
               const [lang, voice] = langVoiceKey.split("_");
               try {
-                // Await the call now
-                await internalSpawnTtsJobs({
+                // Don't await - let the on-translation-complete trigger handle this
+                internalSpawnTtsJobs({
                   videoId: videoId,
                   language: lang,
                   voice: voice,

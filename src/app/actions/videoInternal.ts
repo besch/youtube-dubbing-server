@@ -677,6 +677,10 @@ export const internalGenerateAudioChunk = publicAction
       const { videoId, language, voice, startTime, endTime } = parsedInput;
       const supabase = supabaseServiceRoleClient;
 
+      console.log(
+        `[internalGenerateAudioChunk] START - Video: ${videoId}, Lang: ${language}, Voice: ${voice}, Time: ${startTime}-${endTime}`
+      );
+
       let ttsProvider: "openai" | "google";
       let googleLangCode: string | undefined;
       let googleVoiceName: string | undefined;
@@ -730,6 +734,9 @@ export const internalGenerateAudioChunk = publicAction
 
       try {
         // 2. Check if exact chunk already exists (Unchanged)
+        console.log(
+          `[internalGenerateAudioChunk] Checking for existing chunk...`
+        );
         const { data: existingChunk, error: checkError } = await supabase
           .from("translated_audio_chunks")
           .select("storage_path")
@@ -751,14 +758,17 @@ export const internalGenerateAudioChunk = publicAction
         )?.storage_path;
         if (existingPath) {
           console.log(
-            `INTERNAL ACTION: Audio chunk ${startTime}-${endTime} already exists at ${existingPath}. Skipping generation.`
+            `[internalGenerateAudioChunk] Chunk already exists at ${existingPath}. Skipping generation.`
           );
           return { success: true, data: { storagePath: existingPath } };
         }
+        console.log(
+          `[internalGenerateAudioChunk] Chunk does not exist. Proceeding.`
+        );
 
         // 3. Fetch the SINGLE transcription row for the video
         console.log(
-          `GenerateChunk: Fetching transcription row for video ${videoId}`
+          `[internalGenerateAudioChunk] Fetching transcription row for video ${videoId}`
         );
         const { data: transcriptionDataUntyped, error: transcriptionError } =
           await supabase
@@ -783,6 +793,9 @@ export const internalGenerateAudioChunk = publicAction
           | ReplicateSegmentOutput["segments"]
           | undefined
           | null = null;
+        console.log(
+          `[internalGenerateAudioChunk] Extracting text for language: ${language}`
+        );
 
         if (language === "en") {
           const originalContent =
@@ -808,6 +821,9 @@ export const internalGenerateAudioChunk = publicAction
         }
 
         // Find the specific sub-segment text matching startTime and endTime
+        console.log(
+          `[internalGenerateAudioChunk] Searching for target segment ${startTime}-${endTime}...`
+        );
         const targetSegment = sourceSegments.find(
           (s) =>
             s.start !== undefined &&
@@ -820,7 +836,7 @@ export const internalGenerateAudioChunk = publicAction
           textToSynthesize = targetSegment.text.trim();
         } else {
           console.warn(
-            `INTERNAL ACTION: Could not find exact sub-segment text for ${language}, ${startTime}-${endTime} in video ${videoId}. Attempting range extraction as fallback.`
+            `[internalGenerateAudioChunk] Could not find exact sub-segment text for ${language}, ${startTime}-${endTime}. Using fallback range extraction.`
           );
           // Fallback: Use the range extraction (might concatenate parts of adjacent segments)
           // This helper needs the full ReplicateSegmentOutput structure, not just the segments array.
@@ -837,25 +853,16 @@ export const internalGenerateAudioChunk = publicAction
 
         if (!textToSynthesize.trim()) {
           console.warn(
-            `INTERNAL ACTION: No text found for TTS in ${language} for ${videoId} (${startTime}-${endTime}). Creating SILENT chunk.`
+            `[internalGenerateAudioChunk] No text found for TTS in ${language} for ${videoId} (${startTime}-${endTime}). Skipping chunk generation.`
           );
-          // Instead of error, generate a silent chunk? This requires a silent audio file.
-          // For now, let's skip generating a chunk and return success, assuming the calling function handles gaps.
-          // Alternative: Throw error as before if silence is not desired.
+          // Indicate skipped generation with an empty path
           return {
             success: true,
-            // Indicate skipped generation? Need to adjust return type.
-            // For now, return a fake path or handle upstream. Let's return success with empty path.
             data: { storagePath: "" }, // Caller must check for empty path
           };
-          // throw new AppError(
-          //   AppErrorCode.INVALID_INPUT,
-          //   `No text found for the time range ${startTime}-${endTime} in ${language}.`
-          // );
         }
-
         console.log(
-          `INTERNAL ACTION: Text for TTS (${ttsProvider}, ${language}, ${voice}, ${startTime}-${endTime}): "${textToSynthesize.substring(
+          `[internalGenerateAudioChunk] Text extracted (first 100): "${textToSynthesize.substring(
             0,
             100
           )}..."`
@@ -863,6 +870,9 @@ export const internalGenerateAudioChunk = publicAction
 
         // 5. Call appropriate TTS function (Unchanged)
         let ttsResult: { audioBuffer: Buffer; storagePath: string };
+        console.log(
+          `[internalGenerateAudioChunk] Calling ${ttsProvider} TTS...`
+        );
         if (ttsProvider === "google") {
           ttsResult = await generateGoogleTts({
             text: textToSynthesize,
@@ -882,12 +892,15 @@ export const internalGenerateAudioChunk = publicAction
             endTime,
           });
         }
+        console.log(
+          `[internalGenerateAudioChunk] TTS call completed. Storage path: ${ttsResult.storagePath}`
+        );
 
         const { audioBuffer, storagePath: chunkStoragePath } = ttsResult;
 
         // 6. Upload TTS chunk (Unchanged)
         console.log(
-          `INTERNAL ACTION: Uploading TTS chunk to: ${chunkStoragePath}`
+          `[internalGenerateAudioChunk] Uploading TTS chunk to: ${chunkStoragePath}`
         );
         const { error: uploadError } = await supabase.storage
           .from("translated-audio")
@@ -902,10 +915,13 @@ export const internalGenerateAudioChunk = publicAction
             `TTS Upload failed: ${uploadError.message}`
           );
         console.log(
-          `INTERNAL ACTION: TTS chunk uploaded to: ${chunkStoragePath}`
+          `[internalGenerateAudioChunk] TTS chunk uploaded successfully.`
         );
 
         // 7. Insert record into translated_audio_chunks (Unchanged)
+        console.log(
+          `[internalGenerateAudioChunk] Inserting chunk record into DB...`
+        );
         const { error: dbInsertError } = await supabase
           .from("translated_audio_chunks")
           .insert({
@@ -919,26 +935,35 @@ export const internalGenerateAudioChunk = publicAction
 
         if (dbInsertError && dbInsertError.code !== "23505") {
           console.error(
-            "INTERNAL ACTION: DB Error inserting translated chunk record:",
+            "[internalGenerateAudioChunk] DB Error inserting translated chunk record:",
             dbInsertError.message
           );
           // Don't throw, log and continue? Or should upload be reverted?
         } else if (dbInsertError?.code === "23505") {
           console.warn(
-            `INTERNAL ACTION: Race condition: translated_audio_chunk for ${chunkStoragePath} inserted concurrently.`
+            `[internalGenerateAudioChunk] Race condition: translated_audio_chunk for ${chunkStoragePath} inserted concurrently.`
           );
         }
+        console.log(
+          `[internalGenerateAudioChunk] DB insert completed (or handled race condition).`
+        );
 
         // 8. Return the storage path (Unchanged)
         console.log(
-          `INTERNAL ACTION: Returning chunk storage path: ${chunkStoragePath}`
+          `[internalGenerateAudioChunk] Returning chunk storage path: ${chunkStoragePath}`
         );
         return { success: true, data: { storagePath: chunkStoragePath } };
       } catch (error: unknown) {
         console.error(
-          `INTERNAL ACTION: Error generating audio chunk ${startTime}-${endTime}:`,
+          `[internalGenerateAudioChunk] ERROR generating audio chunk ${startTime}-${endTime}:`,
           error
         );
+        // Log the detailed error object
+        console.error(
+          "[internalGenerateAudioChunk] Caught Error Details:",
+          JSON.stringify(error, null, 2)
+        );
+
         const appErr =
           error instanceof AppError
             ? error
