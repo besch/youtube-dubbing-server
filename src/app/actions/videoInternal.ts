@@ -733,13 +733,13 @@ export const internalGenerateAudioChunk = publicAction
       );
 
       try {
-        // 2. Check if exact chunk already exists (Unchanged)
+        // 1. Check if exact chunk already exists BEFORE generation
         console.log(
-          `[internalGenerateAudioChunk] Checking for existing chunk...`
+          `[internalGenerateAudioChunk] Checking for existing chunk BEFORE generation...`
         );
-        const { data: existingChunk, error: checkError } = await supabase
+        const { data: existingChunkPre, error: checkErrorPre } = await supabase
           .from("translated_audio_chunks")
-          .select("storage_path")
+          .select("storage_path") // Only need path
           .eq("video_id", videoId)
           .eq("language", language)
           .eq("voice", voice)
@@ -747,26 +747,33 @@ export const internalGenerateAudioChunk = publicAction
           .eq("chunk_end", endTime)
           .maybeSingle();
 
-        if (checkError)
+        if (checkErrorPre) {
+          console.error(
+            "[internalGenerateAudioChunk] DB error during pre-generation check:",
+            checkErrorPre.message
+          );
           throw new AppError(
             AppErrorCode.DATABASE_ERROR,
-            `DB error checking chunk: ${checkError.message}`
+            `DB error checking chunk: ${checkErrorPre.message}`
           );
+        }
 
-        const existingPath = (
-          existingChunk as Tables<"translated_audio_chunks"> | null
+        const existingPathPre = (
+          existingChunkPre as Tables<"translated_audio_chunks"> | null
         )?.storage_path;
-        if (existingPath) {
+        if (existingPathPre) {
           console.log(
-            `[internalGenerateAudioChunk] Chunk already exists at ${existingPath}. Skipping generation.`
+            `[internalGenerateAudioChunk] Chunk already exists at ${existingPathPre} (pre-check). Skipping generation.`
           );
-          return { success: true, data: { storagePath: existingPath } };
+          return { success: true, data: { storagePath: existingPathPre } };
         }
         console.log(
-          `[internalGenerateAudioChunk] Chunk does not exist. Proceeding.`
+          `[internalGenerateAudioChunk] Chunk does not exist (pre-check). Proceeding.`
         );
 
-        // 3. Fetch the SINGLE transcription row for the video
+        // --- Only proceed if chunk doesn't exist --- //
+
+        // 2. Fetch the SINGLE transcription row for the video
         console.log(
           `[internalGenerateAudioChunk] Fetching transcription row for video ${videoId}`
         );
@@ -918,7 +925,7 @@ export const internalGenerateAudioChunk = publicAction
           `[internalGenerateAudioChunk] TTS chunk uploaded successfully.`
         );
 
-        // 7. Insert record into translated_audio_chunks (Unchanged)
+        // 7. Insert record into translated_audio_chunks
         console.log(
           `[internalGenerateAudioChunk] Inserting chunk record into DB...`
         );
@@ -931,22 +938,26 @@ export const internalGenerateAudioChunk = publicAction
             chunk_start: startTime,
             chunk_end: endTime,
             storage_path: chunkStoragePath,
+            // is_favorite and expiry_at will use default/NULL
           });
 
-        if (dbInsertError && dbInsertError.code !== "23505") {
+        // Remove specific handling for 23505, as pre-check should prevent it.
+        // Any insert error now is likely a real issue.
+        if (dbInsertError) {
           console.error(
             "[internalGenerateAudioChunk] DB Error inserting translated chunk record:",
             dbInsertError.message
           );
-          // Don't throw, log and continue? Or should upload be reverted?
-        } else if (dbInsertError?.code === "23505") {
-          console.warn(
-            `[internalGenerateAudioChunk] Race condition: translated_audio_chunk for ${chunkStoragePath} inserted concurrently.`
+          // If the error IS 23505 despite the pre-check (very unlikely race), maybe log and return success?
+          // For now, treat any insert error as a failure.
+          throw new AppError(
+            AppErrorCode.DATABASE_ERROR,
+            `DB error inserting chunk record: ${dbInsertError.message}`
           );
         }
-        console.log(
-          `[internalGenerateAudioChunk] DB insert completed (or handled race condition).`
-        );
+        // Removed the specific 23505 handling/warning log.
+
+        console.log(`[internalGenerateAudioChunk] DB insert successful.`);
 
         // 8. Return the storage path (Unchanged)
         console.log(
