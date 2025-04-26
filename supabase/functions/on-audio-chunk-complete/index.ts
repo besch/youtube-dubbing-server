@@ -124,9 +124,10 @@ serve(async (req) => {
     }
 
     // --- New Completion Check based on Chunk Counts --- //
-    let expectedChunkCount = 0;
-    let isComplete = false;
-    let actualChunkCount = 0; // Initialize actual count
+    let expectedInitialChunkCount = 0; // Count chunks <= 60s
+    let totalExpectedChunkCount = 0; // Count all chunks for progress calculation
+    let isInitialComplete = false;
+    let actualInitialChunkCount = 0; // Count generated chunks <= 60s
     let calculatedProgress = 0; // Initialize progress
 
     // 1. Fetch the SINGLE completed transcription row for the video
@@ -144,8 +145,7 @@ serve(async (req) => {
         `[on-audio-chunk] Error fetching transcription data for count check (${dbVideoId}):`,
         transcriptionError
       );
-      // Can't determine expected count, proceed without marking complete? Or fail?
-      // Mark as failed for safety
+      // Can't determine expected count, mark as failed
       processingConfig[langVoiceKey] = {
         ...processingConfig[langVoiceKey],
         status: "failed",
@@ -154,7 +154,7 @@ serve(async (req) => {
         last_updated: new Date().toISOString(),
       };
     } else if (transcriptionData) {
-      // Calculate expected count based on the target language from the single transcription row
+      // Calculate expected counts based on the target language from the single transcription row
       let subSegments = null;
       const content =
         transcriptionData.content as ReplicateSegmentOutput | null;
@@ -170,128 +170,180 @@ serve(async (req) => {
       }
 
       if (subSegments && Array.isArray(subSegments)) {
-        // Count only valid segments with start and end times
-        expectedChunkCount = subSegments.filter(
+        const validSegments = (subSegments as any[]).filter(
           (s) => s.start !== undefined && s.end !== undefined
+        );
+        totalExpectedChunkCount = validSegments.length; // Total valid segments
+        // Count only valid segments ending within the first 60 seconds
+        expectedInitialChunkCount = validSegments.filter(
+          (s) => s.end <= 60
         ).length;
       } else {
-        // No sub-segments found in the expected structure
+        // No sub-segments found
         console.warn(
           `[on-audio-chunk] Count Check (${dbVideoId}/${langVoiceKey}): No sub-segments found in ${
             language === "en" ? "content" : `translations[${language}]`
           }. Assuming 0 expected.`
         );
-        expectedChunkCount = 0;
+        totalExpectedChunkCount = 0;
+        expectedInitialChunkCount = 0;
       }
       console.log(
-        `[on-audio-chunk] Count Check (${dbVideoId}/${langVoiceKey}): Expected chunk count = ${expectedChunkCount}`
+        `[on-audio-chunk] Count Check (${dbVideoId}/${langVoiceKey}): Expected Initial (<=60s) = ${expectedInitialChunkCount}, Total Expected = ${totalExpectedChunkCount}`
       );
     } else {
       console.log(
         `[on-audio-chunk] Count Check (${dbVideoId}/${langVoiceKey}): No completed transcription row found.`
       );
-      // No transcription means 0 expected chunks? Or should this be an error?
-      // For now, assume 0 expected if no source transcription found.
-      expectedChunkCount = 0;
+      // Assume 0 expected if no source transcription found.
+      totalExpectedChunkCount = 0;
+      expectedInitialChunkCount = 0;
     }
 
     // Only proceed with counting actual chunks if no error fetching transcription
     if (!processingConfig[langVoiceKey]?.error_message) {
-      // 2. Count actual generated chunks for this language/voice
-      const { count: fetchedChunkCount, error: countError } =
+      // 2. Count actual generated chunks for this language/voice ENDING WITHIN 60 SECONDS
+      const { count: fetchedInitialChunkCount, error: countError } =
         await supabaseAdmin
           .from("translated_audio_chunks")
           .select("*", { count: "exact", head: true }) // Use head:true for efficient counting
           .eq("video_id", dbVideoId)
           .eq("language", language)
-          .eq("voice", voice);
+          .eq("voice", voice)
+          .lte("chunk_end", 60); // Filter for chunks ending <= 60s
 
       if (countError) {
         console.error(
-          `[on-audio-chunk] Error counting existing chunks (${dbVideoId}/${langVoiceKey}):`,
+          `[on-audio-chunk] Error counting existing initial chunks (${dbVideoId}/${langVoiceKey}):`,
           countError
         );
-        // Can't determine actual count, proceed without marking complete, potentially mark as failed?
+        // Mark as failed if count fails
         processingConfig[langVoiceKey] = {
           ...processingConfig[langVoiceKey],
-          status: "failed", // Fail if count fails?
-          error_message: "Failed to count generated audio chunks.",
+          status: "failed",
+          error_message: "Failed to count generated initial audio chunks.",
           last_updated: new Date().toISOString(),
         };
       } else {
-        actualChunkCount = fetchedChunkCount ?? 0;
+        actualInitialChunkCount = fetchedInitialChunkCount ?? 0;
         console.log(
-          `[on-audio-chunk] Count Check (${dbVideoId}/${langVoiceKey}): Actual chunk count = ${actualChunkCount}`
+          `[on-audio-chunk] Count Check (${dbVideoId}/${langVoiceKey}): Actual Initial (<=60s) chunk count = ${actualInitialChunkCount}`
         );
       }
     }
 
-    // 3. Compare counts and determine status/progress (only if not already marked as failed)
+    // 3. Compare INITIAL counts and determine status/progress (only if not already marked as failed)
     if (!processingConfig[langVoiceKey]?.error_message) {
-      if (expectedChunkCount > 0 && actualChunkCount >= expectedChunkCount) {
+      // Check if the initial generation phase is complete
+      if (
+        expectedInitialChunkCount > 0 &&
+        actualInitialChunkCount >= expectedInitialChunkCount
+      ) {
         console.log(
-          `[on-audio-chunk] Determined process ${langVoiceKey} for video ${dbVideoId} is COMPLETE based on chunk count.`
+          `[on-audio-chunk] Determined INITIAL generation phase for ${langVoiceKey} video ${dbVideoId} is COMPLETE.`
         );
-        isComplete = true;
-        calculatedProgress = 100;
-      } else if (expectedChunkCount > 0) {
+        isInitialComplete = true;
+        // Don't calculate progress based on initial here, status will be 'completed'
+        // We will set progress to 100 when setting status to 'completed'
+      } else if (expectedInitialChunkCount > 0) {
+        // Calculate progress based on initial chunks if initial phase not yet complete
         calculatedProgress = Math.min(
-          99,
-          Math.floor((actualChunkCount / expectedChunkCount) * 100)
+          99, // Cap progress at 99 until initial phase is truly complete
+          Math.floor(
+            (actualInitialChunkCount / expectedInitialChunkCount) * 100
+          )
         );
-        isComplete = false; // Not complete yet
+        isInitialComplete = false; // Not complete yet
       } else {
-        // Handle case where expectedChunkCount is 0 (no transcription segments found or empty)
+        // Handle case where expectedInitialChunkCount is 0
         console.log(
-          `[on-audio-chunk] Count Check (${dbVideoId}/${langVoiceKey}): Expected count is 0, treating as complete.`
+          `[on-audio-chunk] Count Check (${dbVideoId}/${langVoiceKey}): Expected initial count is 0, treating initial phase as complete.`
         );
-        // If 0 are expected and 0 (or more, somehow) exist, consider it complete.
-        isComplete = true;
-        calculatedProgress = 100;
-      }
-      // --- End New Completion Check --- //
-
-      // Update Status
-      if (!processingConfig[langVoiceKey]) {
-        processingConfig[langVoiceKey] = {} as VideoProcessingStatusDetail; // Initialize if somehow missing
+        isInitialComplete = true; // If 0 are expected, the initial phase is done.
       }
 
-      if (isComplete) {
-        // Use the new count-based check result
-        console.log(
-          `[on-audio-chunk] Marking process ${langVoiceKey} for video ${dbVideoId} as COMPLETED.`
-        );
-        processingConfig[langVoiceKey].status = "completed";
-        processingConfig[langVoiceKey].progress = 100;
+      // 4. Update Video Processing Status
+      const now = new Date().toISOString();
+      if (isInitialComplete) {
+        // Only update to completed if the current status is still 'generating_audio'
+        if (currentTargetStatus === "generating_audio") {
+          processingConfig[langVoiceKey] = {
+            status: "completed", // Mark as completed now
+            progress: 100, // Set progress to 100
+            last_updated: now,
+            error_message: null, // Clear any previous non-fatal errors
+          };
+          console.log(
+            `[on-audio-chunk] Updating status for ${langVoiceKey} video ${dbVideoId} to 'completed'.`
+          );
+        } else {
+          // If status somehow changed from 'generating_audio' already, log it but don't overwrite
+          console.log(
+            `[on-audio-chunk] Initial generation complete for ${langVoiceKey} video ${dbVideoId}, but current status is ${currentTargetStatus}. Not overwriting.`
+          );
+          // Keep existing status/progress/error if it wasn't 'generating_audio'
+          processingConfig[langVoiceKey] = {
+            ...processingConfig[langVoiceKey], // Keep existing details
+            last_updated: now, // Just update timestamp
+          };
+        }
       } else {
-        processingConfig[langVoiceKey].status = "generating_audio"; // Keep status as generating
-        processingConfig[langVoiceKey].progress = calculatedProgress; // Use the calculated progress
+        // Initial generation is not complete, update progress if status is 'generating_audio'
+        if (currentTargetStatus === "generating_audio") {
+          processingConfig[langVoiceKey] = {
+            ...processingConfig[langVoiceKey], // Keep existing details like error message if any
+            status: "generating_audio", // Keep status
+            progress: calculatedProgress, // Update progress
+            last_updated: now,
+          };
+          console.log(
+            `[on-audio-chunk] Updating progress for ${langVoiceKey} video ${dbVideoId} to ${calculatedProgress}%.`
+          );
+        } else {
+          // If status is not 'generating_audio' (e.g., 'translating_full'), don't revert progress/status
+          console.log(
+            `[on-audio-chunk] Received chunk for ${langVoiceKey} video ${dbVideoId}, but current status is ${currentTargetStatus}. Not updating progress.`
+          );
+          processingConfig[langVoiceKey] = {
+            ...processingConfig[langVoiceKey],
+            last_updated: now,
+          };
+        }
       }
-      processingConfig[langVoiceKey].last_updated = new Date().toISOString();
-    }
 
-    // Update Video Processing Status in DB (will update even if only error was set)
-    const { error: updateError } = await supabaseAdmin
-      .from("videos")
-      .update({ processing_status: processingConfig })
-      .eq("id", dbVideoId);
-
-    if (updateError) {
-      console.error(
-        `[on-audio-chunk] Error updating video processing status for ${dbVideoId} after audio chunk update:`,
-        updateError
+      // --- Update Video Processing Status in DB --- //
+      // We update the status regardless of completion to record progress or final state
+      console.log(
+        `[on-audio-chunk] Updating video processing_status in DB for ${dbVideoId}:`,
+        JSON.stringify(processingConfig[langVoiceKey]) // Log the specific status being updated
       );
-      // Log error, but likely continue and return success to webhook sender
-    }
+      const { error: updateError } = await supabaseAdmin
+        .from("videos")
+        .update({ processing_status: processingConfig }) // Update the whole object
+        .eq("id", dbVideoId);
 
-    // Return Success
-    return new Response(
-      JSON.stringify({ message: "Audio chunk update processed" }),
-      {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-        status: 200,
+      if (updateError) {
+        console.error(
+          `[on-audio-chunk] Error updating video processing status for ${dbVideoId}:`,
+          updateError
+        );
+        // This is tricky, the chunk IS complete, but the status update failed.
+        // Return an error, but the state might be inconsistent.
+        return new Response(
+          JSON.stringify({ error: "Failed to update video status" }),
+          {
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+            status: 500,
+          }
+        );
       }
-    );
+    } // End of if (!processingConfig[langVoiceKey]?.error_message)
+
+    // Return success
+    return new Response(JSON.stringify({ message: "Audio chunk processed" }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      status: 200,
+    });
   } catch (error) {
     console.error("Error in on-audio-chunk-complete function:", error);
     return new Response(JSON.stringify({ error: error.message }), {

@@ -168,7 +168,7 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
 - **Internal Actions (`videoInternal.ts` - Called by Supabase Functions):**
   - `internalRequestFullTranscription`: Called by `on-download-complete`. Gets full audio URL, starts Replicate job, updates the single `transcription_segments` row (status: `processing`).
   - `internalTranslateFullContent`: Called by `on-transcription-complete` (for non-English). Translates the entire `content` field, updates the `translations` field in the single `transcription_segments` row.
-  - `internalGenerateAudioChunk`: Called by `on-transcription-complete` (for English) or `on-translation-complete` (for other languages). Takes details for a specific sub-segment (start/end time), extracts text from the full `content` or `translations`, calls TTS API (OpenAI/Google), uploads chunk, inserts record into `translated_audio_chunks`.
+  - `internalGenerateAudioChunk`: Called by `on-translation-complete` (for initial chunks) or directly by the client via `generateAudioChunk` action. Takes details for a specific sub-segment (start/end time), extracts text from the full `content` or `translations`, calls TTS API (OpenAI/Google), uploads chunk, inserts record into `translated_audio_chunks`.
 
 ### 3.4. API Routes
 
@@ -187,8 +187,7 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
     - Reads the completed `content` field from the updated row.
     - Iterates through target languages in `videos.processing_status` that are in the `transcribing_full` state.
     - For **English** targets:
-      - Updates `processing_status` to `generating_audio`.
-      - Calls `internalGenerateAudioChunk` via `/api/internal` **for each sub-segment** within the full transcription content (parallel triggers).
+      - Updates `processing_status` to `generating_audio`. **Does not trigger audio generation automatically.** Audio chunks must be requested on-demand by the client.
     - For **non-English** targets:
       - Updates `processing_status` to `translating_full`.
       - Calls `internalTranslateFullContent` via `/api/internal` **once** for the entire transcription content and the target language.
@@ -198,12 +197,12 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
     - For each matching target:
       - Updates `processing_status` to `generating_audio`.
       - Reads the translated sub-segments for that language.
-      - Calls `internalGenerateAudioChunk` via `/api/internal` **for each translated sub-segment** (parallel triggers).
+      - Calls `internalGenerateAudioChunk` via `/api/internal` **for each translated sub-segment where `end_time <= 60` seconds** (parallel triggers for the first minute). Subsequent chunks must be requested on-demand by the client.
   - `on-audio-chunk-complete` (Optional: Triggered by `translated_audio_chunks` inserts):
     - Can be used to calculate fine-grained progress for the `generating_audio` step.
-    - Fetches total expected sub-segments (from `transcription_segments.content`).
+    - Fetches total expected sub-segments (from `transcription_segments.content` or `translations`).
     - Counts completed chunks for the specific video/language/voice.
-    - Updates `videos.processing_status` with progress percentage.
+    - Updates `videos.processing_status` with progress percentage (based on total expected chunks).
     - If count matches total expected, sets `processing_status` to `completed`.
 
 ## 4. Downloader Service (`youtube-download/`)
@@ -230,22 +229,22 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
 12. **Supabase Trigger (`trigger_on_transcription_status_complete`) -> Supabase Function (`on-transcription-complete`):** Triggered by the `transcription_segments` status update.
 13. **`on-transcription-complete` Function:**
     - Finds targets in `transcribing_full` state.
-    - **For English targets:** Updates status to `generating_audio`. Triggers `internalGenerateAudioChunk` (via API) **in parallel** for all sub-segments in the `content`.
+    - **For English targets:** Updates status to `generating_audio`. **No automatic audio generation.** Client needs to request chunks using `generateAudioChunk` action.
     - **For Non-English targets:** Updates status to `translating_full`. Triggers `internalTranslateFullContent` (via API) **once** per target language.
-14. **Mobile App (Realtime):** Receives `processing_status` updates (`translating_full`, `generating_audio`...). Listens for updates to the single `transcription_segments` row via Realtime subscription. When `processing_status` for the target lang/voice becomes `completed`, it triggers a fetch for all completed audio chunks.
+14. **Mobile App (Realtime):** Receives `processing_status` updates (`translating_full`, `generating_audio`...). Listens for updates to the single `transcription_segments` row. When `processing_status` for the target lang/voice becomes `completed`, it can fetch all completed audio chunks. **Client is now responsible for requesting audio chunks beyond the initial pre-generated ones using `generateAudioChunk`.**
 15. **Server (`internalTranslateFullContent`):** Translates text, updates the `translations` field in the single `transcription_segments` row.
 16. **Supabase Trigger (`trigger_on_transcription_translation_update`) -> Supabase Function (`on-translation-complete`):** Triggered by the `translations` field update.
 17. **`on-translation-complete` Function:**
     - Finds targets in `translating_full` state matching the updated language.
     - Updates status to `generating_audio`.
-    - Triggers `internalGenerateAudioChunk` (via API) **in parallel** for all sub-segments in the _translated_ content for that language.
-18. **Server (`internalGenerateAudioChunk`):** Receives request for a sub-segment. Extracts text (original or translated), calls TTS (OpenAI/Google), uploads chunk, inserts record into `translated_audio_chunks`.
-19. **(Optional) Supabase Trigger (`trigger_on_audio_chunk_insert`) -> Supabase Function (`on-audio-chunk-complete`):** Updates `processing_status` progress/completion based on chunk count.
-20. **Mobile App (Realtime):** Receives `processing_status` updates (progress, eventual completion). Once the status is 'completed', it fetches the `generatedChunks`. Plays available audio chunks via `useAudioPlayback` as `currentTime` advances.
+    - Triggers `internalGenerateAudioChunk` (via API) **in parallel** for translated sub-segments **where `end_time <= 60`**.
+18. **Server (`internalGenerateAudioChunk` / Client Action `generateAudioChunk`):** Receives request for a sub-segment (either from `on-translation-complete` or client). Extracts text (original or translated), calls TTS (OpenAI/Google), uploads chunk, inserts record into `translated_audio_chunks`.
+19. **(Optional) Supabase Trigger (`trigger_on_audio_chunk_insert`) -> Supabase Function (`on-audio-chunk-complete`):** Updates `processing_status` progress/completion based on chunk count vs. total expected count.
+20. **Mobile App (Realtime):** Receives `processing_status` updates (progress, eventual completion). Fetches initially generated chunks. Plays available audio chunks via `useAudioPlayback`. **When approaching the end of available audio, triggers `generateAudioChunk` action for the next required segment(s).**
 21. **Mobile App (Seek):**
     - User seeks.
     - `handleSeek` pauses player, sets `isSeeking`.
-    - `checkSeekCompletion` polls until the single `transcription_segments` row's data (`content` or `translations`) and `generatedChunks` contain the necessary data for the `seekTargetTime`.
+    - `checkSeekCompletion` polls until the single `transcription_segments` row's data (`content` or `translations`) is available **AND** the necessary `generatedChunks` contain the audio data for the `seekTargetTime`. **If audio chunk is missing, `handleSeek` (or a related mechanism) needs to trigger `generateAudioChunk` action for the required segment.**
     - Once data exists, `isSeeking` becomes false, player resumes.
 
 ## 7. TODOs / Pending Items
@@ -257,3 +256,6 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
 - **Testing:** Thoroughly test the end-to-end backend processing flow (full transcription -> translation -> TTS) and client interaction.
 - Review/configure Supabase Storage policies.
 - Review/improve logging across all services.
+- **Client-Side Logic:** Implement client-side logic in the mobile app to:
+  - Request audio chunks on-demand using the `generateAudioChunk` action when playback nears the end of available chunks.
+  - Request audio chunks on-demand during seek operations if the target time's chunk hasn't been generated yet.

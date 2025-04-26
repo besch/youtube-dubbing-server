@@ -228,15 +228,16 @@ serve(async (req) => {
         };
         updateNeeded = true;
 
-        // Trigger TTS for each sub-segment in the translation
+        // Trigger TTS for each sub-segment in the translation up to the 1-minute mark
         for (const subSegment of translatedContent.segments) {
           if (
             subSegment.start !== undefined &&
             subSegment.end !== undefined &&
-            subSegment.text?.trim()
+            subSegment.text?.trim() &&
+            subSegment.end <= 60
           ) {
             console.log(
-              `   -> Triggering TTS for ${langVoiceKey} sub-segment ${subSegment.start}-${subSegment.end}`
+              `   -> Triggering initial TTS for ${langVoiceKey} sub-segment ${subSegment.start}-${subSegment.end} (<= 60s)`
             );
             try {
               // Don't await, trigger in parallel
@@ -257,7 +258,7 @@ serve(async (req) => {
             }
           } else {
             console.warn(
-              `[on-translation-complete] Skipping ${langVoiceKey} sub-segment due to missing start/end/text:`,
+              `[on-translation-complete] Skipping ${langVoiceKey} sub-segment (start/end/text missing or end > 60s):`,
               subSegment
             );
           }
