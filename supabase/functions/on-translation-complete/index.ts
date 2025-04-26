@@ -228,40 +228,26 @@ serve(async (req) => {
         };
         updateNeeded = true;
 
-        // Trigger TTS for each sub-segment in the translation up to the 1-minute mark
-        for (const subSegment of translatedContent.segments) {
-          if (
-            subSegment.start !== undefined &&
-            subSegment.end !== undefined &&
-            subSegment.text?.trim() &&
-            subSegment.end <= 60
-          ) {
-            console.log(
-              `   -> Triggering initial TTS for ${langVoiceKey} sub-segment ${subSegment.start}-${subSegment.end} (<= 60s)`
-            );
-            try {
-              // Don't await, trigger in parallel
-              triggerNextAction("internalGenerateAudioChunk", {
-                videoId: dbVideoId,
-                language: language,
-                voice: voice,
-                startTime: subSegment.start,
-                endTime: subSegment.end,
-              });
-            } catch (ttsError) {
-              console.error(
-                `[on-translation-complete] Failed to trigger TTS for ${langVoiceKey}, segment ${subSegment.start}-${subSegment.end}: ${ttsError.message}. Continuing...`
-              );
-              // processingConfig[langVoiceKey].status = "failed";
-              // processingConfig[langVoiceKey].error_message =
-              //   `TTS trigger failed for segment ${subSegment.start}-${subSegment.end}`;
-            }
-          } else {
-            console.warn(
-              `[on-translation-complete] Skipping ${langVoiceKey} sub-segment (start/end/text missing or end > 60s):`,
-              subSegment
-            );
-          }
+        // Trigger TTS spawning via the internal action
+        console.log(
+          `   -> Triggering internalSpawnTtsJobs for ${langVoiceKey}`
+        );
+        try {
+          // Don't await, trigger in parallel
+          triggerNextAction("internalSpawnTtsJobs", {
+            videoId: dbVideoId,
+            language: language,
+            voice: voice,
+          });
+        } catch (spawnError) {
+          console.error(
+            `[on-translation-complete] Failed to trigger internalSpawnTtsJobs for ${langVoiceKey}: ${spawnError.message}. Continuing...`
+          );
+          // Optionally update status to failed here
+          processingConfig[langVoiceKey].status = "failed";
+          processingConfig[
+            langVoiceKey
+          ].error_message = `Failed to trigger TTS job spawning: ${spawnError.message}`;
         }
       }
     }

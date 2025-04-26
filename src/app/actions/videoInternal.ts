@@ -980,7 +980,8 @@ export const internalSpawnTtsJobs = publicAction
             subSegment.start !== undefined &&
             subSegment.end !== undefined &&
             subSegment.text?.trim() &&
-            subSegment.end > subSegment.start
+            subSegment.end > subSegment.start &&
+            subSegment.end <= 60
           ) {
             const payload = {
               videoId: videoId,
