@@ -672,7 +672,7 @@ export const initiateVideoProcessingJob = protectedAction
               // The Supabase triggers will handle the flow from its completion.
               // However, if we wanted to know if the trigger call itself failed immediately, we could await.
               // For simplicity and to avoid blocking, let's not await.
-              internalRequestFullTranscription({
+              await internalRequestFullTranscription({
                 videoId: videoId,
                 audioStoragePath: downloadStoragePath,
               });
@@ -702,8 +702,8 @@ export const initiateVideoProcessingJob = protectedAction
             );
             for (const lang of languagesToTranslate) {
               try {
-                // Don't await - let them run async
-                internalTranslateFullContent({
+                // Await the call now
+                await internalTranslateFullContent({
                   segmentId: transcriptionData.id,
                   targetLanguage: lang,
                 });
@@ -730,8 +730,8 @@ export const initiateVideoProcessingJob = protectedAction
             for (const langVoiceKey of targetsToSpawnTts) {
               const [lang, voice] = langVoiceKey.split("_");
               try {
-                // Don't await - let them run async
-                internalSpawnTtsJobs({
+                // Await the call now
+                await internalSpawnTtsJobs({
                   videoId: videoId,
                   language: lang,
                   voice: voice,
