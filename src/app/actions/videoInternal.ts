@@ -941,19 +941,25 @@ export const internalGenerateAudioChunk = publicAction
             // is_favorite and expiry_at will use default/NULL
           });
 
-        // Remove specific handling for 23505, as pre-check should prevent it.
-        // Any insert error now is likely a real issue.
         if (dbInsertError) {
-          console.error(
-            "[internalGenerateAudioChunk] DB Error inserting translated chunk record:",
-            dbInsertError.message
-          );
-          // If the error IS 23505 despite the pre-check (very unlikely race), maybe log and return success?
-          // For now, treat any insert error as a failure.
-          throw new AppError(
-            AppErrorCode.DATABASE_ERROR,
-            `DB error inserting chunk record: ${dbInsertError.message}`
-          );
+          // Check specifically for the unique constraint violation (race condition)
+          if (dbInsertError.code === "23505") {
+            console.warn(
+              `[internalGenerateAudioChunk] Handled Race condition: Chunk for ${chunkStoragePath} was inserted concurrently. Returning success.`
+            );
+            // We know the chunk exists, so return success with the path
+            return { success: true, data: { storagePath: chunkStoragePath } };
+          } else {
+            // It's some other database error
+            console.error(
+              "[internalGenerateAudioChunk] DB Error inserting translated chunk record:",
+              dbInsertError.message
+            );
+            throw new AppError(
+              AppErrorCode.DATABASE_ERROR,
+              `DB error inserting chunk record: ${dbInsertError.message}`
+            );
+          }
         }
         // Removed the specific 23505 handling/warning log.
 
