@@ -1012,6 +1012,7 @@ export const internalSpawnTtsJobs = publicAction
     }): Promise<ActionResponse<{ jobsTriggered: number }>> => {
       const { videoId, language, voice } = parsedInput;
       const supabase = supabaseServiceRoleClient;
+      const langVoiceKey = `${language}_${voice}`; // Combine lang and voice for status updates
 
       console.log(
         `INTERNAL ACTION: Spawning TTS jobs for Video: ${videoId}, Lang: ${language}, Voice: ${voice}`
@@ -1071,51 +1072,167 @@ export const internalSpawnTtsJobs = publicAction
           return { success: true, data: { jobsTriggered: 0 } };
         }
 
-        // 3. Loop and trigger internalGenerateAudioChunk for each segment via API
-        let jobsTriggered = 0;
-        let triggerErrors = 0;
-        for (const subSegment of sourceSegments) {
-          if (
+        // 3. Filter valid segments for processing (first 60 seconds)
+        const validSegmentsToProcess = sourceSegments.filter(
+          (subSegment) =>
             subSegment.start !== undefined &&
             subSegment.end !== undefined &&
             subSegment.text?.trim() &&
             subSegment.end > subSegment.start &&
-            subSegment.end <= 60
-          ) {
+            subSegment.end <= 60 // Only process initial segments <= 60s
+        );
+
+        if (validSegmentsToProcess.length === 0) {
+          console.log(
+            `INTERNAL ACTION: No valid segments found <= 60s for ${language} in video ${videoId}. No TTS jobs to trigger.`
+          );
+          // If no initial segments, the process is technically complete for this stage.
+          // The on-audio-chunk function should handle setting the final 'completed' status.
+          return { success: true, data: { jobsTriggered: 0 } };
+        }
+
+        // 4. Batch Trigger Generation Jobs
+        const BATCH_SIZE = 10; // Process 10 segments at a time
+        let jobsTriggered = 0;
+        let totalTriggerErrors = 0;
+        let processingErrorOccurred = false; // Flag to indicate if any batch failed
+
+        console.log(
+          `INTERNAL ACTION: Starting batch processing for ${validSegmentsToProcess.length} segments in batches of ${BATCH_SIZE}...`
+        );
+
+        for (let i = 0; i < validSegmentsToProcess.length; i += BATCH_SIZE) {
+          const batch = validSegmentsToProcess.slice(i, i + BATCH_SIZE);
+          console.log(
+            `INTERNAL ACTION: Processing batch ${
+              i / BATCH_SIZE + 1
+            } (segments ${i + 1}-${Math.min(
+              i + BATCH_SIZE,
+              validSegmentsToProcess.length
+            )})`
+          );
+
+          const triggerPromises = batch.map((subSegment) => {
             const payload = {
               videoId: videoId,
               language: language,
               voice: voice,
-              startTime: subSegment.start,
-              endTime: subSegment.end,
+              startTime: subSegment.start!, // Assert non-null based on filter
+              endTime: subSegment.end!, // Assert non-null based on filter
             };
-            // Call the helper function - Fire-and-forget again
-            triggerInternalAction("internalGenerateAudioChunk", payload).then(
-              (result) => {
-                if (!result.success) {
-                  // Log errors from the async trigger call
-                  console.error(
-                    `INTERNAL ACTION: Failed to trigger TTS for ${language}/${voice}, segment ${subSegment.start}-${subSegment.end}:`,
-                    result.error
-                  );
-                  // Increment error count - maybe update status later? //
-                  triggerErrors++;
-                }
-              }
-            );
-            jobsTriggered++;
-          } else {
-            console.warn(
-              `INTERNAL ACTION: Skipping invalid segment for TTS spawning:`,
-              subSegment
-            );
-          }
+            // Call helper but await its result within the batch
+            return triggerInternalAction("internalGenerateAudioChunk", payload);
+          });
+
+          // Use Promise.allSettled to handle individual promise rejections
+          const results = await Promise.allSettled(triggerPromises);
+
+          let batchTriggerErrors = 0;
+          results.forEach((result, index) => {
+            if (
+              result.status === "fulfilled" &&
+              result.value.success === true
+            ) {
+              jobsTriggered++;
+            } else {
+              // Handle rejected promises or failed internal actions
+              batchTriggerErrors++;
+              totalTriggerErrors++;
+              processingErrorOccurred = true; // Mark that an error occurred
+              const segment = batch[index];
+              const errorInfo =
+                result.status === "rejected"
+                  ? result.reason
+                  : result.value.error;
+              console.error(
+                `INTERNAL ACTION: Failed to trigger TTS for ${language}/${voice}, segment ${segment.start}-${segment.end}:`,
+                errorInfo
+              );
+            }
+          });
+
+          console.log(
+            `INTERNAL ACTION: Batch ${
+              i / BATCH_SIZE + 1
+            } complete. Successful triggers in batch: ${
+              batch.length - batchTriggerErrors
+            }, Errors in batch: ${batchTriggerErrors}`
+          );
+
+          // Optional: Add a small delay between batches if needed
+          // await new Promise(resolve => setTimeout(resolve, 500)); // 500ms delay
         }
 
         console.log(
-          `INTERNAL ACTION: Finished spawning ${jobsTriggered} TTS jobs for ${videoId}, ${language}, ${voice}. Trigger errors: ${triggerErrors}.`
+          `INTERNAL ACTION: Finished spawning TTS jobs for ${videoId}, ${language}, ${voice}. Total Jobs Triggered: ${jobsTriggered}, Total Trigger Errors: ${totalTriggerErrors}.`
         );
-        // Return success even if some triggers failed; progress relies on chunks being inserted
+
+        // 5. Update Video Status if Errors Occurred during Spawning
+        if (processingErrorOccurred) {
+          console.error(
+            `INTERNAL ACTION: Errors occurred during TTS job spawning for ${langVoiceKey}. Updating video status to failed.`
+          );
+          try {
+            // Fetch current status first to avoid overwriting other keys
+            const { data: videoData, error: fetchError } = await supabase
+              .from("videos")
+              .select("processing_status")
+              .eq("id", videoId)
+              .single();
+
+            if (fetchError) {
+              console.error(
+                `INTERNAL ACTION: Failed to fetch current video status for error update:`,
+                fetchError
+              );
+              // Can't update status, but proceed to return overall result
+            } else {
+              const currentStatus =
+                (videoData?.processing_status as Record<string, any>) || {};
+              const updatedStatus = {
+                ...currentStatus,
+                [langVoiceKey]: {
+                  status: "failed",
+                  error_message: `Failed to trigger ${totalTriggerErrors} audio generation job(s).`,
+                  last_updated: new Date().toISOString(),
+                  // Keep progress if it existed? Or reset? Resetting might be clearer.
+                  progress: currentStatus[langVoiceKey]?.progress ?? 0,
+                },
+              };
+
+              const { error: updateError } = await supabase
+                .from("videos")
+                .update({ processing_status: updatedStatus })
+                .eq("id", videoId);
+
+              if (updateError) {
+                console.error(
+                  `INTERNAL ACTION: Failed to update video status to failed after trigger errors:`,
+                  updateError
+                );
+              } else {
+                console.log(
+                  `INTERNAL ACTION: Successfully updated video status for ${langVoiceKey} to failed.`
+                );
+              }
+            }
+          } catch (statusUpdateError) {
+            console.error(
+              `INTERNAL ACTION: Unexpected error updating video status to failed:`,
+              statusUpdateError
+            );
+          }
+          // Return failure from the action if any trigger failed, even if status update fails
+          return {
+            success: false,
+            error: new AppError(
+              AppErrorCode.SERVICE_ERROR, // Or a more specific error code
+              `Failed to trigger ${totalTriggerErrors} audio generation job(s) for ${langVoiceKey}. Check logs.`
+            ),
+          };
+        }
+
+        // Return success if all batches processed without trigger errors
         return { success: true, data: { jobsTriggered } };
       } catch (error: unknown) {
         console.error(
@@ -1131,6 +1248,36 @@ export const internalSpawnTtsJobs = publicAction
                   ? error.message
                   : "Unknown error in internalSpawnTtsJobs"
               );
+        // Attempt to update status to failed on general error
+        try {
+          const { data: videoData, error: fetchError } = await supabase
+            .from("videos")
+            .select("processing_status")
+            .eq("id", videoId)
+            .single();
+          if (!fetchError && videoData) {
+            const currentStatus =
+              (videoData.processing_status as Record<string, any>) || {};
+            const updatedStatus = {
+              ...currentStatus,
+              [langVoiceKey]: {
+                status: "failed",
+                error_message: appErr.message,
+                last_updated: new Date().toISOString(),
+                progress: currentStatus[langVoiceKey]?.progress ?? 0,
+              },
+            };
+            await supabase
+              .from("videos")
+              .update({ processing_status: updatedStatus })
+              .eq("id", videoId);
+          }
+        } catch (e) {
+          console.error(
+            "Failed to update video status on main catch block:",
+            e
+          );
+        }
         return { success: false, error: appErr };
       }
     }
