@@ -168,12 +168,13 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
 - **Internal Actions (`videoInternal.ts` - Called by Supabase Functions):**
   - `internalRequestFullTranscription`: Called by `on-download-complete`. Gets full audio URL, starts Replicate job, updates the single `transcription_segments` row (status: `processing`).
   - `internalTranslateFullContent`: Called by `on-transcription-complete` (for non-English). Translates the entire `content` field, updates the `translations` field in the single `transcription_segments` row.
-  - `internalGenerateAudioChunk`: Called by `on-translation-complete` (for initial chunks) or directly by the client via `generateAudioChunk` action. Takes details for a specific sub-segment (start/end time), extracts text from the full `content` or `translations`, calls TTS API (OpenAI/Google), uploads chunk, inserts record into `translated_audio_chunks`.
+  - `internalGenerateAudioChunk`: Called by `internalSpawnTtsJobs`. Takes details for a specific sub-segment (start/end time), extracts text from the full `content` or `translations`, calls TTS API (OpenAI/Google), uploads chunk, inserts record into `translated_audio_chunks`. **Client also needs an action to trigger this on-demand.**
+  - `internalSpawnTtsJobs`: Called by `on-translation-complete`. Triggers `internalGenerateAudioChunk` **in batches** using `Promise.allSettled` for segments where `end_time <= 60`. Updates `processing_status` to `failed` if trigger errors occur.
 
 ### 3.4. API Routes
 
 - **`/api/actions/[...actionName]/route.ts`:** Handles calls from the mobile app for _client-facing_ server actions.
-- **`/api/internal/trigger-action/route.ts`:** Secured endpoint (using `FUNCTION_SECRET`) for Supabase Functions to invoke internal server actions (`internalRequestFullTranscription`, `internalTranslateFullContent`, `internalGenerateAudioChunk`).
+- **`/api/internal/trigger-action/route.ts`:** Secured endpoint (using `FUNCTION_SECRET`) for Supabase Functions to invoke internal server actions (`internalRequestFullTranscription`, `internalTranslateFullContent`, `internalSpawnTtsJobs`, `internalGenerateAudioChunk`).
 - **`/api/webhooks/replicate/route.ts`:** Handles Replicate completion webhook. Updates the **single** `transcription_segments` row for the video (status: `completed`, stores full `content`). This update triggers the `on-transcription-complete` function.
 
 ### 3.5. Supabase Functions (`supabase/functions/`)
@@ -196,8 +197,7 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
     - For each updated language, finds corresponding targets in `videos.processing_status` that are in the `translating_full` state.
     - For each matching target:
       - Updates `processing_status` to `generating_audio`.
-      - Reads the translated sub-segments for that language.
-      - Calls `internalGenerateAudioChunk` via `/api/internal` **for each translated sub-segment where `end_time <= 60` seconds** (parallel triggers for the first minute). Subsequent chunks must be requested on-demand by the client.
+      - Calls `internalSpawnTtsJobs` via `/api/internal` to **batch-trigger** `internalGenerateAudioChunk` for translated sub-segments **where `end_time <= 60` seconds**. If `internalSpawnTtsJobs` encounters errors triggering chunks, it will update the `processing_status` to `failed`.
   - `on-audio-chunk-complete` (Optional: Triggered by `translated_audio_chunks` inserts):
     - Can be used to calculate fine-grained progress for the `generating_audio` step.
     - Fetches total expected sub-segments (from `transcription_segments.content` or `translations`).
@@ -237,10 +237,10 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
 17. **`on-translation-complete` Function:**
     - Finds targets in `translating_full` state matching the updated language.
     - Updates status to `generating_audio`.
-    - Triggers `internalGenerateAudioChunk` (via API) **in parallel** for translated sub-segments **where `end_time <= 60`**.
-18. **Server (`internalGenerateAudioChunk` / Client Action `generateAudioChunk`):** Receives request for a sub-segment (either from `on-translation-complete` or client). Extracts text (original or translated), calls TTS (OpenAI/Google), uploads chunk, inserts record into `translated_audio_chunks`.
+    - Triggers `internalSpawnTtsJobs` (via API) to **batch-trigger** `internalGenerateAudioChunk` for translated sub-segments **where `end_time <= 60`**. If triggering fails for any chunk in a batch, the status for that lang/voice is set to `failed`.
+18. **Server (`internalGenerateAudioChunk` / Client Action `generateAudioChunk`):** Receives request for a sub-segment (either from `internalSpawnTtsJobs` or client). Extracts text (original or translated), calls TTS (OpenAI/Google), uploads chunk, inserts record into `translated_audio_chunks`.
 19. **(Optional) Supabase Trigger (`trigger_on_audio_chunk_insert`) -> Supabase Function (`on-audio-chunk-complete`):** Updates `processing_status` progress/completion based on chunk count vs. total expected count.
-20. **Mobile App (Realtime):** Receives `processing_status` updates (progress, eventual completion). Fetches initially generated chunks. Plays available audio chunks via `useAudioPlayback`. **When approaching the end of available audio, triggers `generateAudioChunk` action for the next required segment(s).**
+20. **Mobile App (Realtime):** Receives `processing_status` updates (progress, eventual completion, or `failed`). Fetches initially generated chunks. Plays available audio chunks via `useAudioPlayback`. **When approaching the end of available audio, triggers `generateAudioChunk` action for the next required segment(s).**
 21. **Mobile App (Seek):**
     - User seeks.
     - `handleSeek` pauses player, sets `isSeeking`.
@@ -249,11 +249,12 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
 
 ## 7. TODOs / Pending Items
 
+- **Review Client-Side Audio Chunk Triggering:** The client needs a robust way to trigger `generateAudioChunk` on demand (for seek/playback continuation). Needs a dedicated client-callable action.
 - **Refine Supabase Functions:** Review and test logic in `on-download-complete`, `on-transcription-complete`, `on-translation-complete`, `on-audio-chunk-complete` (if implemented).
-- **Review Internal Server Actions:** Ensure `videoInternal.ts` actions (`internalRequestFullTranscription`, `internalTranslateFullContent`, `internalGenerateAudioChunk`) are robust and handle errors correctly.
+- **Review Internal Server Actions:** Ensure `videoInternal.ts` actions (`internalRequestFullTranscription`, `internalTranslateFullContent`, `internalGenerateAudioChunk`, `internalSpawnTtsJobs`) are robust and handle errors correctly.
 - **Error Handling:** Improve error handling throughout the backend pipeline (Supabase Functions, Server Actions). Ensure `failed` status is set appropriately in `processing_status`.
 - **Regenerate Supabase Types:** Update `database.types.ts` in `server` and `mobile` to reflect latest schema.
-- **Testing:** Thoroughly test the end-to-end backend processing flow (full transcription -> translation -> TTS) and client interaction.
+- **Testing:** Thoroughly test the end-to-end backend processing flow (full transcription -> translation -> TTS with batching) and client interaction.
 - Review/configure Supabase Storage policies.
 - Review/improve logging across all services.
 - **Client-Side Logic:** Implement client-side logic in the mobile app to:
