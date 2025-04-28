@@ -788,3 +788,64 @@ export const initiateVideoProcessingJob = protectedAction
       }
     }
   );
+
+// --- Get Video Details By URL Action ---
+
+const getVideoByUrlSchema = z.object({
+  youtubeUrl: z.string().url("Invalid YouTube URL"),
+});
+
+interface GetVideoByUrlOutput {
+  id: string;
+  processing_status: Tables<"videos">["processing_status"];
+  duration: number | null;
+}
+
+export const getVideoByUrl = protectedAction
+  .schema(getVideoByUrlSchema)
+  .action(
+    async ({
+      parsedInput,
+    }): Promise<ActionResponse<GetVideoByUrlOutput | null>> => {
+      const { youtubeUrl } = parsedInput;
+      let youtubeId: string;
+
+      try {
+        youtubeId = extractYoutubeVideoId(youtubeUrl);
+      } catch (error) {
+        if (error instanceof AppError) {
+          return { success: false, error: error };
+        }
+        console.error("Unexpected error during YouTube ID extraction:", error);
+        return { success: false, error: appErrors.INVALID_INPUT };
+      }
+
+      try {
+        const supabase = supabaseServiceRoleClient;
+
+        const { data: existingVideo, error: videoCheckError } = await supabase
+          .from("videos")
+          .select("id, processing_status, duration")
+          .eq("youtube_id", youtubeId)
+          .maybeSingle();
+
+        if (videoCheckError) {
+          console.error("Error fetching video by youtube_id:", videoCheckError);
+          throw appErrors.DATABASE_ERROR;
+        }
+
+        if (!existingVideo) {
+          // Return success with null data if video not found
+          return { success: true, data: null };
+        }
+
+        return { success: true, data: existingVideo };
+      } catch (error: any) {
+        console.error("Error in getVideoByUrl action:", error);
+        if (error instanceof AppError) {
+          return { success: false, error: error };
+        }
+        return { success: false, error: appErrors.UNEXPECTED_ERROR };
+      }
+    }
+  );
