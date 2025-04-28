@@ -99,6 +99,27 @@ export type Database = {
           },
         ]
       }
+      features: {
+        Row: {
+          created_at: string
+          feature_name: string
+          is_enabled: boolean
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          feature_name: string
+          is_enabled?: boolean
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          feature_name?: string
+          is_enabled?: boolean
+          updated_at?: string
+        }
+        Relationships: []
+      }
       history: {
         Row: {
           id: string
@@ -150,6 +171,7 @@ export type Database = {
           created_at: string
           display_name: string | null
           email: string
+          has_completed_onboarding: boolean | null
           id: string
           settings: Json
           updated_at: string
@@ -159,6 +181,7 @@ export type Database = {
           created_at?: string
           display_name?: string | null
           email: string
+          has_completed_onboarding?: boolean | null
           id: string
           settings?: Json
           updated_at?: string
@@ -168,6 +191,7 @@ export type Database = {
           created_at?: string
           display_name?: string | null
           email?: string
+          has_completed_onboarding?: boolean | null
           id?: string
           settings?: Json
           updated_at?: string
