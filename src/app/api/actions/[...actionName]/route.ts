@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   startVideoProcessing,
   initiateVideoProcessingJob,
+  getVideoByUrl,
 } from "@/app/actions/video/processing";
 import {
   requestTranscriptionSegment,
@@ -40,6 +41,7 @@ const actionRegistry: Record<string, ActionFunction> = {
   "video/translateVideoTitle": translateVideoTitle,
   "video/initiateVideoProcessingJob": initiateVideoProcessingJob,
   "video/getCompletedAudioChunks": getCompletedAudioChunks,
+  "video/getVideoByUrl": getVideoByUrl,
 };
 
 export async function POST(request: NextRequest) {
