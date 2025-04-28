@@ -283,7 +283,8 @@ CREATE TABLE IF NOT EXISTS "public"."profiles" (
     "avatar_url" "text",
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    "settings" "jsonb" DEFAULT '{"voice_mapping": {"default": "alloy"}, "default_language": "en"}'::"jsonb" NOT NULL
+    "settings" "jsonb" DEFAULT '{"voice_mapping": {"default": "alloy"}, "default_language": "en"}'::"jsonb" NOT NULL,
+    "has_completed_onboarding" BOOLEAN DEFAULT false
 );
 
 
@@ -1096,3 +1097,38 @@ EXECUTE FUNCTION supabase_functions.http_request(
     '{}', -- Body (Function parses the actual payload)
     10000 -- Timeout
 );
+
+-- New table for feature flags
+CREATE TABLE IF NOT EXISTS "public"."features" (
+    "feature_name" "text" PRIMARY KEY,
+    "is_enabled" boolean DEFAULT false NOT NULL,
+    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL
+);
+ALTER TABLE "public"."features" OWNER TO "postgres";
+COMMENT ON TABLE "public"."features" IS 'Stores global feature flags for the application.';
+
+-- Enable RLS for features table
+ALTER TABLE "public"."features" ENABLE ROW LEVEL SECURITY;
+
+-- Policies for features table
+CREATE POLICY "Features are viewable by everyone" ON "public"."features" FOR SELECT USING (true);
+CREATE POLICY "Service role can manage features" ON "public"."features" FOR ALL TO "service_role" USING (true);
+
+-- Trigger for updating features modtime
+CREATE OR REPLACE TRIGGER "update_features_modtime" BEFORE UPDATE ON "public"."features" FOR EACH ROW EXECUTE FUNCTION "public"."update_modified_column"();
+
+-- Add initial paywall feature flag (defaulting to disabled)
+INSERT INTO public.features (feature_name, is_enabled) VALUES ('show_paywall', false) ON CONFLICT (feature_name) DO NOTHING;
+
+
+-- Add onboarding completion flag to profiles
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS has_completed_onboarding BOOLEAN DEFAULT false;
+COMMENT ON COLUMN public.profiles.has_completed_onboarding IS 'Indicates if the user has completed the entire onboarding flow (including potential paywall).';
+
+
+ALTER PUBLICATION "supabase_realtime" OWNER TO "postgres";
+
+
+-- Add features table to realtime publication if needed (optional)
+-- ALTER PUBLICATION "supabase_realtime" ADD TABLE ONLY "public"."features";
