@@ -23,6 +23,10 @@ import {
   translateVideoTitle,
 } from "@/app/actions/translation/translation";
 
+// Import the new actions
+import { getFeatureFlags } from "@/actions/getFeatureFlags";
+import { markOnboardingComplete } from "@/actions/markOnboardingComplete";
+
 import { AppError, AppErrorCode } from "@/app/actions/actions";
 
 type ActionFunction = (input: any) => Promise<any>;
@@ -42,6 +46,8 @@ const actionRegistry: Record<string, ActionFunction> = {
   "video/initiateVideoProcessingJob": initiateVideoProcessingJob,
   "video/getCompletedAudioChunks": getCompletedAudioChunks,
   "video/getVideoByUrl": getVideoByUrl,
+  getFeatureFlags: getFeatureFlags,
+  markOnboardingComplete: markOnboardingComplete,
 };
 
 export async function POST(request: NextRequest) {
