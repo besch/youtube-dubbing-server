@@ -2,8 +2,8 @@ import Link from "next/link";
 import { Mail, HelpCircle } from "lucide-react"; // Assuming lucide-react is installed
 
 export default function SupportPage() {
-  const contactEmail = "contact@youtubedubbing.example.com"; // TODO: Add real contact email
-  const technicalEmail = "tech-support@youtubedubbing.example.com"; // TODO: Add real tech support email
+  const contactEmail = "contact@youtubedubbing.vercel.app"; // Updated domain
+  const technicalEmail = "tech-support@youtubedubbing.vercel.app"; // Updated domain
   const helpCenterLink = "#"; // TODO: Add link to help center/FAQ if available
 
   return (
@@ -47,9 +47,10 @@ export default function SupportPage() {
             </h3>
             <p className="text-neutral-400">
               Yes, you can select different supported languages or voices for a
-              video you've already processed. If the selected combination hasn't
-              been generated yet, the system will initiate the necessary steps
-              (translation/audio generation) for the new selection.
+              video you&apos;ve already processed. If the selected combination
+              hasn&apos;t been generated yet, the system will initiate the
+              necessary steps (translation/audio generation) for the new
+              selection.
             </p>
           </div>
           <div>
@@ -121,7 +122,7 @@ export default function SupportPage() {
           </p>
           <p className="text-sm text-neutral-500 mt-3">
             For urgent matters outside business hours, please email us, and
-            we'll respond as soon as possible.
+            we&apos;ll respond as soon as possible.
           </p>
         </div>
       </section>

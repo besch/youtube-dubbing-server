@@ -5,21 +5,6 @@ import Link from "next/link";
 export default function HomePage() {
   return (
     <div className="flex flex-col min-h-screen bg-gradient-to-b from-neutral-900 to-black text-white font-[family-name:var(--font-geist-sans)]">
-      <header className="flex justify-center w-full p-4 sm:p-6">
-        <a
-          href="https://github.com/yourusername/youtube-dubbing"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-2 rounded-full bg-neutral-800/70 px-4 py-2 text-sm text-neutral-300 ring-1 ring-neutral-700/50 hover:bg-neutral-700/80 hover:text-white transition-all duration-200"
-        >
-          <Github size={16} />
-          <span className="font-medium">View on GitHub</span>
-          <span className="hidden sm:inline text-neutral-400">
-            &bull; Contribute
-          </span>
-        </a>
-      </header>
-
       <main className="flex flex-col items-center justify-center flex-grow px-4 sm:px-8 py-16 sm:py-24 text-center">
         <div className="max-w-4xl mx-auto">
           <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-violet-500/30 bg-violet-950/40 px-3 py-1 text-xs font-medium text-violet-300">
