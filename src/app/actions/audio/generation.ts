@@ -32,51 +32,88 @@ export const generateAudioChunk = protectedAction
       const { videoId, language, voice, startTime, endTime } = parsedInput;
       const supabase = supabaseServiceRoleClient;
 
-      let ttsProvider: "openai" | "google";
+      let ttsProvider: "openai" | "google" | null = null; // Allow null initially
       let googleLangCode: string | undefined;
       let googleVoiceName: string | undefined;
       let openaiVoiceName: string | undefined;
 
-      // --- TTS Provider Selection Logic ---
-      if (config.openai.voices.includes(voice)) {
-        ttsProvider = "openai";
-        openaiVoiceName = voice;
-        console.log(`Using OpenAI TTS based on voice: ${openaiVoiceName}`);
-      } else {
-        const targetGoogleLangCode = config.google.simpleToGoogleMap[language];
-        if (
-          targetGoogleLangCode &&
-          config.google.languages[targetGoogleLangCode]
-        ) {
+      // --- Try Google TTS First ---
+      const targetGoogleLangCode = config.google.simpleToGoogleMap[language];
+      if (
+        targetGoogleLangCode &&
+        config.google.languages[targetGoogleLangCode]
+      ) {
+        // Language IS supported by Google TTS
+        const validGoogleVoices =
+          config.google.languages[targetGoogleLangCode].voices;
+        if (validGoogleVoices.some((v) => v.id === voice)) {
+          // Voice IS a valid Google voice for this language
           ttsProvider = "google";
           googleLangCode = targetGoogleLangCode;
-          const validGoogleVoices =
-            config.google.languages[googleLangCode].voices;
-
-          if (!validGoogleVoices.some((v) => v.id === voice)) {
-            return {
-              success: false,
-              error: new AppError(
-                AppErrorCode.INVALID_INPUT,
-                `Invalid Google voice '${voice}' for language '${language}' (${googleLangCode}). Valid voices: ${validGoogleVoices
-                  .map((v) => v.id)
-                  .join(", ")}`
-              ),
-            };
-          }
           googleVoiceName = voice;
           console.log(
-            `Using Google TTS for language: ${language} (${googleLangCode}), voice: ${googleVoiceName}`
+            `Using Google TTS (Priority) for language: ${language} (${googleLangCode}), voice: ${googleVoiceName}`
           );
         } else {
+          // Language supported by Google, but the specific voice is not valid for it.
+          // Will proceed to check OpenAI below.
+          console.log(
+            `Voice '${voice}' is not a valid Google voice for language '${language}' (${targetGoogleLangCode}). Checking OpenAI as fallback.`
+          );
+        }
+      } else {
+        // Language is NOT supported by Google TTS.
+        // Will proceed to check OpenAI below.
+        console.log(
+          `Language '${language}' not supported by Google TTS. Checking OpenAI.`
+        );
+      }
+
+      // --- Fallback to OpenAI TTS if Google wasn't chosen ---
+      if (ttsProvider === null) {
+        if (config.openai.voices.includes(voice)) {
+          ttsProvider = "openai";
+          openaiVoiceName = voice; // Use the provided voice as the OpenAI voice name
+          console.log(
+            `Using OpenAI TTS (Fallback) for voice: ${openaiVoiceName}`
+          );
+        } else {
+          // If Google wasn't suitable AND it's not a valid OpenAI voice, then it's an error.
+          // Construct a more informative error message based on why Google failed (if it did)
+          let errorMessage = `Voice '${voice}' is not a valid OpenAI voice.`;
+          if (
+            targetGoogleLangCode &&
+            config.google.languages[targetGoogleLangCode]
+          ) {
+            // Google language was supported, but voice was invalid
+            const validGoogleVoicesList = config.google.languages[
+              targetGoogleLangCode
+            ].voices
+              .map((v) => v.id)
+              .join(", ");
+            errorMessage += ` It's also not a valid Google voice for language '${language}'. Valid Google voices: ${validGoogleVoicesList}`;
+          } else {
+            // Google language wasn't supported
+            errorMessage += ` Language '${language}' is also not supported by Google TTS.`;
+          }
+
           return {
             success: false,
-            error: new AppError(
-              AppErrorCode.INVALID_INPUT,
-              `Voice '${voice}' is not a valid OpenAI voice, and language '${language}' is not supported by Google TTS or the voice is invalid for it.`
-            ),
+            error: new AppError(AppErrorCode.INVALID_INPUT, errorMessage),
           };
         }
+      }
+
+      // --- Proceed with selected provider ---
+      if (!ttsProvider) {
+        // Should be logically impossible to reach here due to checks above, but safeguard.
+        return {
+          success: false,
+          error: new AppError(
+            AppErrorCode.UNEXPECTED_ERROR,
+            `Failed to determine TTS provider for language '${language}' and voice '${voice}'.`
+          ),
+        };
       }
 
       console.log(
