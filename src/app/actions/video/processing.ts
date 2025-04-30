@@ -483,13 +483,20 @@ export const initiateVideoProcessingJob = protectedAction
           const langVoiceKey = `${langCode}_${voice}`;
 
           const currentTargetStatus = newProcessingStatus[langVoiceKey]?.status;
+          const isAlreadyProcessing = [
+            "downloading",
+            "transcribing_full",
+            "translating_full",
+            "generating_audio",
+          ].includes(currentTargetStatus);
           const isTerminal =
             currentTargetStatus === "completed" ||
             currentTargetStatus === "failed";
 
-          // Only process if the target is NEW or NOT in a terminal state
-          if (!isTerminal) {
-            // Use the defined type alias here
+          // Only set an initial status if the target is NEW, PENDING, or FAILED.
+          // If it's already downloading, transcribing, translating, or generating, leave it alone.
+          if (!isTerminal && !isAlreadyProcessing) {
+            // Determine initial status based on prerequisites
             let targetInitialStatus: ProcessingStatusValue = "pending"; // Default
 
             if (isDownloadComplete && isTranscriptionComplete) {
@@ -528,10 +535,11 @@ export const initiateVideoProcessingJob = protectedAction
               );
             }
 
-            // Update status only if it's different or new
+            // Update status only if it's different or truly new
+            // (The outer condition already ensures we are not overwriting an active processing state)
             if (
-              !newProcessingStatus[langVoiceKey] ||
-              newProcessingStatus[langVoiceKey]?.status !== targetInitialStatus
+              !newProcessingStatus[langVoiceKey] || // If it's completely new
+              currentTargetStatus !== targetInitialStatus // Or if the calculated initial status is different (e.g., pending -> translating_full)
             ) {
               newProcessingStatus[langVoiceKey] = {
                 status: targetInitialStatus,
@@ -540,7 +548,12 @@ export const initiateVideoProcessingJob = protectedAction
               };
               needsStatusUpdate = true;
             }
+          } else if (isAlreadyProcessing) {
+            console.log(
+              `InitiateJob: Skipping target ${langVoiceKey} as it's already processing (Status: ${currentTargetStatus})`
+            );
           } else {
+            // isTerminal
             console.log(
               `InitiateJob: Skipping target ${langVoiceKey} as it's already in terminal state: ${currentTargetStatus}`
             );
