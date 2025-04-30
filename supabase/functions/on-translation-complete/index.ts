@@ -8,7 +8,7 @@ import type { ReplicateSegmentOutput } from "../_shared/replicateTypes.ts"; // A
 interface TranscriptionSegmentPayload {
   type: "UPDATE";
   table: "transcription_segments";
-  record: Tables<"transcription_segments">; // Use generated type
+  record: Tables<"transcription_segments">;
   old_record: {
     status?: Tables<"transcription_segments">["status"];
     translations?: Tables<"transcription_segments">["translations"];
