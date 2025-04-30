@@ -15,6 +15,12 @@ import type { ReplicateSegmentOutput } from "@/lib/replicate";
 import type { Tables } from "@/types/supabase";
 import { generateOpenAiTts } from "@/lib/openai-tts";
 import { generateGoogleTts } from "@/lib/google-tts";
+import { inngest } from "@/inngest/client"; // Import Inngest client
+import {
+  TranslationRequestEventSchema,
+  TtsSpawnInitialEventSchema,
+  TtsGenerateChunkEventSchema,
+} from "@/inngest/functions"; // Import event schemas for type safety (optional but recommended)
 
 // --- Helper Function: Extract Text from Segments for Time Range ---
 // NOTE: This function might need adjustments later depending on how
@@ -376,271 +382,67 @@ export const internalRequestFullTranscription = publicAction
     }
   );
 
-// --- Action: Internal Translate Full Segment Content --- // Renamed Action
+// --- Action: Internal Translate Full Segment Content --- // MODIFIED
 const internalTranslateFullContentSchema = z.object({
-  segmentId: z.string().uuid(), // ID of the single transcription_segments row
-  targetLanguage: z.string().length(2), // ISO 639-1 code
+  segmentId: z.string().uuid(),
+  targetLanguage: z.string().length(2),
 });
 
-export const internalTranslateFullContent = publicAction // Renamed export
+export const internalTranslateFullContent = publicAction
   .schema(internalTranslateFullContentSchema)
   .action(async ({ parsedInput }): Promise<ActionResponse<null>> => {
     const { segmentId, targetLanguage } = parsedInput;
     const supabase = supabaseServiceRoleClient;
 
     console.log(
-      `INTERNAL ACTION: Translating FULL content for segment row ${segmentId} to language: ${targetLanguage}`
+      `INTERNAL ACTION: Enqueuing translation job for segment ${segmentId} to ${targetLanguage}`
     );
 
     try {
-      // 1. Fetch the transcription data (single row)
-      console.log(
-        `TranslateFullContent: Fetching transcription row ${segmentId}`
-      );
-      const { data: segmentDataUntyped, error: fetchError } = await supabase
+      // 1. Basic Pre-check: Check if translation *might* already exist to avoid unnecessary jobs
+      // This is a quick check, the Inngest job will do the definitive check.
+      const { data: segmentData, error: fetchError } = await supabase
         .from("transcription_segments")
-        .select("id, content, translations") // Fetch content and existing translations
+        .select("translations") // Only need translations for pre-check
         .eq("id", segmentId)
-        .single(); // Expect exactly one row
+        .maybeSingle(); // Use maybeSingle as it might not exist yet
 
-      if (fetchError)
-        throw new AppError(
-          AppErrorCode.DATABASE_ERROR,
-          `DB error fetching transcription row ${segmentId}: ${fetchError.message}`
+      if (fetchError) {
+        console.warn(
+          `TranslateEnqueue: DB error pre-checking transcription ${segmentId}: ${fetchError.message}`
         );
-      // No need to check for null, single() throws if not found
-
-      const segmentData = segmentDataUntyped as any; // Use 'as any' for simplicity
-      console.log(
-        `TranslateFullContent: Fetched segmentData for row ${segmentId}. Keys: ${Object.keys(
-          segmentData
-        )}`
-      );
-      // Add detailed log for content and translations
-      console.log(
-        `TranslateFullContent: segmentData.content keys (if object): ${
-          segmentData.content
-            ? Object.keys(segmentData.content)
-            : "null/undefined"
-        }`
-      );
-      console.log(
-        `TranslateFullContent: segmentData.translations keys (if object): ${
-          segmentData.translations
-            ? Object.keys(segmentData.translations)
-            : "null/undefined"
-        }`
-      );
-
-      const existingTranslations = (segmentData.translations ?? {}) as Record<
-        string,
-        ReplicateSegmentOutput
-      >;
-
-      // Log check for existing translation
-      const translationAlreadyExists =
-        existingTranslations[targetLanguage] &&
-        Array.isArray(existingTranslations[targetLanguage]?.segments) &&
-        existingTranslations[targetLanguage].segments.length > 0;
-
-      console.log(
-        `TranslateFullContent: Checking existing translation for ${targetLanguage}: ${translationAlreadyExists}`
-      );
-
-      // Check if translation already exists and is valid
-      if (translationAlreadyExists) {
-        console.log(
-          `>>> TranslateFullContent: Translation for ${targetLanguage} already exists and seems valid for row ${segmentId}. Skipping.`
-        );
-        return { success: true, data: null };
-      }
-
-      console.log(
-        `>>> TranslateFullContent: Translation for ${targetLanguage} not found or invalid for row ${segmentId}. Proceeding.`
-      );
-
-      // 2. Validate content structure
-      let originalContent: ReplicateSegmentOutput | null = null;
-      if (
-        segmentData.content &&
-        typeof segmentData.content === "object" &&
-        !Array.isArray(segmentData.content) &&
-        "segments" in segmentData.content &&
-        Array.isArray(segmentData.content.segments)
-      ) {
-        originalContent = segmentData.content as ReplicateSegmentOutput;
-        console.log(
-          `TranslateFullContent: Valid original content found with ${originalContent.segments?.length} segments.`
-        );
-      } else {
-        console.error(
-          `TranslateFullContent: Invalid 'content' structure in row ${segmentId}. Content:`,
-          segmentData.content
-        );
-        throw new AppError(
-          AppErrorCode.INVALID_INPUT,
-          `Transcription row ${segmentId} has invalid 'content' structure for translation.`
-        );
-      }
-
-      if (!originalContent?.segments || originalContent.segments.length === 0) {
-        console.log(
-          `Transcription row ${segmentId} content is empty, skipping translation.`
-        );
-        // Update translations field with empty object for this language? Or just succeed?
-        // Let's just succeed for now.
-        return { success: true, data: null }; // Nothing to translate
-      }
-
-      // 3. Prepare for Translation
-      const sourceLangCode = originalContent.detected_language || "en";
-      const sourceLangName =
-        config.languages.find((l) => l.code === sourceLangCode)?.name ||
-        sourceLangCode;
-      const targetLangName =
-        config.languages.find((l) => l.code === targetLanguage)?.name ||
-        targetLanguage;
-
-      console.log(
-        `TranslateFullContent: Source lang: ${sourceLangCode} (${sourceLangName}), Target lang: ${targetLanguage} (${targetLangName})`
-      );
-
-      if (sourceLangCode === targetLanguage) {
-        console.log(
-          `Source and target language (${targetLanguage}) are the same for row ${segmentId}. Skipping translation call.`
-        );
-        // Store original as 'translation' if needed? For consistency, let's do it.
-        const updatedTranslations = {
-          ...existingTranslations,
-          [targetLanguage]: originalContent, // Store original content under the target language key
-        };
-        console.log(
-          `TranslateFullContent: Storing original content as translation for ${targetLanguage}. Updating DB...`
-        );
-        const { error: updateError } = await supabase
-          .from("transcription_segments")
-          .update({ translations: updatedTranslations } as any)
-          .eq("id", segmentId);
-        if (updateError) {
-          console.error(
-            `TranslateFullContent: DB Error storing original content as translation for ${segmentId}:`,
-            updateError
+        // Proceed with enqueuing even if check fails
+      } else if (segmentData) {
+        const existingTranslations = (segmentData.translations ?? {}) as Record<
+          string,
+          any
+        >;
+        if (existingTranslations[targetLanguage]?.segments?.length > 0) {
+          console.log(
+            `TranslateEnqueue: Pre-check indicates translation for ${targetLanguage} likely exists for ${segmentId}. Skipping enqueue.`
           );
-          // Don't fail the whole action, just log it?
+          return { success: true, data: null }; // Skip enqueue
         }
-        return { success: true, data: null };
       }
 
-      // Format the *entire* transcription for translation
-      console.log("TranslateFullContent: Formatting text for translation...");
-      const textToTranslate = formatTranscriptionForTranslation(
-        originalContent.segments
-      );
-      if (!textToTranslate) {
-        console.log(
-          `No text found to translate in transcription row ${segmentId}.`
-        );
-        return { success: true, data: null };
-      }
+      // 2. Enqueue the Inngest job
+      await inngest.send({
+        name: "translation/request", // Matches event name in Inngest function
+        data: {
+          segmentId: segmentId,
+          targetLanguage: targetLanguage,
+        },
+      });
 
       console.log(
-        `TranslateFullContent: Calling Translation Service (Gemini) to translate content from row ${segmentId} to ${targetLangName}`
-      );
-      console.log(
-        `TranslateFullContent: Text to translate (first 100 chars): "${textToTranslate.substring(
-          0,
-          100
-        )}..."`
-      );
-
-      // 4. Call Translation Service
-      const translatedText = await translateText(
-        textToTranslate,
-        targetLangName
-      );
-      console.log(
-        `TranslateFullContent: Received response from translateText. Is empty: ${!translatedText}`
-      );
-
-      if (!translatedText) {
-        throw new AppError(
-          AppErrorCode.SERVICE_ERROR,
-          "Translation service returned empty response."
-        );
-      }
-      console.log(
-        `TranslateFullContent: Received translation (first 100 chars): "${translatedText.substring(
-          0,
-          100
-        )}..."`
-      );
-
-      // 5. Parse Translation Response
-      console.log("TranslateFullContent: Parsing translation response...");
-      const parsedSegments = parseTranslationResponse(
-        translatedText,
-        originalContent.segments // Pass original segments for timing alignment
-      );
-      console.log(
-        `TranslateFullContent: Parsed translation into ${
-          parsedSegments?.length ?? 0
-        } segments.`
-      );
-
-      if (!parsedSegments || parsedSegments.length === 0) {
-        throw new AppError(
-          AppErrorCode.SERVICE_ERROR,
-          `Failed to parse translation response or got empty segments for row ${segmentId}.`
-        );
-      }
-
-      const translatedContent: ReplicateSegmentOutput = {
-        segments: parsedSegments,
-        detected_language: targetLanguage, // Set detected language to the target
-      };
-
-      // 6. Update Database
-      const updatedTranslations = {
-        ...existingTranslations,
-        [targetLanguage]: translatedContent,
-      };
-
-      console.log(
-        `>>> TranslateFullContent: Preparing to update DB for row ${segmentId} with FULL translation for language ${targetLanguage}. Keys in updatedTranslations: ${Object.keys(
-          updatedTranslations
-        )}`
-      );
-      const { error: updateError } = await supabase
-        .from("transcription_segments")
-        .update({ translations: updatedTranslations } as any) // Cast needed for JSONB update
-        .eq("id", segmentId);
-
-      if (updateError) {
-        console.error(
-          `>>> TranslateFullContent: DB Update Error for row ${segmentId}:`,
-          updateError
-        );
-        throw new AppError(
-          AppErrorCode.DATABASE_ERROR,
-          `DB error updating translations for row ${segmentId}: ${updateError.message}`
-        );
-      }
-
-      console.log(
-        `>>> TranslateFullContent: DB Update successful for row ${segmentId}.`
-      );
-      console.log(
-        `INTERNAL ACTION: Successfully translated and stored FULL ${targetLanguage} content for row ${segmentId}.`
+        `INTERNAL ACTION: Successfully enqueued translation job for ${segmentId} to ${targetLanguage}.`
       );
       return { success: true, data: null };
     } catch (error: unknown) {
       console.error(
-        `INTERNAL ACTION: Error translating full content for row ${segmentId} to ${targetLanguage}:`,
+        `INTERNAL ACTION: Error enqueuing translation job for row ${segmentId} to ${targetLanguage}:`,
         error
       );
-      // Log the detailed error object
-      console.error("Caught Error Details:", JSON.stringify(error, null, 2));
-
       const appErr =
         error instanceof AppError
           ? error
@@ -648,20 +450,20 @@ export const internalTranslateFullContent = publicAction // Renamed export
               AppErrorCode.UNEXPECTED_ERROR,
               error instanceof Error
                 ? error.message
-                : "Unknown error in internalTranslateFullContent" // Updated name
+                : "Unknown error enqueuing translation job"
             );
       return { success: false, error: appErr };
     }
   });
 
-// --- Action: Internal Generate Audio Chunk ---
+// --- Action: Internal Generate Audio Chunk --- // MODIFIED
 const internalGenerateAudioChunkSchema = z
   .object({
     videoId: z.string().uuid(),
     language: z.string(),
     voice: z.string(),
-    startTime: z.number().min(0), // Start time of the specific sub-segment
-    endTime: z.number().min(0), // End time of the specific sub-segment
+    startTime: z.number().min(0),
+    endTime: z.number().min(0),
   })
   .refine((data) => data.endTime > data.startTime, {
     message: "End time must be greater than start time",
@@ -671,170 +473,90 @@ const internalGenerateAudioChunkSchema = z
 export const internalGenerateAudioChunk = publicAction
   .schema(internalGenerateAudioChunkSchema)
   .action(
-    async ({
-      parsedInput,
-    }): Promise<ActionResponse<{ storagePath: string }>> => {
+    async ({ parsedInput }): Promise<ActionResponse<{ success: boolean }>> => {
       const { videoId, language, voice, startTime, endTime } = parsedInput;
       const supabase = supabaseServiceRoleClient;
 
       console.log(
-        `[internalGenerateAudioChunk] START - Video: ${videoId}, Lang: ${language}, Voice: ${voice}, Time: ${startTime}-${endTime}`
-      );
-
-      let ttsProvider: "openai" | "google";
-      let googleLangCode: string | undefined;
-      let googleVoiceName: string | undefined;
-      let openaiVoiceName: string | undefined;
-
-      // --- TTS Provider Selection Logic (Unchanged) ---
-      if (config.openai.voices.includes(voice)) {
-        ttsProvider = "openai";
-        openaiVoiceName = voice;
-        console.log(`Using OpenAI TTS based on voice: ${openaiVoiceName}`);
-      } else {
-        const targetGoogleLangCode = config.google.simpleToGoogleMap[language];
-        if (
-          targetGoogleLangCode &&
-          config.google.languages[targetGoogleLangCode]
-        ) {
-          ttsProvider = "google";
-          googleLangCode = targetGoogleLangCode;
-          const validGoogleVoices =
-            config.google.languages[googleLangCode].voices;
-          if (!validGoogleVoices.some((v) => v.id === voice)) {
-            return {
-              success: false,
-              error: new AppError(
-                AppErrorCode.INVALID_INPUT,
-                `Invalid Google voice '${voice}' for lang '${language}'. Valid Google voices: ${validGoogleVoices
-                  .map((v) => v.id)
-                  .join(", ")}`
-              ),
-            };
-          }
-          googleVoiceName = voice;
-          console.log(
-            `Using Google TTS for language: ${language} (${googleLangCode}), voice: ${googleVoiceName}`
-          );
-        } else {
-          return {
-            success: false,
-            error: new AppError(
-              AppErrorCode.INVALID_INPUT,
-              `Voice '${voice}' is not a valid OpenAI voice, and language '${language}' is not supported by Google TTS or the voice is invalid for it.`
-            ),
-          };
-        }
-      }
-      // --- End TTS Provider Selection ---
-
-      console.log(
-        `INTERNAL ACTION: Generating audio chunk for SUB-SEGMENT: ${videoId}, Lang: ${language}, Voice: ${voice}, Time: ${startTime}-${endTime} using ${ttsProvider}`
+        `INTERNAL ACTION: Enqueuing TTS chunk job for ${videoId}, ${language}, ${voice}, ${startTime}-${endTime}`
       );
 
       try {
-        // 1. Check if exact chunk already exists BEFORE generation
-        console.log(
-          `[internalGenerateAudioChunk] Checking for existing chunk BEFORE generation...`
-        );
-        const { data: existingChunkPre, error: checkErrorPre } = await supabase
+        // 1. Pre-check if chunk already exists in DB
+        const { data: existingChunk, error: checkError } = await supabase
           .from("translated_audio_chunks")
-          .select("storage_path") // Only need path
+          .select("id") // Select minimal field
           .eq("video_id", videoId)
           .eq("language", language)
           .eq("voice", voice)
           .eq("chunk_start", startTime)
           .eq("chunk_end", endTime)
+          .limit(1)
           .maybeSingle();
 
-        if (checkErrorPre) {
-          console.error(
-            "[internalGenerateAudioChunk] DB error during pre-generation check:",
-            checkErrorPre.message
+        if (checkError) {
+          console.warn(
+            `TTSChunkEnqueue: DB error pre-checking chunk ${videoId}/${language}/${voice}/${startTime}-${endTime}: ${checkError.message}`
           );
-          throw new AppError(
-            AppErrorCode.DATABASE_ERROR,
-            `DB error checking chunk: ${checkErrorPre.message}`
-          );
-        }
-
-        const existingPathPre = (
-          existingChunkPre as Tables<"translated_audio_chunks"> | null
-        )?.storage_path;
-        if (existingPathPre) {
+          // Proceed with enqueue even if check fails
+        } else if (existingChunk) {
           console.log(
-            `[internalGenerateAudioChunk] Chunk already exists at ${existingPathPre} (pre-check). Skipping generation.`
+            `TTSChunkEnqueue: Pre-check indicates chunk ${videoId}/${language}/${voice}/${startTime}-${endTime} likely exists. Skipping enqueue.`
           );
-          return { success: true, data: { storagePath: existingPathPre } };
+          return { success: true, data: { success: true } }; // Skip enqueue
         }
-        console.log(
-          `[internalGenerateAudioChunk] Chunk does not exist (pre-check). Proceeding.`
-        );
 
-        // --- Only proceed if chunk doesn't exist --- //
-
-        // 2. Fetch the SINGLE transcription row for the video
+        // 2. Extract text (this needs to happen here, as we need the text for the job payload)
+        //    This logic is copied from the original function
         console.log(
-          `[internalGenerateAudioChunk] Fetching transcription row for video ${videoId}`
+          `TTSChunkEnqueue: Fetching transcription to extract text...`
         );
         const { data: transcriptionDataUntyped, error: transcriptionError } =
           await supabase
             .from("transcription_segments")
-            .select("id, content, translations") // Select needed fields
+            .select("id, content, translations")
             .eq("video_id", videoId)
-            .eq("status", "completed") // Ensure transcription is complete
-            .single(); // Expect exactly one row
+            .eq("status", "completed")
+            .single();
 
         if (transcriptionError)
           throw new AppError(
             AppErrorCode.DATABASE_ERROR,
-            `DB error fetching transcription for chunk gen: ${transcriptionError.message}`
+            `DB error fetching transcription for chunk enqueue: ${transcriptionError.message}`
           );
-        // No need to check for null, single() throws if not found
 
-        const transcriptionData = transcriptionDataUntyped as any; // Use 'as any' for simplicity
-
-        // 4. Extract Text for the Specific SUB-SEGMENT Time Range & Language
+        const transcriptionData = transcriptionDataUntyped as any;
         let textToSynthesize = "";
         let sourceSegments:
           | ReplicateSegmentOutput["segments"]
           | undefined
           | null = null;
-        console.log(
-          `[internalGenerateAudioChunk] Extracting text for language: ${language}`
-        );
 
         if (language === "en") {
           const originalContent =
             transcriptionData.content as ReplicateSegmentOutput | null;
           sourceSegments = originalContent?.segments;
-          if (!sourceSegments) {
+          if (!sourceSegments)
             throw new AppError(
               AppErrorCode.DEPENDENCY_NOT_READY,
-              `Original transcription content missing or invalid for ${videoId} (EN).`
+              `Original transcription content missing.`
             );
-          }
         } else {
           const translatedContent = transcriptionData.translations?.[
             language
           ] as ReplicateSegmentOutput | null;
           sourceSegments = translatedContent?.segments;
-          if (!sourceSegments) {
+          if (!sourceSegments)
             throw new AppError(
               AppErrorCode.DEPENDENCY_NOT_READY,
-              `Translation '${language}' not found or invalid for ${videoId}.`
+              `Translation '${language}' not found.`
             );
-          }
         }
 
-        // Find the specific sub-segment text matching startTime and endTime
-        console.log(
-          `[internalGenerateAudioChunk] Searching for target segment ${startTime}-${endTime}...`
-        );
         const targetSegment = sourceSegments.find(
           (s) =>
             s.start !== undefined &&
-            Math.abs(s.start - startTime) < 0.01 && // Allow minor float differences
+            Math.abs(s.start - startTime) < 0.01 &&
             s.end !== undefined &&
             Math.abs(s.end - endTime) < 0.01
         );
@@ -843,11 +565,8 @@ export const internalGenerateAudioChunk = publicAction
           textToSynthesize = targetSegment.text.trim();
         } else {
           console.warn(
-            `[internalGenerateAudioChunk] Could not find exact sub-segment text for ${language}, ${startTime}-${endTime}. Using fallback range extraction.`
+            `TTSChunkEnqueue: Could not find exact sub-segment text for ${language}, ${startTime}-${endTime}. Using fallback range extraction.`
           );
-          // Fallback: Use the range extraction (might concatenate parts of adjacent segments)
-          // This helper needs the full ReplicateSegmentOutput structure, not just the segments array.
-          // Reconstruct the minimum needed structure for the helper.
           const reconstructOutput: ReplicateSegmentOutput = {
             segments: sourceSegments,
           };
@@ -860,127 +579,33 @@ export const internalGenerateAudioChunk = publicAction
 
         if (!textToSynthesize.trim()) {
           console.warn(
-            `[internalGenerateAudioChunk] No text found for TTS in ${language} for ${videoId} (${startTime}-${endTime}). Skipping chunk generation.`
+            `TTSChunkEnqueue: No text found for ${videoId} (${startTime}-${endTime}). Skipping job enqueue.`
           );
-          // Indicate skipped generation with an empty path
-          return {
-            success: true,
-            data: { storagePath: "" }, // Caller must check for empty path
-          };
+          return { success: true, data: { success: true } }; // Nothing to generate
         }
-        console.log(
-          `[internalGenerateAudioChunk] Text extracted (first 100): "${textToSynthesize.substring(
-            0,
-            100
-          )}..."`
-        );
 
-        // 5. Call appropriate TTS function (Unchanged)
-        let ttsResult: { audioBuffer: Buffer; storagePath: string };
-        console.log(
-          `[internalGenerateAudioChunk] Calling ${ttsProvider} TTS...`
-        );
-        if (ttsProvider === "google") {
-          ttsResult = await generateGoogleTts({
-            text: textToSynthesize,
-            languageCode: googleLangCode!,
-            voiceName: googleVoiceName!,
-            videoId,
-            startTime,
-            endTime,
-          });
-        } else {
-          ttsResult = await generateOpenAiTts({
-            text: textToSynthesize,
-            voice: openaiVoiceName as any,
-            videoId,
-            language,
-            startTime,
-            endTime,
-          });
-        }
-        console.log(
-          `[internalGenerateAudioChunk] TTS call completed. Storage path: ${ttsResult.storagePath}`
-        );
-
-        const { audioBuffer, storagePath: chunkStoragePath } = ttsResult;
-
-        // 6. Upload TTS chunk (Unchanged)
-        console.log(
-          `[internalGenerateAudioChunk] Uploading TTS chunk to: ${chunkStoragePath}`
-        );
-        const { error: uploadError } = await supabase.storage
-          .from("translated-audio")
-          .upload(chunkStoragePath, audioBuffer, {
-            contentType: "audio/mpeg",
-            upsert: true,
-          });
-
-        if (uploadError)
-          throw new AppError(
-            AppErrorCode.SUPABASE_STORAGE_ERROR,
-            `TTS Upload failed: ${uploadError.message}`
-          );
-        console.log(
-          `[internalGenerateAudioChunk] TTS chunk uploaded successfully.`
-        );
-
-        // 7. Insert record into translated_audio_chunks
-        console.log(
-          `[internalGenerateAudioChunk] Inserting chunk record into DB...`
-        );
-        const { error: dbInsertError } = await supabase
-          .from("translated_audio_chunks")
-          .insert({
-            video_id: videoId,
+        // 3. Enqueue the Inngest job
+        await inngest.send({
+          name: "tts/generate-chunk",
+          data: {
+            videoId: videoId,
             language: language,
             voice: voice,
-            chunk_start: startTime,
-            chunk_end: endTime,
-            storage_path: chunkStoragePath,
-            // is_favorite and expiry_at will use default/NULL
-          });
+            startTime: startTime,
+            endTime: endTime,
+            textToSynthesize: textToSynthesize, // Pass the extracted text
+          },
+        });
 
-        if (dbInsertError) {
-          // Check specifically for the unique constraint violation (race condition)
-          if (dbInsertError.code === "23505") {
-            console.warn(
-              `[internalGenerateAudioChunk] Handled Race condition: Chunk for ${chunkStoragePath} was inserted concurrently. Returning success.`
-            );
-            // We know the chunk exists, so return success with the path
-            return { success: true, data: { storagePath: chunkStoragePath } };
-          } else {
-            // It's some other database error
-            console.error(
-              "[internalGenerateAudioChunk] DB Error inserting translated chunk record:",
-              dbInsertError.message
-            );
-            throw new AppError(
-              AppErrorCode.DATABASE_ERROR,
-              `DB error inserting chunk record: ${dbInsertError.message}`
-            );
-          }
-        }
-        // Removed the specific 23505 handling/warning log.
-
-        console.log(`[internalGenerateAudioChunk] DB insert successful.`);
-
-        // 8. Return the storage path (Unchanged)
         console.log(
-          `[internalGenerateAudioChunk] Returning chunk storage path: ${chunkStoragePath}`
+          `INTERNAL ACTION: Successfully enqueued TTS chunk job for ${startTime}-${endTime}.`
         );
-        return { success: true, data: { storagePath: chunkStoragePath } };
+        return { success: true, data: { success: true } };
       } catch (error: unknown) {
         console.error(
-          `[internalGenerateAudioChunk] ERROR generating audio chunk ${startTime}-${endTime}:`,
+          `INTERNAL ACTION: Error enqueuing TTS chunk job ${startTime}-${endTime}:`,
           error
         );
-        // Log the detailed error object
-        console.error(
-          "[internalGenerateAudioChunk] Caught Error Details:",
-          JSON.stringify(error, null, 2)
-        );
-
         const appErr =
           error instanceof AppError
             ? error
@@ -988,16 +613,14 @@ export const internalGenerateAudioChunk = publicAction
                 AppErrorCode.UNEXPECTED_ERROR,
                 error instanceof Error
                   ? error.message
-                  : "Unknown error in internalGenerateAudioChunk"
+                  : "Unknown error enqueuing TTS chunk job"
               );
-        // Consider how failures here should update processing_status
-        // For now, return error to the calling Supabase function
         return { success: false, error: appErr };
       }
     }
   );
 
-// --- Action: Internal Spawn TTS Jobs ---
+// --- Action: Internal Spawn TTS Jobs --- // MODIFIED
 const internalSpawnTtsJobsSchema = z.object({
   videoId: z.string().uuid(),
   language: z.string(),
@@ -1007,236 +630,32 @@ const internalSpawnTtsJobsSchema = z.object({
 export const internalSpawnTtsJobs = publicAction
   .schema(internalSpawnTtsJobsSchema)
   .action(
-    async ({
-      parsedInput,
-    }): Promise<ActionResponse<{ jobsTriggered: number }>> => {
+    async ({ parsedInput }): Promise<ActionResponse<{ success: boolean }>> => {
       const { videoId, language, voice } = parsedInput;
-      const supabase = supabaseServiceRoleClient;
-      const langVoiceKey = `${language}_${voice}`; // Combine lang and voice for status updates
 
       console.log(
-        `INTERNAL ACTION: Spawning TTS jobs for Video: ${videoId}, Lang: ${language}, Voice: ${voice}`
+        `INTERNAL ACTION: Enqueuing initial TTS spawn job for ${videoId}, ${language}, ${voice}`
       );
 
       try {
-        // 1. Fetch the completed transcription row
-        const { data: transcriptionDataUntyped, error: transcriptionError } =
-          await supabase
-            .from("transcription_segments")
-            .select("id, content, translations")
-            .eq("video_id", videoId)
-            .eq("status", "completed") // Ensure it's actually done
-            .single();
+        // Minimal pre-checks can be done here if needed, but the main logic is in the job
 
-        if (transcriptionError) {
-          throw new AppError(
-            AppErrorCode.DATABASE_ERROR,
-            `DB error fetching transcription for TTS spawning: ${transcriptionError.message}`
-          );
-        }
-        const transcriptionData = transcriptionDataUntyped as any; // Use 'as any' for simplicity
-
-        // 2. Extract relevant segments
-        let sourceSegments:
-          | ReplicateSegmentOutput["segments"]
-          | undefined
-          | null = null;
-
-        if (language === "en") {
-          const originalContent =
-            transcriptionData.content as ReplicateSegmentOutput | null;
-          sourceSegments = originalContent?.segments;
-          if (!sourceSegments) {
-            throw new AppError(
-              AppErrorCode.DEPENDENCY_NOT_READY,
-              `Original transcription content missing or invalid for ${videoId} (EN) when spawning TTS.`
-            );
-          }
-        } else {
-          const translatedContent = transcriptionData.translations?.[
-            language
-          ] as ReplicateSegmentOutput | null;
-          sourceSegments = translatedContent?.segments;
-          if (!sourceSegments) {
-            throw new AppError(
-              AppErrorCode.DEPENDENCY_NOT_READY,
-              `Translation '${language}' not found or invalid for ${videoId} when spawning TTS.`
-            );
-          }
-        }
-
-        if (!sourceSegments || sourceSegments.length === 0) {
-          console.log(
-            `INTERNAL ACTION: No segments found for ${language} in video ${videoId}. No TTS jobs to trigger.`
-          );
-          return { success: true, data: { jobsTriggered: 0 } };
-        }
-
-        // 3. Filter valid segments for processing (first 60 seconds)
-        const validSegmentsToProcess = sourceSegments.filter(
-          (subSegment) =>
-            subSegment.start !== undefined &&
-            subSegment.end !== undefined &&
-            subSegment.text?.trim() &&
-            subSegment.end > subSegment.start &&
-            subSegment.end <= 60 // Only process initial segments <= 60s
-        );
-
-        if (validSegmentsToProcess.length === 0) {
-          console.log(
-            `INTERNAL ACTION: No valid segments found <= 60s for ${language} in video ${videoId}. No TTS jobs to trigger.`
-          );
-          // If no initial segments, the process is technically complete for this stage.
-          // The on-audio-chunk function should handle setting the final 'completed' status.
-          return { success: true, data: { jobsTriggered: 0 } };
-        }
-
-        // 4. Batch Trigger Generation Jobs
-        const BATCH_SIZE = 10; // Process 10 segments at a time
-        let jobsTriggered = 0;
-        let totalTriggerErrors = 0;
-        let processingErrorOccurred = false; // Flag to indicate if any batch failed
+        await inngest.send({
+          name: "tts/spawn-initial",
+          data: {
+            videoId: videoId,
+            language: language,
+            voice: voice,
+          },
+        });
 
         console.log(
-          `INTERNAL ACTION: Starting batch processing for ${validSegmentsToProcess.length} segments in batches of ${BATCH_SIZE}...`
+          `INTERNAL ACTION: Successfully enqueued initial TTS spawn job.`
         );
-
-        for (let i = 0; i < validSegmentsToProcess.length; i += BATCH_SIZE) {
-          const batch = validSegmentsToProcess.slice(i, i + BATCH_SIZE);
-          console.log(
-            `INTERNAL ACTION: Processing batch ${
-              i / BATCH_SIZE + 1
-            } (segments ${i + 1}-${Math.min(
-              i + BATCH_SIZE,
-              validSegmentsToProcess.length
-            )})`
-          );
-
-          const triggerPromises = batch.map((subSegment) => {
-            const payload = {
-              videoId: videoId,
-              language: language,
-              voice: voice,
-              startTime: subSegment.start!, // Assert non-null based on filter
-              endTime: subSegment.end!, // Assert non-null based on filter
-            };
-            // Call helper but await its result within the batch
-            return triggerInternalAction("internalGenerateAudioChunk", payload);
-          });
-
-          // Use Promise.allSettled to handle individual promise rejections
-          const results = await Promise.allSettled(triggerPromises);
-
-          let batchTriggerErrors = 0;
-          results.forEach((result, index) => {
-            if (
-              result.status === "fulfilled" &&
-              result.value.success === true
-            ) {
-              jobsTriggered++;
-            } else {
-              // Handle rejected promises or failed internal actions
-              batchTriggerErrors++;
-              totalTriggerErrors++;
-              processingErrorOccurred = true; // Mark that an error occurred
-              const segment = batch[index];
-              const errorInfo =
-                result.status === "rejected"
-                  ? result.reason
-                  : result.value.error;
-              console.error(
-                `INTERNAL ACTION: Failed to trigger TTS for ${language}/${voice}, segment ${segment.start}-${segment.end}:`,
-                errorInfo
-              );
-            }
-          });
-
-          console.log(
-            `INTERNAL ACTION: Batch ${
-              i / BATCH_SIZE + 1
-            } complete. Successful triggers in batch: ${
-              batch.length - batchTriggerErrors
-            }, Errors in batch: ${batchTriggerErrors}`
-          );
-
-          // Optional: Add a small delay between batches if needed
-          // await new Promise(resolve => setTimeout(resolve, 500)); // 500ms delay
-        }
-
-        console.log(
-          `INTERNAL ACTION: Finished spawning TTS jobs for ${videoId}, ${language}, ${voice}. Total Jobs Triggered: ${jobsTriggered}, Total Trigger Errors: ${totalTriggerErrors}.`
-        );
-
-        // 5. Update Video Status if Errors Occurred during Spawning
-        if (processingErrorOccurred) {
-          console.error(
-            `INTERNAL ACTION: Errors occurred during TTS job spawning for ${langVoiceKey}. Updating video status to failed.`
-          );
-          try {
-            // Fetch current status first to avoid overwriting other keys
-            const { data: videoData, error: fetchError } = await supabase
-              .from("videos")
-              .select("processing_status")
-              .eq("id", videoId)
-              .single();
-
-            if (fetchError) {
-              console.error(
-                `INTERNAL ACTION: Failed to fetch current video status for error update:`,
-                fetchError
-              );
-              // Can't update status, but proceed to return overall result
-            } else {
-              const currentStatus =
-                (videoData?.processing_status as Record<string, any>) || {};
-              const updatedStatus = {
-                ...currentStatus,
-                [langVoiceKey]: {
-                  status: "failed",
-                  error_message: `Failed to trigger ${totalTriggerErrors} audio generation job(s).`,
-                  last_updated: new Date().toISOString(),
-                  // Keep progress if it existed? Or reset? Resetting might be clearer.
-                  progress: currentStatus[langVoiceKey]?.progress ?? 0,
-                },
-              };
-
-              const { error: updateError } = await supabase
-                .from("videos")
-                .update({ processing_status: updatedStatus })
-                .eq("id", videoId);
-
-              if (updateError) {
-                console.error(
-                  `INTERNAL ACTION: Failed to update video status to failed after trigger errors:`,
-                  updateError
-                );
-              } else {
-                console.log(
-                  `INTERNAL ACTION: Successfully updated video status for ${langVoiceKey} to failed.`
-                );
-              }
-            }
-          } catch (statusUpdateError) {
-            console.error(
-              `INTERNAL ACTION: Unexpected error updating video status to failed:`,
-              statusUpdateError
-            );
-          }
-          // Return failure from the action if any trigger failed, even if status update fails
-          return {
-            success: false,
-            error: new AppError(
-              AppErrorCode.SERVICE_ERROR, // Or a more specific error code
-              `Failed to trigger ${totalTriggerErrors} audio generation job(s) for ${langVoiceKey}. Check logs.`
-            ),
-          };
-        }
-
-        // Return success if all batches processed without trigger errors
-        return { success: true, data: { jobsTriggered } };
+        return { success: true, data: { success: true } };
       } catch (error: unknown) {
         console.error(
-          `INTERNAL ACTION: Error spawning TTS jobs for ${videoId}, ${language}, ${voice}:`,
+          `INTERNAL ACTION: Error enqueuing initial TTS spawn job for ${videoId}, ${language}, ${voice}:`,
           error
         );
         const appErr =
@@ -1246,38 +665,10 @@ export const internalSpawnTtsJobs = publicAction
                 AppErrorCode.UNEXPECTED_ERROR,
                 error instanceof Error
                   ? error.message
-                  : "Unknown error in internalSpawnTtsJobs"
+                  : "Unknown error enqueuing TTS spawn job"
               );
-        // Attempt to update status to failed on general error
-        try {
-          const { data: videoData, error: fetchError } = await supabase
-            .from("videos")
-            .select("processing_status")
-            .eq("id", videoId)
-            .single();
-          if (!fetchError && videoData) {
-            const currentStatus =
-              (videoData.processing_status as Record<string, any>) || {};
-            const updatedStatus = {
-              ...currentStatus,
-              [langVoiceKey]: {
-                status: "failed",
-                error_message: appErr.message,
-                last_updated: new Date().toISOString(),
-                progress: currentStatus[langVoiceKey]?.progress ?? 0,
-              },
-            };
-            await supabase
-              .from("videos")
-              .update({ processing_status: updatedStatus })
-              .eq("id", videoId);
-          }
-        } catch (e) {
-          console.error(
-            "Failed to update video status on main catch block:",
-            e
-          );
-        }
+        // Consider updating status to failed here?
+        // For now, just return error. The job handler will manage status on its failure.
         return { success: false, error: appErr };
       }
     }

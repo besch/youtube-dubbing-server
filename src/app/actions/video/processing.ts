@@ -13,6 +13,7 @@ import {
   internalSpawnTtsJobs,
 } from "../videoInternal"; // Import necessary internal actions
 import type { Tables } from "@/types/supabase"; // Import Supabase types
+import { inngest } from "@/inngest/client"; // Import Inngest client
 
 // Define the possible status values explicitly
 type ProcessingStatusValue =
@@ -846,6 +847,209 @@ export const getVideoByUrl = protectedAction
           return { success: false, error: error };
         }
         return { success: false, error: appErrors.UNEXPECTED_ERROR };
+      }
+    }
+  );
+
+// --- Retry Processing Target Action ---
+
+const retryProcessingTargetSchema = z.object({
+  videoId: z.string().uuid(),
+  language: z.string(),
+  voice: z.string(),
+});
+
+export const retryProcessingTarget = protectedAction
+  .schema(retryProcessingTargetSchema)
+  .action(
+    async ({ parsedInput }): Promise<ActionResponse<{ success: boolean }>> => {
+      const { videoId, language, voice } = parsedInput;
+      const supabase = supabaseServiceRoleClient;
+      const langVoiceKey = `${language}_${voice}`;
+
+      console.log(
+        `[Retry Action] Attempting to retry target ${langVoiceKey} for video ${videoId}`
+      );
+
+      try {
+        // 1. Fetch Current Video Status
+        const { data: videoData, error: fetchError } = await supabase
+          .from("videos")
+          .select("processing_status")
+          .eq("id", videoId)
+          .single();
+
+        if (fetchError || !videoData) {
+          console.error(
+            `[Retry Action] Failed to fetch video ${videoId}: ${fetchError?.message}`
+          );
+          return {
+            success: false,
+            error: appErrors.RECORD_NOT_FOUND,
+          };
+        }
+
+        const currentProcessingStatus = (videoData.processing_status ||
+          {}) as Record<string, any>; // Type assertion for simplicity
+        const targetStatus = currentProcessingStatus[langVoiceKey];
+
+        if (!targetStatus || targetStatus.status !== "failed") {
+          console.log(
+            `[Retry Action] Target ${langVoiceKey} for video ${videoId} is not in 'failed' state (Status: ${targetStatus?.status}). No retry needed.`
+          );
+          return { success: true, data: { success: true } }; // Already processing or completed
+        }
+
+        console.log(
+          `[Retry Action] Target ${langVoiceKey} is in failed state. Determining restart point...`
+        );
+
+        // 2. Determine Restart Point and Reset Status
+        let newStatus: Partial<typeof targetStatus> = {};
+        let jobToEnqueue: { name: string; data: any } | null = null;
+
+        // Simplistic restart logic: If failed, try restarting from translation or initial TTS spawn.
+        // More sophisticated logic could inspect the error message or progress.
+
+        // Fetch the associated transcription segment to determine if translation exists
+        const { data: transcriptionSegment, error: segmentError } =
+          await supabase
+            .from("transcription_segments")
+            .select("id, translations")
+            .eq("video_id", videoId)
+            .maybeSingle();
+
+        if (segmentError) {
+          console.error(
+            `[Retry Action] Error fetching transcription segment for ${videoId}: ${segmentError.message}`
+          );
+          // Default to retrying translation if segment fetch fails?
+          newStatus = {
+            status: "transcribing_full", // Reset to state before translation/TTS
+            error_message: null,
+            progress: 5, // Reset progress
+            last_updated: new Date().toISOString(),
+          };
+          // Cannot enqueue specific job without segmentId
+          console.warn(
+            `[Retry Action] Could not determine segment ID, only resetting status.`
+          );
+        } else if (!transcriptionSegment) {
+          console.warn(
+            `[Retry Action] No transcription segment found for video ${videoId}. Cannot retry.`
+          );
+          return {
+            success: false,
+            error: new AppError(
+              AppErrorCode.DEPENDENCY_NOT_READY,
+              "Transcription not found for retry."
+            ),
+          };
+        } else {
+          const translations = (transcriptionSegment.translations ||
+            {}) as Record<string, any>;
+          const translationExists =
+            translations[language]?.segments?.length > 0;
+
+          if (language === "en" || translationExists) {
+            // If English, or translation already exists, restart TTS spawning
+            console.log(
+              `[Retry Action] Restarting at TTS Spawn for ${langVoiceKey}.`
+            );
+            newStatus = {
+              status: "generating_audio", // State before TTS starts
+              error_message: null,
+              progress: 15, // Reset progress slightly past translation
+              last_updated: new Date().toISOString(),
+            };
+            jobToEnqueue = {
+              name: "tts/spawn-initial",
+              data: { videoId, language, voice },
+            };
+          } else {
+            // If non-English and translation doesn't exist, restart translation
+            console.log(
+              `[Retry Action] Restarting at Translation for ${langVoiceKey}.`
+            );
+            newStatus = {
+              status: "translating_full", // State before translation starts
+              error_message: null,
+              progress: 10, // Reset progress slightly past transcription
+              last_updated: new Date().toISOString(),
+            };
+            jobToEnqueue = {
+              name: "translation/request",
+              data: {
+                segmentId: transcriptionSegment.id,
+                targetLanguage: language,
+              },
+            };
+          }
+        }
+
+        // 3. Update Video Status in DB
+        const updatedProcessingStatus = {
+          ...currentProcessingStatus,
+          [langVoiceKey]: newStatus,
+        };
+
+        const { error: updateError } = await supabase
+          .from("videos")
+          .update({ processing_status: updatedProcessingStatus })
+          .eq("id", videoId);
+
+        if (updateError) {
+          console.error(
+            `[Retry Action] Failed to update video status for ${videoId}: ${updateError.message}`
+          );
+          return {
+            success: false,
+            error: appErrors.DATABASE_ERROR,
+          };
+        }
+
+        // 4. Enqueue the Starting Job (if determined)
+        if (jobToEnqueue) {
+          try {
+            await inngest.send(jobToEnqueue as any); // Use 'as any' for simplicity or create union type for events
+            console.log(
+              `[Retry Action] Successfully enqueued starting job '${jobToEnqueue.name}' for ${langVoiceKey}.`
+            );
+          } catch (enqueueError: any) {
+            console.error(
+              `[Retry Action] Failed to enqueue job '${jobToEnqueue.name}' for ${langVoiceKey}: ${enqueueError.message}`
+            );
+            // Status is already updated, but log that enqueue failed.
+            // User might need to retry again.
+            return {
+              success: false,
+              error: new AppError(
+                AppErrorCode.SERVICE_ERROR,
+                `Failed to enqueue retry job: ${enqueueError.message}`
+              ),
+            };
+          }
+        }
+
+        console.log(
+          `[Retry Action] Successfully reset status for ${langVoiceKey}.`
+        );
+        return { success: true, data: { success: true } };
+      } catch (error: unknown) {
+        console.error(
+          `[Retry Action] Unexpected error for ${langVoiceKey} video ${videoId}:`,
+          error
+        );
+        const appErr =
+          error instanceof AppError
+            ? error
+            : new AppError(
+                AppErrorCode.UNEXPECTED_ERROR,
+                error instanceof Error
+                  ? error.message
+                  : "Unknown error during retry action"
+              );
+        return { success: false, error: appErr };
       }
     }
   );
