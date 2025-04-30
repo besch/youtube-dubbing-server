@@ -504,7 +504,7 @@ export const initiateVideoProcessingJob = protectedAction
                 // Cast to a temporary variable first
                 const translationsObj =
                   transcriptionData.translations as Record<string, any>;
-                translationExists = !!translationsObj[langCode]; // Check if the key exists and is truthy
+                translationExists = !!translationsObj[langCode];
               }
 
               if (translationExists) {
