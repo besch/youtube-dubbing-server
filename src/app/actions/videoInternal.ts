@@ -11,7 +11,7 @@ import {
   parseTranslationResponse,
   translateText,
 } from "@/lib/translate";
-import type { ReplicateSegmentOutput } from "@/lib/replicate";
+import type { ReplicateSegment, ReplicateSegmentOutput } from "@/lib/replicate"; // Import ReplicateSegment
 import type { Tables } from "@/types/supabase";
 import { generateOpenAiTts } from "@/lib/openai-tts";
 import { generateGoogleTts } from "@/lib/google-tts";
@@ -376,20 +376,21 @@ export const internalRequestFullTranscription = publicAction
     }
   );
 
-// --- Action: Internal Translate Full Segment Content --- // Renamed Action
+// --- Action: Internal Translate Full Segment Content --- //
 const internalTranslateFullContentSchema = z.object({
   segmentId: z.string().uuid(), // ID of the single transcription_segments row
   targetLanguage: z.string().length(2), // ISO 639-1 code
 });
 
-export const internalTranslateFullContent = publicAction // Renamed export
+export const internalTranslateFullContent = publicAction
   .schema(internalTranslateFullContentSchema)
   .action(async ({ parsedInput }): Promise<ActionResponse<null>> => {
     const { segmentId, targetLanguage } = parsedInput;
     const supabase = supabaseServiceRoleClient;
+    const BATCH_SIZE = 5; // Process 5 segments per batch
 
     console.log(
-      `INTERNAL ACTION: Translating FULL content for segment row ${segmentId} to language: ${targetLanguage}`
+      `INTERNAL ACTION: Translating FULL content for segment row ${segmentId} to language: ${targetLanguage} in batches of ${BATCH_SIZE}`
     );
 
     try {
@@ -492,7 +493,7 @@ export const internalTranslateFullContent = publicAction // Renamed export
         return { success: true, data: null }; // Nothing to translate
       }
 
-      // 3. Prepare for Translation
+      // 3. Prepare for Translation (language check)
       const sourceLangCode = originalContent.detected_language || "en";
       const sourceLangName =
         config.languages.find((l) => l.code === sourceLangCode)?.name ||
@@ -531,82 +532,141 @@ export const internalTranslateFullContent = publicAction // Renamed export
         return { success: true, data: null };
       }
 
-      // Format the *entire* transcription for translation
-      console.log("TranslateFullContent: Formatting text for translation...");
-      const textToTranslate = formatTranscriptionForTranslation(
-        originalContent.segments
+      // 4. Batch Translation
+      const allOriginalSegments = originalContent.segments;
+      const translationPromises: Promise<string | null>[] = []; // Explicitly type the promise array
+      const originalBatches: ReplicateSegment[][] = []; // Keep track of original segments per batch
+
+      console.log(
+        `TranslateFullContent: Starting batch translation for ${allOriginalSegments.length} segments...`
       );
-      if (!textToTranslate) {
-        console.log(
-          `No text found to translate in transcription row ${segmentId}.`
+
+      for (let i = 0; i < allOriginalSegments.length; i += BATCH_SIZE) {
+        const batchOriginalSegments = allOriginalSegments.slice(
+          i,
+          i + BATCH_SIZE
         );
+        originalBatches.push(batchOriginalSegments); // Store original batch
+
+        const batchTextToTranslate = formatTranscriptionForTranslation(
+          batchOriginalSegments
+        );
+
+        if (!batchTextToTranslate) {
+          console.log(
+            `TranslateFullContent: Batch ${
+              i / BATCH_SIZE + 1
+            } has no text. Skipping.`
+          );
+          // Push a resolved promise with null to maintain result order
+          translationPromises.push(Promise.resolve(null));
+          continue;
+        }
+
+        console.log(
+          `TranslateFullContent: Calling translateText for batch ${
+            i / BATCH_SIZE + 1
+          } (segments ${i + 1}-${i + batchOriginalSegments.length})`
+        );
+        translationPromises.push(
+          translateText(batchTextToTranslate, targetLangName)
+        );
+      }
+
+      // 5. Process Batch Results
+      const results = await Promise.allSettled(translationPromises);
+      const allTranslatedSegments: ReplicateSegment[] = [];
+      let totalFailures = 0;
+
+      console.log(
+        `TranslateFullContent: Processing ${results.length} batch results...`
+      );
+
+      results.forEach((result, index) => {
+        const batchNumber = index + 1;
+        const correspondingOriginalBatch = originalBatches[index];
+
+        if (result.status === "fulfilled" && result.value) {
+          const translatedText = result.value;
+          console.log(
+            `TranslateFullContent: Parsing result for successful batch ${batchNumber}`
+          );
+          const parsedSegments = parseTranslationResponse(
+            translatedText,
+            correspondingOriginalBatch // Pass the original segments for this batch
+          );
+
+          if (parsedSegments && parsedSegments.length > 0) {
+            allTranslatedSegments.push(...parsedSegments);
+            console.log(
+              `TranslateFullContent: Successfully parsed ${parsedSegments.length} segments for batch ${batchNumber}`
+            );
+          } else {
+            totalFailures++;
+            console.error(
+              `TranslateFullContent: Failed to parse translation response for batch ${batchNumber}. Raw: ${translatedText.substring(
+                0,
+                100
+              )}`
+            );
+          }
+        } else if (result.status === "fulfilled" && !result.value) {
+          // Handle the case where translateText returned null (e.g., empty batch text)
+          console.log(
+            `TranslateFullContent: Batch ${batchNumber} had no text or translation returned null.`
+          );
+        } else if (result.status === "rejected") {
+          // Explicitly check for rejected status to safely access .reason
+          totalFailures++;
+          console.error(
+            `TranslateFullContent: Translation failed for batch ${batchNumber}:`,
+            result.reason // Safe to access .reason here
+          );
+        }
+      });
+
+      console.log(
+        `TranslateFullContent: Finished processing batches. Total successful segments: ${allTranslatedSegments.length}, Total batch failures: ${totalFailures}`
+      );
+
+      // Handle potential failures - if all batches failed, throw an error
+      if (totalFailures === results.length && results.length > 0) {
+        throw new AppError(
+          AppErrorCode.SERVICE_ERROR,
+          `All ${results.length} translation batches failed for segment row ${segmentId}.`
+        );
+      }
+      // If some batches failed but others succeeded, we proceed with the partial result
+      // but log a warning.
+      if (totalFailures > 0) {
+        console.warn(
+          `TranslateFullContent: ${totalFailures} out of ${results.length} batches failed. Proceeding with partial translation.`
+        );
+      }
+      // If no segments were translated (all batches empty or failed parsing), return success
+      if (allTranslatedSegments.length === 0) {
+        console.log(
+          `TranslateFullContent: No segments were successfully translated for ${segmentId}.`
+        );
+        // Decide if this should update the DB with an empty array or just return.
+        // Returning without update seems safer to avoid overwriting potential previous partial data.
         return { success: true, data: null };
       }
 
-      console.log(
-        `TranslateFullContent: Calling Translation Service (Gemini) to translate content from row ${segmentId} to ${targetLangName}`
-      );
-      console.log(
-        `TranslateFullContent: Text to translate (first 100 chars): "${textToTranslate.substring(
-          0,
-          100
-        )}..."`
-      );
-
-      // 4. Call Translation Service
-      const translatedText = await translateText(
-        textToTranslate,
-        targetLangName
-      );
-      console.log(
-        `TranslateFullContent: Received response from translateText. Is empty: ${!translatedText}`
-      );
-
-      if (!translatedText) {
-        throw new AppError(
-          AppErrorCode.SERVICE_ERROR,
-          "Translation service returned empty response."
-        );
-      }
-      console.log(
-        `TranslateFullContent: Received translation (first 100 chars): "${translatedText.substring(
-          0,
-          100
-        )}..."`
-      );
-
-      // 5. Parse Translation Response
-      console.log("TranslateFullContent: Parsing translation response...");
-      const parsedSegments = parseTranslationResponse(
-        translatedText,
-        originalContent.segments // Pass original segments for timing alignment
-      );
-      console.log(
-        `TranslateFullContent: Parsed translation into ${
-          parsedSegments?.length ?? 0
-        } segments.`
-      );
-
-      if (!parsedSegments || parsedSegments.length === 0) {
-        throw new AppError(
-          AppErrorCode.SERVICE_ERROR,
-          `Failed to parse translation response or got empty segments for row ${segmentId}.`
-        );
-      }
-
+      // 6. Construct Final Translated Content
       const translatedContent: ReplicateSegmentOutput = {
-        segments: parsedSegments,
+        segments: allTranslatedSegments,
         detected_language: targetLanguage, // Set detected language to the target
       };
 
-      // 6. Update Database
+      // 7. Update Database
       const updatedTranslations = {
         ...existingTranslations,
         [targetLanguage]: translatedContent,
       };
 
       console.log(
-        `>>> TranslateFullContent: Preparing to update DB for row ${segmentId} with FULL translation for language ${targetLanguage}. Keys in updatedTranslations: ${Object.keys(
+        `>>> TranslateFullContent: Preparing to update DB for row ${segmentId} with COMBINED batch translation for language ${targetLanguage}. Keys in updatedTranslations: ${Object.keys(
           updatedTranslations
         )}`
       );
@@ -630,12 +690,12 @@ export const internalTranslateFullContent = publicAction // Renamed export
         `>>> TranslateFullContent: DB Update successful for row ${segmentId}.`
       );
       console.log(
-        `INTERNAL ACTION: Successfully translated and stored FULL ${targetLanguage} content for row ${segmentId}.`
+        `INTERNAL ACTION: Successfully translated (batched) and stored FULL ${targetLanguage} content for row ${segmentId}.`
       );
       return { success: true, data: null };
     } catch (error: unknown) {
       console.error(
-        `INTERNAL ACTION: Error translating full content for row ${segmentId} to ${targetLanguage}:`,
+        `INTERNAL ACTION: Error translating full content (batched) for row ${segmentId} to ${targetLanguage}:`,
         error
       );
       // Log the detailed error object
@@ -648,7 +708,7 @@ export const internalTranslateFullContent = publicAction // Renamed export
               AppErrorCode.UNEXPECTED_ERROR,
               error instanceof Error
                 ? error.message
-                : "Unknown error in internalTranslateFullContent" // Updated name
+                : "Unknown error in internalTranslateFullContent"
             );
       return { success: false, error: appErr };
     }
