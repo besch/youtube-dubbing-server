@@ -85,6 +85,38 @@ async function triggerNextAction(actionName: string, payload: any) {
   return result;
 }
 
+// Helper to call the atomic status update RPC function
+async function updateVideoStatusRPC(
+  supabaseAdmin: ReturnType<typeof createClient>,
+  videoId: string,
+  langVoiceKey: string,
+  statusDetail: any
+) {
+  console.log(
+    `[on-translation-complete] Calling RPC update_processing_status for ${videoId} - ${langVoiceKey}:`,
+    statusDetail
+  );
+  const { error: rpcError } = await supabaseAdmin.rpc(
+    "update_processing_status",
+    {
+      video_uuid: videoId,
+      status_key: langVoiceKey,
+      status_value: statusDetail,
+    }
+  );
+
+  if (rpcError) {
+    console.error(
+      `[on-translation-complete] RPC Error updating status for ${videoId} - ${langVoiceKey}:`,
+      rpcError
+    );
+    // Throw error to be caught by the main handler
+    throw new Error(
+      `Failed to update status via RPC for ${langVoiceKey}: ${rpcError.message}`
+    );
+  }
+}
+
 serve(async (req) => {
   // Handle CORS preflight requests
   if (req.method === "OPTIONS") {
@@ -181,7 +213,11 @@ serve(async (req) => {
     );
 
     // --- Trigger TTS for Updated Languages --- //
-    let updateNeeded = false;
+    // Prepare updates and triggers
+    const statusUpdatePromises: Promise<void>[] = [];
+    const ttsSpawnPromises: Promise<any>[] = [];
+    let overallError: Error | null = null;
+
     for (const language of updatedLanguages) {
       const translatedContent = newTranslations[
         language
@@ -221,60 +257,100 @@ serve(async (req) => {
           `[on-translation-complete] Processing target ${langVoiceKey} (status was 'translating_full'). Triggering audio generation.`
         );
 
-        processingConfig[langVoiceKey] = {
-          ...processingConfig[langVoiceKey],
+        const statusDetail: VideoProcessingStatusDetail = {
           status: "generating_audio", // Update status first
           last_updated: new Date().toISOString(),
         };
-        updateNeeded = true;
 
-        // Trigger TTS spawning via the internal action
-        console.log(
-          `   -> Triggering internalSpawnTtsJobs for ${langVoiceKey}`
+        // Prepare status update promise
+        statusUpdatePromises.push(
+          updateVideoStatusRPC(
+            supabaseAdmin,
+            dbVideoId,
+            langVoiceKey,
+            statusDetail
+          )
         );
-        try {
-          // Don't await, trigger in parallel
+
+        // Prepare trigger promise (will run after status updates)
+        ttsSpawnPromises.push(
           triggerNextAction("internalSpawnTtsJobs", {
             videoId: dbVideoId,
             language: language,
             voice: voice,
-          });
-        } catch (spawnError) {
-          console.error(
-            `[on-translation-complete] Failed to trigger internalSpawnTtsJobs for ${langVoiceKey}: ${spawnError.message}. Continuing...`
-          );
-          // Optionally update status to failed here
-          processingConfig[langVoiceKey].status = "failed";
-          processingConfig[
-            langVoiceKey
-          ].error_message = `Failed to trigger TTS job spawning: ${spawnError.message}`;
-        }
+          })
+        );
       }
     }
 
-    // --- Update Video Processing Status in DB --- //
-    if (updateNeeded) {
+    // --- Apply Status Updates Atomically --- //
+    if (statusUpdatePromises.length > 0) {
       console.log(
-        "[on-translation-complete] Updating video processing_status in DB:",
-        JSON.stringify(processingConfig)
+        `[on-translation-complete] Applying ${statusUpdatePromises.length} status updates...`
       );
-      const { error: updateError } = await supabaseAdmin
-        .from("videos")
-        .update({ processing_status: processingConfig })
-        .eq("id", dbVideoId);
-
-      if (updateError) {
+      const results = await Promise.allSettled(statusUpdatePromises);
+      const failedUpdates = results.filter((r) => r.status === "rejected");
+      if (failedUpdates.length > 0) {
         console.error(
-          `[on-translation-complete] Error updating video processing status for ${dbVideoId}:`,
-          updateError
+          `[on-translation-complete] ${failedUpdates.length} status updates FAILED for video ${dbVideoId}. Errors:`,
+          failedUpdates.map((f: any) => f.reason?.message)
         );
-        throw new Error(
-          "Failed to update video status after translation update."
+        overallError = new Error(
+          `Failed to apply ${failedUpdates.length} status updates.`
+        );
+        // Don't execute TTS spawns if status updates failed
+        throw overallError;
+      }
+    } else {
+      console.log(`[on-translation-complete] No status updates needed.`);
+    }
+
+    // --- Execute TTS Spawn Triggers (Only if status updates succeeded) --- //
+    if (ttsSpawnPromises.length > 0) {
+      console.log(
+        `[on-translation-complete] Executing ${ttsSpawnPromises.length} TTS spawn triggers...`
+      );
+      const triggerResults = await Promise.allSettled(ttsSpawnPromises);
+      const failedTriggers = triggerResults.filter(
+        (r) => r.status === "rejected"
+      );
+      if (failedTriggers.length > 0) {
+        console.error(
+          `[on-translation-complete] ${failedTriggers.length} TTS spawn triggers FAILED for video ${dbVideoId}. Errors:`,
+          failedTriggers.map((f: any) => f.reason?.message)
+        );
+        // The internalSpawnTtsJobs action should handle setting the status to failed on trigger errors.
+        // Log here, but allow the process to finish.
+        overallError = new Error(
+          `Failed to execute ${failedTriggers.length} TTS spawn triggers.`
         );
       }
+    } else {
+      console.log(
+        `[on-translation-complete] No TTS spawn triggers to execute.`
+      );
+    }
+
+    // --- Return Success or Partial Failure --- //
+    if (overallError) {
+      console.warn(
+        `[on-translation-complete] Process completed with errors for video ${dbVideoId}.`
+      );
+      return new Response(
+        JSON.stringify({
+          message: "Translation processed, but TTS spawning failed.",
+        }),
+        {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+          status: 500, // Indicate server-side issues
+        }
+      );
     }
 
     // --- Return Success --- //
+    console.log(
+      `[on-translation-complete] Successfully processed translation update for video ${dbVideoId}.`
+    );
     return new Response(
       JSON.stringify({ message: "Translation update processed" }),
       {

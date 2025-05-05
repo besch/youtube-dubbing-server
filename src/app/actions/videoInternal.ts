@@ -15,6 +15,7 @@ import type { ReplicateSegment, ReplicateSegmentOutput } from "@/lib/replicate";
 import type { Tables } from "@/types/supabase";
 import { generateOpenAiTts } from "@/lib/openai-tts";
 import { generateGoogleTts } from "@/lib/google-tts";
+import { SupabaseClient } from "@supabase/supabase-js"; // Import SupabaseClient
 
 // --- Helper Function: Extract Text from Segments for Time Range ---
 // NOTE: This function might need adjustments later depending on how
@@ -1057,6 +1058,36 @@ export const internalGenerateAudioChunk = publicAction
     }
   );
 
+// Helper to call the atomic status update function
+async function updateVideoStatusRPC(
+  supabase: SupabaseClient, // Use explicit type
+  videoId: string,
+  langVoiceKey: string,
+  statusDetail: any
+) {
+  console.log(
+    `[internalSpawnTtsJobs - RPC] Updating status for ${videoId} - ${langVoiceKey}:`,
+    statusDetail
+  );
+  const { error: rpcError } = await supabase.rpc("update_processing_status", {
+    video_uuid: videoId,
+    status_key: langVoiceKey,
+    status_value: statusDetail,
+  });
+
+  if (rpcError) {
+    console.error(
+      `[internalSpawnTtsJobs - RPC] RPC Error updating status for ${videoId} - ${langVoiceKey}:`,
+      rpcError
+    );
+    // Throw error to be caught by the caller
+    throw new AppError(
+      AppErrorCode.DATABASE_ERROR,
+      `Failed to update status via RPC for ${langVoiceKey}: ${rpcError.message}`
+    );
+  }
+}
+
 // --- Action: Internal Spawn TTS Jobs ---
 const internalSpawnTtsJobsSchema = z.object({
   videoId: z.string().uuid(),
@@ -1227,62 +1258,42 @@ export const internalSpawnTtsJobs = publicAction
           `INTERNAL ACTION: Finished spawning TTS jobs for ${videoId}, ${language}, ${voice}. Total Jobs Triggered: ${jobsTriggered}, Total Trigger Errors: ${totalTriggerErrors}.`
         );
 
-        // 5. Update Video Status if Errors Occurred during Spawning
+        // 5. Update Video Status if Errors Occurred during Spawning (using RPC)
         if (processingErrorOccurred) {
           console.error(
-            `INTERNAL ACTION: Errors occurred during TTS job spawning for ${langVoiceKey}. Updating video status to failed.`
+            `INTERNAL ACTION: Errors occurred during TTS job spawning for ${langVoiceKey}. Updating video status to failed via RPC.`
           );
           try {
-            // Fetch current status first to avoid overwriting other keys
-            const { data: videoData, error: fetchError } = await supabase
-              .from("videos")
-              .select("processing_status")
-              .eq("id", videoId)
-              .single();
+            // Construct the failed status detail
+            const failureStatusDetail = {
+              // status: "failed", // Handled by RPC function if key exists
+              // error_message: `Failed to trigger ${totalTriggerErrors} audio generation job(s).`, // Handled by RPC function
+              // last_updated: new Date().toISOString(), // Handled by RPC function
+              // progress: 0 // Example: Reset progress on failure
+              status: "failed",
+              error_message: `Failed to trigger ${totalTriggerErrors} audio generation job(s). Check logs.`,
+              last_updated: new Date().toISOString(),
+              progress: 0, // Reset progress on failure
+            };
 
-            if (fetchError) {
-              console.error(
-                `INTERNAL ACTION: Failed to fetch current video status for error update:`,
-                fetchError
-              );
-              // Can't update status, but proceed to return overall result
-            } else {
-              const currentStatus =
-                (videoData?.processing_status as Record<string, any>) || {};
-              const updatedStatus = {
-                ...currentStatus,
-                [langVoiceKey]: {
-                  status: "failed",
-                  error_message: `Failed to trigger ${totalTriggerErrors} audio generation job(s).`,
-                  last_updated: new Date().toISOString(),
-                  // Keep progress if it existed? Or reset? Resetting might be clearer.
-                  progress: currentStatus[langVoiceKey]?.progress ?? 0,
-                },
-              };
+            // Call the RPC helper
+            await updateVideoStatusRPC(
+              supabase,
+              videoId,
+              langVoiceKey,
+              failureStatusDetail
+            );
 
-              const { error: updateError } = await supabase
-                .from("videos")
-                .update({ processing_status: updatedStatus })
-                .eq("id", videoId);
-
-              if (updateError) {
-                console.error(
-                  `INTERNAL ACTION: Failed to update video status to failed after trigger errors:`,
-                  updateError
-                );
-              } else {
-                console.log(
-                  `INTERNAL ACTION: Successfully updated video status for ${langVoiceKey} to failed.`
-                );
-              }
-            }
+            console.log(
+              `INTERNAL ACTION: Successfully requested status update to failed for ${langVoiceKey} via RPC.`
+            );
           } catch (statusUpdateError) {
             console.error(
               `INTERNAL ACTION: Unexpected error updating video status to failed:`,
               statusUpdateError
             );
           }
-          // Return failure from the action if any trigger failed, even if status update fails
+          // Return failure from the action if any trigger failed
           return {
             success: false,
             error: new AppError(
@@ -1308,33 +1319,26 @@ export const internalSpawnTtsJobs = publicAction
                   ? error.message
                   : "Unknown error in internalSpawnTtsJobs"
               );
-        // Attempt to update status to failed on general error
+        // Attempt to update status to failed on general error via RPC
         try {
-          const { data: videoData, error: fetchError } = await supabase
-            .from("videos")
-            .select("processing_status")
-            .eq("id", videoId)
-            .single();
-          if (!fetchError && videoData) {
-            const currentStatus =
-              (videoData.processing_status as Record<string, any>) || {};
-            const updatedStatus = {
-              ...currentStatus,
-              [langVoiceKey]: {
-                status: "failed",
-                error_message: appErr.message,
-                last_updated: new Date().toISOString(),
-                progress: currentStatus[langVoiceKey]?.progress ?? 0,
-              },
-            };
-            await supabase
-              .from("videos")
-              .update({ processing_status: updatedStatus })
-              .eq("id", videoId);
-          }
+          const failureStatusDetail = {
+            status: "failed",
+            error_message: appErr.message,
+            last_updated: new Date().toISOString(),
+            progress: 0, // Reset progress
+          };
+          await updateVideoStatusRPC(
+            supabase,
+            videoId,
+            langVoiceKey,
+            failureStatusDetail
+          );
+          console.log(
+            `INTERNAL ACTION: Set status to failed via RPC for ${langVoiceKey} in main catch block.`
+          );
         } catch (e) {
           console.error(
-            "Failed to update video status on main catch block:",
+            `Failed to update video status to failed via RPC for ${langVoiceKey} in main catch block:`,
             e
           );
         }

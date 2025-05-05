@@ -70,6 +70,38 @@ async function triggerNextAction(actionName: string, payload: any) {
   return result;
 }
 
+// Helper to call the atomic status update RPC function
+async function updateVideoStatusRPC(
+  supabaseAdmin: ReturnType<typeof createClient>,
+  videoId: string,
+  langVoiceKey: string,
+  statusDetail: any
+) {
+  console.log(
+    `[on-download-complete] Calling RPC update_processing_status for ${videoId} - ${langVoiceKey}:`,
+    statusDetail
+  );
+  const { error: rpcError } = await supabaseAdmin.rpc(
+    "update_processing_status",
+    {
+      video_uuid: videoId,
+      status_key: langVoiceKey,
+      status_value: statusDetail,
+    }
+  );
+
+  if (rpcError) {
+    console.error(
+      `[on-download-complete] RPC Error updating status for ${videoId} - ${langVoiceKey}:`,
+      rpcError
+    );
+    // Throw error to be caught by the main handler
+    throw new Error(
+      `Failed to update status via RPC for ${langVoiceKey}: ${rpcError.message}`
+    );
+  }
+}
+
 serve(async (req) => {
   // Handle CORS preflight requests
   if (req.method === "OPTIONS") {
@@ -155,37 +187,32 @@ serve(async (req) => {
 
     console.log(`Found pending targets for ${dbVideoId}:`, pendingTargets);
 
-    // Update status for all pending targets to 'transcribing_full'
-    let needsUpdate = false;
-    for (const key of pendingTargets) {
-      if (currentProcessingStatus[key]) {
-        // Check if key exists
-        currentProcessingStatus[key] = {
-          ...currentProcessingStatus[key], // Keep existing progress/error if any
-          status: "transcribing_full", // New status
-          progress: 5, // Indicate download is done, transcription starting
-          last_updated: new Date().toISOString(),
-        };
-        needsUpdate = true;
-      }
-    }
+    // Update status for all pending targets to 'transcribing_full' using RPC
+    // Use Promise.allSettled to handle potential individual failures
+    const statusUpdatePromises = pendingTargets.map((key) => {
+      const statusDetail = {
+        status: "transcribing_full", // New status
+        progress: 5, // Indicate download is done, transcription starting
+        error_message: null,
+        last_updated: new Date().toISOString(),
+      };
+      // Call the RPC helper for each target
+      return updateVideoStatusRPC(supabaseAdmin, dbVideoId, key, statusDetail);
+    });
 
-    if (needsUpdate) {
-      const { error: updateError } = await supabaseAdmin
-        .from("videos")
-        .update({ processing_status: currentProcessingStatus })
-        .eq("id", dbVideoId);
+    const results = await Promise.allSettled(statusUpdatePromises);
+    const failedUpdates = results.filter((r) => r.status === "rejected");
 
-      if (updateError) {
-        console.error(
-          `Error updating video processing status to 'transcribing_full' for ${dbVideoId}:`,
-          updateError
-        );
-        // Decide if this is fatal - maybe continue processing but log the error
-      }
-    } else {
-      console.log(
-        `No status updates needed for video ${dbVideoId} (targets might already be transcribing?).`
+    if (failedUpdates.length > 0) {
+      console.error(
+        `[on-download-complete] Failed to update status for ${failedUpdates.length} targets for video ${dbVideoId}. Errors:`,
+        failedUpdates.map((f: any) => f.reason?.message)
+      );
+      // Decide how to proceed. Maybe don't trigger transcription if status updates failed?
+      // For now, log and continue, but this could lead to inconsistent states.
+      // Consider throwing an error if ANY status update fails.
+      throw new Error(
+        `Failed to update status for ${failedUpdates.length} targets.`
       );
     }
 

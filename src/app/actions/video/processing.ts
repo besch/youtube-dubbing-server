@@ -7,6 +7,7 @@ import { protectedAction } from "../safe-action";
 import { supabaseServiceRoleClient } from "@/lib/supabase/serviceRoleClient";
 import { ActionResponse, AppError, appErrors, AppErrorCode } from "../actions";
 import { extractYoutubeVideoId } from "./utils";
+import { SupabaseClient } from "@supabase/supabase-js"; // Import SupabaseClient
 import {
   internalRequestFullTranscription,
   internalTranslateFullContent,
@@ -284,6 +285,37 @@ interface InitiateProcessingOutput {
   initialProcessingStatus: Record<string, any>; // The state AFTER this action runs
 }
 
+// Helper to call the atomic update function
+async function updateVideoStatusRPC(
+  supabase: SupabaseClient, // Use SupabaseClient type
+  videoId: string,
+  langVoiceKey: string,
+  statusDetail: any // The JSON object for the status key
+) {
+  console.log(
+    `[updateVideoStatusRPC] Updating status for ${videoId} - ${langVoiceKey}:`,
+    statusDetail
+  );
+  const { error: rpcError } = await supabase.rpc("update_processing_status", {
+    video_uuid: videoId,
+    status_key: langVoiceKey,
+    status_value: statusDetail,
+  });
+
+  if (rpcError) {
+    console.error(
+      `[updateVideoStatusRPC] RPC Error updating status for ${videoId} - ${langVoiceKey}:`,
+      rpcError
+    );
+    // Decide if this should throw or just log. Logging allows partial success.
+    // Throwing might be safer to indicate the operation didn't fully complete.
+    throw new AppError(
+      AppErrorCode.DATABASE_ERROR,
+      `Failed to update status for ${langVoiceKey}: ${rpcError.message}`
+    );
+  }
+}
+
 export const initiateVideoProcessingJob = protectedAction
   .schema(initiateVideoProcessingJobSchema)
   .action(
@@ -409,6 +441,32 @@ export const initiateVideoProcessingJob = protectedAction
           console.log(`InitiateJob: Created new video record ${videoId}`);
         }
 
+        // --- IMPORTANT: Re-fetch video data *after* potential creation/race condition --- //
+        console.log(
+          `InitiateJob: Re-fetching video data for ${videoId} to ensure latest state...`
+        );
+        const { data: currentVideoData, error: currentVideoError } =
+          await supabase
+            .from("videos")
+            .select("id, processing_status")
+            .eq("id", videoId)
+            .single(); // Use single, should exist now
+
+        if (currentVideoError || !currentVideoData) {
+          console.error(
+            `InitiateJob: CRITICAL - Failed to re-fetch video ${videoId} after ensuring existence:`,
+            currentVideoError
+          );
+          throw appErrors.DATABASE_ERROR; // Cannot proceed without video data
+        }
+        videoId = currentVideoData.id; // Confirm videoId
+        existingProcessingStatus =
+          (currentVideoData.processing_status as Record<string, any>) || {};
+        console.log(
+          `InitiateJob: Re-fetched status for ${videoId}:`,
+          JSON.stringify(existingProcessingStatus)
+        );
+
         // 2. Check Prerequisites (Download & Transcription)
         let downloadJobId: string | null = null;
         let downloadStoragePath: string | null = null;
@@ -472,9 +530,8 @@ export const initiateVideoProcessingJob = protectedAction
           `InitiateJob: Prerequisite check for ${videoId}: Download Complete: ${isDownloadComplete}, Transcription Complete: ${isTranscriptionComplete}`
         );
 
-        // 3. Construct and Update Processing Status for NEW targets
-        const newProcessingStatus = { ...existingProcessingStatus };
-        let needsStatusUpdate = false;
+        // 3. Determine status for NEW targets and prepare updates
+        const statusUpdatePromises: Promise<void>[] = [];
         const languagesToTranslate = new Set<string>();
         const targetsToSpawnTts = new Set<string>(); // Store "lang_voice" keys
 
@@ -482,18 +539,19 @@ export const initiateVideoProcessingJob = protectedAction
           const voice = processingTargets[langCode].voice;
           const langVoiceKey = `${langCode}_${voice}`;
 
-          const currentTargetStatus = newProcessingStatus[langVoiceKey]?.status;
+          const currentTargetStatusDetail =
+            existingProcessingStatus[langVoiceKey];
+          const currentStatus = currentTargetStatusDetail?.status;
           const isTerminal =
-            currentTargetStatus === "completed" ||
-            currentTargetStatus === "failed";
+            currentStatus === "completed" || currentStatus === "failed";
 
           // Only process if the target is NEW or NOT in a terminal state
           if (!isTerminal) {
-            // Use the defined type alias here
+            let needsUpdate = false;
             let targetInitialStatus: ProcessingStatusValue = "pending"; // Default
 
             if (isDownloadComplete && isTranscriptionComplete) {
-              // Check if translation already exists in the fetched data
+              // Transcription is done, determine next step based on translation
               let translationExists = false;
               if (
                 transcriptionData?.translations &&
@@ -501,77 +559,124 @@ export const initiateVideoProcessingJob = protectedAction
                 !Array.isArray(transcriptionData.translations) &&
                 transcriptionData.translations !== null
               ) {
-                // Cast to a temporary variable first
                 const translationsObj =
                   transcriptionData.translations as Record<string, any>;
-                translationExists = !!translationsObj[langCode];
+                // Check if the specific language translation data exists and is valid (has segments)
+                translationExists =
+                  translationsObj[langCode] &&
+                  Array.isArray(translationsObj[langCode].segments) &&
+                  translationsObj[langCode].segments.length > 0;
               }
 
               if (translationExists) {
                 targetInitialStatus = "generating_audio";
                 targetsToSpawnTts.add(langVoiceKey);
                 console.log(
-                  `InitiateJob: Target ${langVoiceKey} initial status -> generating_audio (Non-EN, Translation Exists)`
+                  `InitiateJob: Target ${langVoiceKey} initial status -> generating_audio (Translation Exists)`
                 );
               } else {
+                // Target language not english or translation doesn't exist yet
                 targetInitialStatus = "translating_full";
                 languagesToTranslate.add(langCode);
                 console.log(
-                  `InitiateJob: Target ${langVoiceKey} initial status -> translating_full (Non-EN, Translation Needed)`
+                  `InitiateJob: Target ${langVoiceKey} initial status -> translating_full (Translation Needed)`
                 );
               }
+            } else if (isDownloadComplete && !isTranscriptionComplete) {
+              // Download is done, waiting for transcription
+              targetInitialStatus = "transcribing_full";
+              console.log(
+                `InitiateJob: Target ${langVoiceKey} initial status -> transcribing_full (Waiting for Transcription)`
+              );
             } else {
-              // Prerequisites not met, stays pending
+              // Download not complete (or status unknown), start at pending
               targetInitialStatus = "pending";
               console.log(
-                `InitiateJob: Target ${langVoiceKey} initial status -> pending (Prereqs Not Met)`
+                `InitiateJob: Target ${langVoiceKey} initial status -> pending (Waiting for Download)`
               );
             }
 
-            // Update status only if it's different or new
+            // Check if an update is actually needed
             if (
-              !newProcessingStatus[langVoiceKey] ||
-              newProcessingStatus[langVoiceKey]?.status !== targetInitialStatus
+              !currentTargetStatusDetail || // Target is completely new
+              currentStatus !== targetInitialStatus // Status needs to change
             ) {
-              newProcessingStatus[langVoiceKey] = {
+              needsUpdate = true;
+              const newStatusDetail = {
                 status: targetInitialStatus,
-                progress: targetInitialStatus === "pending" ? 0 : 5, // Small progress if past pending
+                progress: 0, // Reset progress when status changes significantly
+                error_message: null, // Clear previous errors
                 last_updated: new Date().toISOString(),
               };
-              needsStatusUpdate = true;
+              // Push the async RPC call to the array
+              statusUpdatePromises.push(
+                updateVideoStatusRPC(
+                  supabase,
+                  videoId,
+                  langVoiceKey,
+                  newStatusDetail
+                )
+              );
+            } else {
+              console.log(
+                `InitiateJob: Target ${langVoiceKey} already has status ${currentStatus}. No update needed.`
+              );
             }
           } else {
             console.log(
-              `InitiateJob: Skipping target ${langVoiceKey} as it's already in terminal state: ${currentTargetStatus}`
+              `InitiateJob: Skipping target ${langVoiceKey} as it's already in terminal state: ${currentStatus}`
             );
           }
         }
 
-        // Update the database only if changes were made
-        if (needsStatusUpdate) {
+        // Await all status updates before proceeding
+        if (statusUpdatePromises.length > 0) {
           console.log(
-            `InitiateJob: Updating processing status for video ${videoId}:`,
-            JSON.stringify(newProcessingStatus, null, 2)
+            `InitiateJob: Awaiting ${statusUpdatePromises.length} status updates...`
           );
-          const { error: updateError } = await supabase
-            .from("videos")
-            .update({ processing_status: newProcessingStatus })
-            .eq("id", videoId);
-
-          if (updateError) {
+          try {
+            await Promise.all(statusUpdatePromises);
+            console.log(`InitiateJob: Status updates completed.`);
+          } catch (error) {
             console.error(
-              `InitiateJob: Error updating processing status for ${videoId}:`,
-              updateError
+              "InitiateJob: Error during batch status update:",
+              error
             );
-            // Continue processing but log the error, status might be stale
+            // If status updates fail, we should probably return the error
+            // as the state might be inconsistent for triggering next steps.
+            throw error instanceof AppError ? error : appErrors.DATABASE_ERROR;
           }
         } else {
-          console.log(
-            `InitiateJob: No status updates needed for video ${videoId}.`
-          );
+          console.log(`InitiateJob: No immediate status updates required.`);
         }
 
-        // 4. Trigger Downstream Actions IF NEEDED
+        // --- Re-fetch status AGAIN after potential updates before triggering --- //
+        // This ensures we trigger actions based on the *committed* state.
+        console.log(
+          `InitiateJob: Re-fetching status *after* updates for trigger decisions...`
+        );
+        const { data: postUpdateVideoData, error: postUpdateVideoError } =
+          await supabase
+            .from("videos")
+            .select("processing_status")
+            .eq("id", videoId)
+            .single();
+
+        if (postUpdateVideoError || !postUpdateVideoData) {
+          console.error(
+            `InitiateJob: CRITICAL - Failed to re-fetch video ${videoId} after status updates:`,
+            postUpdateVideoError
+          );
+          throw appErrors.DATABASE_ERROR; // Cannot safely trigger next steps
+        }
+        const committedProcessingStatus =
+          (postUpdateVideoData.processing_status as Record<string, any>) || {};
+        console.log(
+          `InitiateJob: Committed status for trigger logic:`,
+          JSON.stringify(committedProcessingStatus)
+        );
+
+        // 4. Trigger Downstream Actions IF NEEDED (Based on committed status)
         let triggerDownload = false;
         let triggerTranscription = false;
 
@@ -651,7 +756,14 @@ export const initiateVideoProcessingJob = protectedAction
         }
 
         // Trigger transcription if download is done but transcription isn't
-        if (isDownloadComplete && !isTranscriptionComplete) {
+        // AND if any target is actually in 'transcribing_full' state
+        if (
+          isDownloadComplete &&
+          !isTranscriptionComplete &&
+          Object.values(committedProcessingStatus).some(
+            (s: any) => s?.status === "transcribing_full"
+          )
+        ) {
           console.log(
             `InitiateJob: Download complete, transcription not. Triggering internalRequestFullTranscription for ${videoId}.`
           );
@@ -659,6 +771,20 @@ export const initiateVideoProcessingJob = protectedAction
         }
 
         // Execute triggers AFTER status update
+        // Use the latest COMMITTED status to decide if triggers are needed
+        const needsTranscriptionTrigger =
+          Object.values(committedProcessingStatus).some(
+            (s: any) => s?.status === "transcribing_full"
+          ) && !isTranscriptionComplete;
+        const needsTranslationTrigger =
+          languagesToTranslate.size > 0 && isTranscriptionComplete;
+        const needsTtsSpawnTrigger =
+          targetsToSpawnTts.size > 0 && isTranscriptionComplete; // TTS spawning requires transcription
+
+        console.log(
+          `InitiateJob: Trigger Check - Download: ${triggerDownload}, Transcription: ${needsTranscriptionTrigger}, Translation: ${needsTranslationTrigger}, TTS Spawn: ${needsTtsSpawnTrigger}`
+        );
+
         if (triggerTranscription) {
           if (!downloadStoragePath) {
             console.error(
@@ -689,12 +815,8 @@ export const initiateVideoProcessingJob = protectedAction
           }
         } else if (isDownloadComplete && isTranscriptionComplete) {
           // Trigger translation and/or TTS spawning if prereqs are met
-          console.log(
-            `InitiateJob: Prereqs met for ${videoId}. Triggering translation/TTS spawning.`
-          );
-
-          // Trigger Translations
-          if (languagesToTranslate.size > 0 && transcriptionData?.id) {
+          // Use the calculated sets (languagesToTranslate, targetsToSpawnTts) and check prereqs
+          if (needsTranslationTrigger && transcriptionData?.id) {
             console.log(
               `InitiateJob: Triggering translation for languages: ${[
                 ...languagesToTranslate,
@@ -721,7 +843,7 @@ export const initiateVideoProcessingJob = protectedAction
           }
 
           // Trigger TTS Spawning
-          if (targetsToSpawnTts.size > 0) {
+          if (needsTtsSpawnTrigger) {
             console.log(
               `InitiateJob: Triggering TTS spawning for targets: ${[
                 ...targetsToSpawnTts,
@@ -755,8 +877,8 @@ export const initiateVideoProcessingJob = protectedAction
           .single();
 
         const finalProcessingStatus = finalVideoError
-          ? newProcessingStatus // Use calculated status if fetch fails
-          : finalVideoData?.processing_status || newProcessingStatus;
+          ? committedProcessingStatus // Use last known committed status if fetch fails
+          : finalVideoData?.processing_status || committedProcessingStatus;
 
         return {
           success: true,

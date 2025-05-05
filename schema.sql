@@ -1132,3 +1132,27 @@ ALTER PUBLICATION "supabase_realtime" OWNER TO "postgres";
 
 -- Add features table to realtime publication if needed (optional)
 -- ALTER PUBLICATION "supabase_realtime" ADD TABLE ONLY "public"."features";
+
+-- Helper function for atomic updates to the processing_status JSONB column
+CREATE OR REPLACE FUNCTION public.update_processing_status(
+    video_uuid uuid,
+    status_key text,
+    status_value jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER -- Important for use in triggers/functions if needed
+SET search_path = public
+AS $$
+BEGIN
+    UPDATE public.videos
+    SET processing_status = jsonb_set(
+            COALESCE(processing_status, '{}'::jsonb), -- Ensure the column is not null
+            ARRAY[status_key], -- Path to update (the lang_voice key)
+            status_value, -- The new JSON object for this key
+            true -- Create the key if it doesn't exist
+        )
+    WHERE id = video_uuid;
+END;
+$$;
+COMMENT ON FUNCTION public.update_processing_status(uuid, text, jsonb) IS 'Atomically updates a specific key within the videos.processing_status JSONB column.';

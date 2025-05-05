@@ -27,6 +27,43 @@ interface VideoProcessingStatusDetail {
 }
 type VideoProcessingStatus = Record<string, VideoProcessingStatusDetail>;
 
+// Helper to call the atomic status update RPC function
+async function updateVideoStatusRPC(
+  supabaseAdmin: ReturnType<typeof createClient>,
+  videoId: string,
+  langVoiceKey: string,
+  statusDetail: any
+) {
+  console.log(
+    `[on-audio-chunk] Calling RPC update_processing_status for ${videoId} - ${langVoiceKey}:`,
+    statusDetail
+  );
+  // Use a separate try/catch for the RPC itself to avoid stopping the function on update failure
+  try {
+    const { error: rpcError } = await supabaseAdmin.rpc(
+      "update_processing_status",
+      {
+        video_uuid: videoId,
+        status_key: langVoiceKey,
+        status_value: statusDetail,
+      }
+    );
+
+    if (rpcError) {
+      console.error(
+        `[on-audio-chunk] RPC Error updating status for ${videoId} - ${langVoiceKey}:`,
+        rpcError
+      );
+      // Don't throw here, just log. The main function should still return 200.
+    }
+  } catch (rpcCatchError) {
+    console.error(
+      `[on-audio-chunk] Caught exception during RPC call for ${videoId} - ${langVoiceKey}:`,
+      rpcCatchError
+    );
+  }
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -312,31 +349,13 @@ serve(async (req) => {
       }
 
       // --- Update Video Processing Status in DB --- //
-      // We update the status regardless of completion to record progress or final state
-      console.log(
-        `[on-audio-chunk] Updating video processing_status in DB for ${dbVideoId}:`,
-        JSON.stringify(processingConfig[langVoiceKey]) // Log the specific status being updated
+      // Use the RPC helper for atomic update
+      await updateVideoStatusRPC(
+        supabaseAdmin,
+        dbVideoId,
+        langVoiceKey,
+        processingConfig[langVoiceKey]
       );
-      const { error: updateError } = await supabaseAdmin
-        .from("videos")
-        .update({ processing_status: processingConfig }) // Update the whole object
-        .eq("id", dbVideoId);
-
-      if (updateError) {
-        console.error(
-          `[on-audio-chunk] Error updating video processing status for ${dbVideoId}:`,
-          updateError
-        );
-        // This is tricky, the chunk IS complete, but the status update failed.
-        // Return an error, but the state might be inconsistent.
-        return new Response(
-          JSON.stringify({ error: "Failed to update video status" }),
-          {
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-            status: 500,
-          }
-        );
-      }
     } // End of if (!processingConfig[langVoiceKey]?.error_message)
 
     // Return success
