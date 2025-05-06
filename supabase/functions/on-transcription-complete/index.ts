@@ -129,9 +129,14 @@ serve(async (req) => {
       payload.record.status === "completed" &&
       payload.old_record?.status !== "completed";
 
-    if (!isCompletion) {
+    const isFailure =
+      payload.type === "UPDATE" &&
+      payload.record.status === "failed" &&
+      payload.old_record?.status !== "failed";
+
+    if (!isCompletion && !isFailure) {
       console.log(
-        `[on-transcription-complete] Ignoring update for segment ${payload.record.id} - Not a completion event.`
+        `[on-transcription-complete] Ignoring update for segment ${payload.record.id} - Not a completion or failure event.`
       );
       return new Response(JSON.stringify({ message: "Irrelevant update" }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -175,12 +180,49 @@ serve(async (req) => {
         videoError
       );
       throw new Error(
-        `Failed to fetch video details for ${dbVideoId} after transcription completion.`
+        `Failed to fetch video details for ${dbVideoId} after transcription update.`
       );
     }
 
     const processingConfig = (videoData.processing_status ||
       {}) as VideoProcessingStatus;
+
+    if (isFailure) {
+      console.log(
+        `[on-transcription-complete] Full transcription FAILED for video ${dbVideoId} (Segment Row ID: ${segmentId}). Updating relevant statuses.`
+      );
+      const targetsToFail = Object.keys(processingConfig).filter(
+        (key) => processingConfig[key]?.status === "transcribing_full"
+      );
+      const failureUpdatePromises = targetsToFail.map((key) => {
+        const failureDetail = {
+          status: "failed" as const,
+          error_message:
+            payload.record.error_message || "Transcription job failed.",
+          last_updated: new Date().toISOString(),
+          progress: 0,
+        };
+        return updateVideoStatusRPC(
+          supabaseAdmin,
+          dbVideoId,
+          key,
+          failureDetail
+        );
+      });
+      await Promise.allSettled(failureUpdatePromises);
+      console.log(
+        `[on-transcription-complete] Updated ${targetsToFail.length} statuses to failed for video ${dbVideoId}.`
+      );
+      return new Response(
+        JSON.stringify({ message: "Transcription failure processed" }),
+        {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+          status: 200,
+        }
+      );
+    }
+
+    // If it's a completion, proceed...
     const targetProcesses = Object.keys(processingConfig).filter(
       (key) => processingConfig[key]?.status === "transcribing_full" // Only process targets waiting for transcription
     );
@@ -209,7 +251,7 @@ serve(async (req) => {
     const translationTriggers: { segmentId: string; lang: string }[] = [];
     const ttsSpawnTriggers: { videoId: string; lang: string; voice: string }[] =
       [];
-    let overallError = null; // Track if any trigger fails critically
+    let overallError: Error | null = null; // Track if any trigger fails critically
 
     if (
       !fullTranscriptionContent ||
@@ -331,21 +373,86 @@ serve(async (req) => {
     );
 
     // Trigger Translations
-    const translationPromises = translationTriggers.map((trigger) =>
-      triggerNextAction("internalTranslateFullContent", {
-        segmentId: trigger.segmentId,
-        targetLanguage: trigger.lang,
-      })
-    );
+    const translationPromises = translationTriggers.map(async (trigger) => {
+      try {
+        return await triggerNextAction("internalTranslateFullContent", {
+          segmentId: trigger.segmentId,
+          targetLanguage: trigger.lang,
+        });
+      } catch (error) {
+        console.error(
+          `[on-transcription-complete] Failed to trigger internalTranslateFullContent for lang ${trigger.lang}, video ${dbVideoId}: ${error.message}`
+        );
+        // Find the langVoiceKey for this failed trigger to update its status
+        const failedLangVoiceKey = Object.keys(processingConfig).find(
+          (key) =>
+            key.startsWith(`${trigger.lang}_`) &&
+            processingConfig[key]?.status === "translating_full"
+        );
+        if (failedLangVoiceKey) {
+          const failureDetail = {
+            status: "failed" as const,
+            error_message: `Translation trigger failed: ${error.message}`,
+            last_updated: new Date().toISOString(),
+            progress: 0,
+          };
+          try {
+            await updateVideoStatusRPC(
+              supabaseAdmin,
+              dbVideoId,
+              failedLangVoiceKey,
+              failureDetail
+            );
+          } catch (rpcError) {
+            console.error(
+              `[on-transcription-complete] Error updating status to failed for ${failedLangVoiceKey} after translation trigger error: ${rpcError.message}`
+            );
+          }
+        }
+        throw error; // Re-throw to be caught by Promise.allSettled
+      }
+    });
 
     // Trigger TTS Spawns
-    const ttsSpawnPromises = ttsSpawnTriggers.map((trigger) =>
-      triggerNextAction("internalSpawnTtsJobs", {
-        videoId: trigger.videoId,
-        language: trigger.lang,
-        voice: trigger.voice,
-      })
-    );
+    const ttsSpawnPromises = ttsSpawnTriggers.map(async (trigger) => {
+      try {
+        return await triggerNextAction("internalSpawnTtsJobs", {
+          videoId: trigger.videoId,
+          language: trigger.lang,
+          voice: trigger.voice,
+        });
+      } catch (error) {
+        console.error(
+          `[on-transcription-complete] Failed to trigger internalSpawnTtsJobs for ${trigger.lang}_${trigger.voice}, video ${dbVideoId}: ${error.message}`
+        );
+        const failedLangVoiceKey = `${trigger.lang}_${trigger.voice}`;
+        // Check if this key was indeed one being processed (its status should have been generating_audio after successful update)
+        const statusBeforeTrigger = statusUpdates.find(
+          (su) => su.key === failedLangVoiceKey
+        )?.detail.status;
+        if (failedLangVoiceKey && statusBeforeTrigger === "generating_audio") {
+          const failureDetail = {
+            status: "failed" as const,
+            error_message: `TTS spawn trigger failed: ${error.message}`,
+            last_updated: new Date().toISOString(),
+            progress: 0,
+          };
+          try {
+            await updateVideoStatusRPC(
+              supabaseAdmin,
+              dbVideoId,
+              failedLangVoiceKey,
+              failureDetail
+            );
+          } catch (rpcError) {
+            console.error(
+              `[on-transcription-complete] Error updating status to failed for ${failedLangVoiceKey} after TTS spawn trigger error: ${rpcError.message}`
+            );
+          }
+        }
+        throw error; // Re-throw to be caught by Promise.allSettled
+      }
+    });
 
     // Await all triggers concurrently
     const allTriggerPromises = [...translationPromises, ...ttsSpawnPromises];

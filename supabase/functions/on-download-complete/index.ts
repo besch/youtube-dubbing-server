@@ -225,10 +225,53 @@ serve(async (req) => {
     console.log(`Triggering FULL transcription for ${dbVideoId}...`);
 
     // Use the helper function
-    await triggerNextAction(
-      "internalRequestFullTranscription", // New Action Name
-      actionPayload
-    );
+    // await triggerNextAction(
+    //   "internalRequestFullTranscription", // New Action Name
+    //   actionPayload
+    // );
+
+    try {
+      await triggerNextAction(
+        "internalRequestFullTranscription",
+        actionPayload
+      );
+      console.log(
+        `Successfully triggered internalRequestFullTranscription for ${dbVideoId}`
+      );
+    } catch (actionError) {
+      console.error(
+        `[on-download-complete] Failed to trigger internalRequestFullTranscription for ${dbVideoId}:`,
+        actionError.message
+      );
+      // If triggering the action fails, mark all pending targets as failed
+      const errorUpdatePromises = pendingTargets.map((key) => {
+        const failureStatusDetail = {
+          status: "failed" as const, // Ensure literal type
+          error_message: `Failed to start transcription: ${actionError.message}`,
+          last_updated: new Date().toISOString(),
+          progress: 0,
+        };
+        return updateVideoStatusRPC(
+          supabaseAdmin,
+          dbVideoId,
+          key,
+          failureStatusDetail
+        );
+      });
+      try {
+        await Promise.allSettled(errorUpdatePromises);
+        console.log(
+          `[on-download-complete] Updated status to failed for targets of video ${dbVideoId} due to transcription trigger failure.`
+        );
+      } catch (e) {
+        console.error(
+          `[on-download-complete] Error updating statuses to failed after action trigger failure:`,
+          e
+        );
+      }
+      // Re-throw the error to ensure the function execution indicates failure
+      throw actionError;
+    }
 
     // 6. Return Success
     return new Response(
