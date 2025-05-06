@@ -225,11 +225,13 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
 ## 6. Communication Flow (Backend-Driven Processing - Full Transcription)
 
 1.  **Mobile App -> Server API:** User selects video/language/voice -> `callServerAction('video/initiateVideoProcessingJob', { youtubeUrl, processingTargets: { 'es_nova': {...}, 'en_alloy': {...} } })`.
+    - If a previous attempt for a specific language/voice combination resulted in a `failed` status, the mobile app can re-initiate by calling this action again with the same `processingTargets`. The server will then attempt to retry the failed target(s).
 2.  **Server (`initiateVideoProcessingJob`):**
     - Finds/creates video record.
     - Re-fetches video status.
-    - Checks prerequisites (download, transcription, etc.).
-    - Calculates required status updates for new targets.
+    - **For targets with a `failed` status:** Resets their status to an appropriate starting point (e.g., `pending`, `transcribing_full`), clears the error message, and resets progress. This allows the subsequent logic to re-trigger the necessary steps for that target.
+    - Checks prerequisites (download, transcription, etc.) for all targets (including reset ones).
+    - Calculates required status updates for new or reset targets.
     - Atomically updates `videos.processing_status` for each target **using RPC**.
     - Re-fetches final committed status.
     - Determines if download job needs creation/triggering based on committed status. Creates job if needed.
@@ -268,9 +270,10 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
 ## 7. TODOs / Pending Items
 
 - **Review Client-Side Audio Chunk Triggering:** The client needs a robust way to trigger `generateAudioChunk` on demand (for seek/playback continuation). Needs a dedicated client-callable action.
-- **Review/Refine Error Handling:** Ensure errors in internal actions consistently lead to a `failed` status update via RPC. Review Supabase Function error paths.
+- **Review/Refine Error Handling:** Ensure errors in internal actions consistently lead to a `failed` status update via RPC. Review Supabase Function error paths. The retry mechanism relies on this for client-initiated retries.
+- **Client-Side Retry UI:** The mobile app and Chrome extension need UI elements (e.g., a "Retry" button) when a processing target enters a `failed` state, allowing the user to trigger `initiateVideoProcessingJob` again for the failed targets.
 - **Regenerate Supabase Types:** Update `database.types.ts` in `server` and `mobile` to reflect latest schema (including the new SQL function).
-- **Testing:** Thoroughly test the end-to-end backend processing flow with concurrent requests and various language/voice combinations.
+- **Testing:** Thoroughly test the end-to-end backend processing flow with concurrent requests and various language/voice combinations, including the new retry logic for failed jobs.
 - Review/configure Supabase Storage policies.
 - Review/improve logging across all services.
 - **Client-Side Logic:** Implement client-side logic in the mobile app to:

@@ -542,16 +542,15 @@ export const initiateVideoProcessingJob = protectedAction
           const currentTargetStatusDetail =
             existingProcessingStatus[langVoiceKey];
           const currentStatus = currentTargetStatusDetail?.status;
-          const isTerminal =
-            currentStatus === "completed" || currentStatus === "failed";
 
-          // Only process if the target is NEW or NOT in a terminal state
-          if (!isTerminal) {
+          // MODIFIED: Process if not completed, OR if it failed (to allow retry)
+          const shouldProcessTarget = currentStatus !== "completed";
+
+          if (shouldProcessTarget) {
             let needsUpdate = false;
             let targetInitialStatus: ProcessingStatusValue = "pending"; // Default
 
             if (isDownloadComplete && isTranscriptionComplete) {
-              // Transcription is done, determine next step based on translation
               let translationExists = false;
               if (
                 transcriptionData?.translations &&
@@ -561,7 +560,6 @@ export const initiateVideoProcessingJob = protectedAction
               ) {
                 const translationsObj =
                   transcriptionData.translations as Record<string, any>;
-                // Check if the specific language translation data exists and is valid (has segments)
                 translationExists =
                   translationsObj[langCode] &&
                   Array.isArray(translationsObj[langCode].segments) &&
@@ -575,7 +573,6 @@ export const initiateVideoProcessingJob = protectedAction
                   `InitiateJob: Target ${langVoiceKey} initial status -> generating_audio (Translation Exists)`
                 );
               } else {
-                // Target language not english or translation doesn't exist yet
                 targetInitialStatus = "translating_full";
                 languagesToTranslate.add(langCode);
                 console.log(
@@ -583,32 +580,29 @@ export const initiateVideoProcessingJob = protectedAction
                 );
               }
             } else if (isDownloadComplete && !isTranscriptionComplete) {
-              // Download is done, waiting for transcription
               targetInitialStatus = "transcribing_full";
               console.log(
                 `InitiateJob: Target ${langVoiceKey} initial status -> transcribing_full (Waiting for Transcription)`
               );
             } else {
-              // Download not complete (or status unknown), start at pending
               targetInitialStatus = "pending";
               console.log(
                 `InitiateJob: Target ${langVoiceKey} initial status -> pending (Waiting for Download)`
               );
             }
 
-            // Check if an update is actually needed
             if (
               !currentTargetStatusDetail || // Target is completely new
-              currentStatus !== targetInitialStatus // Status needs to change
+              currentStatus !== targetInitialStatus || // Status needs to change
+              currentStatus === "failed" // Always update if it was 'failed' to clear error and reset
             ) {
               needsUpdate = true;
               const newStatusDetail = {
                 status: targetInitialStatus,
-                progress: 0, // Reset progress when status changes significantly
+                progress: 0, // Reset progress
                 error_message: null, // Clear previous errors
                 last_updated: new Date().toISOString(),
               };
-              // Push the async RPC call to the array
               statusUpdatePromises.push(
                 updateVideoStatusRPC(
                   supabase,
@@ -619,12 +613,12 @@ export const initiateVideoProcessingJob = protectedAction
               );
             } else {
               console.log(
-                `InitiateJob: Target ${langVoiceKey} already has status ${currentStatus}. No update needed.`
+                `InitiateJob: Target ${langVoiceKey} already has status ${currentStatus} and doesn't need reset. No update needed.`
               );
             }
           } else {
             console.log(
-              `InitiateJob: Skipping target ${langVoiceKey} as it's already in terminal state: ${currentStatus}`
+              `InitiateJob: Skipping target ${langVoiceKey} as it's already completed.`
             );
           }
         }
