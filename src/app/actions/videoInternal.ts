@@ -660,30 +660,27 @@ export const internalTranslateFullContent = publicAction
         detected_language: targetLanguage, // Set detected language to the target
       };
 
-      // 7. Update Database
-      const updatedTranslations = {
-        ...existingTranslations,
-        [targetLanguage]: translatedContent,
-      };
-
+      // 7. Update Database using RPC for atomic update
       console.log(
-        `>>> TranslateFullContent: Preparing to update DB for row ${segmentId} with COMBINED batch translation for language ${targetLanguage}. Keys in updatedTranslations: ${Object.keys(
-          updatedTranslations
-        )}`
+        `>>> TranslateFullContent: Calling RPC to update DB for row ${segmentId} with translation for language ${targetLanguage}.`
       );
-      const { error: updateError } = await supabase
-        .from("transcription_segments")
-        .update({ translations: updatedTranslations } as any) // Cast needed for JSONB update
-        .eq("id", segmentId);
+      const { error: rpcUpdateError } = await supabase.rpc(
+        "update_translation_for_language" as any, // Cast to any to bypass strict type check for now
+        {
+          p_segment_id: segmentId,
+          p_lang_code: targetLanguage,
+          p_translation_content: translatedContent, // Pass the translated content for the specific language
+        }
+      );
 
-      if (updateError) {
+      if (rpcUpdateError) {
         console.error(
-          `>>> TranslateFullContent: DB Update Error for row ${segmentId}:`,
-          updateError
+          `>>> TranslateFullContent: RPC DB Update Error for row ${segmentId}, lang ${targetLanguage}:`,
+          rpcUpdateError
         );
         throw new AppError(
           AppErrorCode.DATABASE_ERROR,
-          `DB error updating translations for row ${segmentId}: ${updateError.message}`
+          `DB error updating translations via RPC for row ${segmentId}, lang ${targetLanguage}: ${rpcUpdateError.message}`
         );
       }
 

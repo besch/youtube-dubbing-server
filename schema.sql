@@ -1151,3 +1151,27 @@ BEGIN
 END;
 $$;
 COMMENT ON FUNCTION public.update_processing_status(uuid, text, jsonb) IS 'Atomically updates a specific key within the videos.processing_status JSONB column.';
+
+-- Function to atomically update a specific language key in transcription_segments.translations
+CREATE OR REPLACE FUNCTION public.update_translation_for_language(
+    p_segment_id uuid,
+    p_lang_code text,
+    p_translation_content jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    UPDATE public.transcription_segments
+    SET translations = jsonb_set(
+            COALESCE(translations, '{}'::jsonb), -- Ensure the column is not null
+            ARRAY[p_lang_code], -- Path to update (the language code key)
+            p_translation_content, -- The new JSON object for this language
+            true -- Create the key if it doesn't exist
+        )
+    WHERE id = p_segment_id;
+END;
+$$;
+COMMENT ON FUNCTION public.update_translation_for_language(uuid, text, jsonb) IS 'Atomically updates a specific language key within the transcription_segments.translations JSONB column.';
