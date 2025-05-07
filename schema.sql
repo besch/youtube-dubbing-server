@@ -162,7 +162,7 @@ begin
   -- Update associated translated audio chunks as favorite (no expiry)
   update public.translated_audio_chunks
   set is_favorite = true, expiry_at = null
-  where video_id = NEW.video_id and language = NEW.language and voice = NEW.voice;
+  where video_id = NEW.video_id;
   return NEW;
 end;
 $$;
@@ -175,20 +175,19 @@ CREATE OR REPLACE FUNCTION "public"."unmark_resources_as_favorite"() RETURNS "tr
     LANGUAGE "plpgsql" SECURITY DEFINER
     AS $$
 declare
-  audio_favorite_exists boolean;
+  video_still_favorited_by_any_user boolean;
 begin
+  -- Check if any user still has this video_id as a favorite
   select exists (
     select 1 from public.favorites
     where video_id = OLD.video_id
-      and language = OLD.language
-      and voice = OLD.voice
-      and id != OLD.id
-  ) into audio_favorite_exists;
+  ) into video_still_favorited_by_any_user;
 
-  if not audio_favorite_exists then
+  if not video_still_favorited_by_any_user then
+    -- No user has this video as a favorite anymore, so unmark all its chunks.
     update public.translated_audio_chunks
     set is_favorite = false, expiry_at = now() + interval '24 hours'
-    where video_id = OLD.video_id and language = OLD.language and voice = OLD.voice;
+    where video_id = OLD.video_id;
   end if;
   return OLD;
 end;
@@ -253,8 +252,6 @@ CREATE TABLE IF NOT EXISTS "public"."favorites" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "user_id" "uuid" NOT NULL,
     "video_id" "uuid" NOT NULL,
-    "language" "text" NOT NULL,
-    "voice" "text" NOT NULL,
     "added_at" timestamp with time zone DEFAULT "now"() NOT NULL
 );
 
@@ -266,8 +263,6 @@ CREATE TABLE IF NOT EXISTS "public"."history" (
     "id" "uuid" DEFAULT "gen_random_uuid"() NOT NULL,
     "user_id" "uuid" NOT NULL,
     "video_id" "uuid" NOT NULL,
-    "language" "text" NOT NULL,
-    "voice" "text" NOT NULL,
     "watched_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "last_position" double precision DEFAULT 0 NOT NULL
 );
@@ -364,7 +359,7 @@ ALTER TABLE ONLY "public"."favorites"
 
 
 ALTER TABLE ONLY "public"."favorites"
-    ADD CONSTRAINT "favorites_user_id_video_id_language_voice_key" UNIQUE ("user_id", "video_id", "language", "voice");
+    ADD CONSTRAINT "favorites_user_id_video_id_key" UNIQUE ("user_id", "video_id");
 
 
 
@@ -374,7 +369,7 @@ ALTER TABLE ONLY "public"."history"
 
 
 ALTER TABLE ONLY "public"."history"
-    ADD CONSTRAINT "history_user_id_video_id_language_voice_key" UNIQUE ("user_id", "video_id", "language", "voice");
+    ADD CONSTRAINT "history_user_id_video_id_key" UNIQUE ("user_id", "video_id");
 
 
 

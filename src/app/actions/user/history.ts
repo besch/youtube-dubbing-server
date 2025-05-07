@@ -10,28 +10,24 @@ import { ActionResponse, AppError, AppErrorCode, appErrors } from "../actions";
 const updateHistorySchema = z.object({
   dbVideoId: z.string().uuid(),
   position: z.number().min(0),
-  language: z.string(), // Simple lang code
-  voice: z.string(), // Voice identifier
 });
 
 export const updateHistory = protectedAction
   .schema(updateHistorySchema)
   .action(async ({ parsedInput, ctx }): Promise<ActionResponse<null>> => {
     const userId = ctx.user.id;
-    const { dbVideoId, position, language, voice } = parsedInput;
+    const { dbVideoId, position } = parsedInput;
 
     try {
       const { error } = await supabaseServiceRoleClient.from("history").upsert(
         {
           user_id: userId,
           video_id: dbVideoId,
-          language: language,
-          voice: voice,
           last_position: position,
           watched_at: new Date().toISOString(),
         },
         {
-          onConflict: "user_id, video_id, language, voice",
+          onConflict: "user_id, video_id",
         }
       );
 
@@ -62,8 +58,6 @@ const HistoryItemSchema = z.object({
   title: z.string().nullable(),
   thumbnailUrl: z.string().url().nullable(),
   duration: z.number().int().positive().nullable(),
-  language: z.string(),
-  voice: z.string(),
   lastPosition: z.number().min(0),
   watchedAt: z.string().datetime(),
 });
@@ -84,8 +78,6 @@ export const getHistory = protectedAction
           `
           id,
           watched_at,
-          language,
-          voice,
           last_position,
           video_id,
           videos ( youtube_id, title, thumbnail_url, duration )
@@ -122,8 +114,6 @@ export const getHistory = protectedAction
             title: video.title ?? null,
             thumbnailUrl: video.thumbnail_url ?? null,
             duration: video.duration ?? null,
-            language: item.language,
-            voice: item.voice,
             lastPosition: item.last_position,
             watchedAt: new Date(item.watched_at).toISOString(),
           };

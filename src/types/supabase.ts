@@ -61,26 +61,20 @@ export type Database = {
         Row: {
           added_at: string
           id: string
-          language: string
           user_id: string
           video_id: string
-          voice: string
         }
         Insert: {
           added_at?: string
           id?: string
-          language: string
           user_id: string
           video_id: string
-          voice: string
         }
         Update: {
           added_at?: string
           id?: string
-          language?: string
           user_id?: string
           video_id?: string
-          voice?: string
         }
         Relationships: [
           {
@@ -123,29 +117,23 @@ export type Database = {
       history: {
         Row: {
           id: string
-          language: string
           last_position: number
           user_id: string
           video_id: string
-          voice: string
           watched_at: string
         }
         Insert: {
           id?: string
-          language: string
           last_position?: number
           user_id: string
           video_id: string
-          voice: string
           watched_at?: string
         }
         Update: {
           id?: string
-          language?: string
           last_position?: number
           user_id?: string
           video_id?: string
-          voice?: string
           watched_at?: string
         }
         Relationships: [
@@ -347,6 +335,10 @@ export type Database = {
     Functions: {
       cleanup_expired_resources: {
         Args: Record<PropertyKey, never>
+        Returns: undefined
+      }
+      update_processing_status: {
+        Args: { video_uuid: string; status_key: string; status_value: Json }
         Returns: undefined
       }
     }

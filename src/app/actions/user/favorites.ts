@@ -9,8 +9,6 @@ import { ActionResponse, AppError, AppErrorCode, appErrors } from "../actions";
 // --- Toggle Favorite Action --- //
 const toggleFavoriteSchema = z.object({
   dbVideoId: z.string().uuid(),
-  language: z.string(), // Simple lang code
-  voice: z.string(), // Voice identifier
 });
 
 type ToggleFavoriteOutput = {
@@ -25,7 +23,7 @@ export const toggleFavorite = protectedAction
       ctx,
     }): Promise<ActionResponse<ToggleFavoriteOutput>> => {
       const userId = ctx.user.id;
-      const { dbVideoId, language, voice } = parsedInput;
+      const { dbVideoId } = parsedInput;
 
       try {
         const { data: existingFavorite, error: checkError } =
@@ -34,8 +32,6 @@ export const toggleFavorite = protectedAction
             .select("id")
             .eq("user_id", userId)
             .eq("video_id", dbVideoId)
-            .eq("language", language)
-            .eq("voice", voice)
             .maybeSingle();
 
         if (checkError) {
@@ -64,8 +60,6 @@ export const toggleFavorite = protectedAction
             .insert({
               user_id: userId,
               video_id: dbVideoId,
-              language: language,
-              voice: voice,
             });
 
           if (insertError) {
@@ -103,8 +97,6 @@ export const toggleFavorite = protectedAction
 // --- Get Favorite Status Action --- //
 const getFavoriteStatusSchema = z.object({
   dbVideoId: z.string().uuid(),
-  language: z.string(), // Simple lang code
-  voice: z.string(), // Voice identifier
 });
 
 // Output type is the same as ToggleFavoriteOutput
@@ -118,16 +110,14 @@ export const getFavoriteStatus = protectedAction
       ctx,
     }): Promise<ActionResponse<GetFavoriteStatusOutput>> => {
       const userId = ctx.user.id;
-      const { dbVideoId, language, voice } = parsedInput;
+      const { dbVideoId } = parsedInput;
 
       try {
         const { count, error: checkError } = await supabaseServiceRoleClient
           .from("favorites")
           .select("id", { count: "exact", head: true })
           .eq("user_id", userId)
-          .eq("video_id", dbVideoId)
-          .eq("language", language)
-          .eq("voice", voice);
+          .eq("video_id", dbVideoId);
 
         if (checkError) {
           console.error("Error checking favorite status:", checkError);
@@ -156,8 +146,6 @@ const FavoriteItemSchema = z.object({
   title: z.string().nullable(), // Use nullable based on mapping
   thumbnailUrl: z.string().url().nullable(), // Use nullable based on mapping
   duration: z.number().int().positive().nullable(), // Use nullable based on mapping
-  language: z.string(),
-  voice: z.string(),
   addedAt: z.string().datetime(),
 });
 export type FavoriteItem = z.infer<typeof FavoriteItemSchema>;
@@ -176,8 +164,6 @@ export const getFavorites = protectedAction.action(
           `
           id,
           added_at,
-          language,
-          voice,
           video_id,
           videos ( youtube_id, title, thumbnail_url, duration )
         `
@@ -211,8 +197,6 @@ export const getFavorites = protectedAction.action(
             title: video.title ?? null, // Ensures string | null
             thumbnailUrl: video.thumbnail_url ?? null, // Ensures string | null
             duration: video.duration ?? null, // Ensures number | null
-            language: fav.language,
-            voice: fav.voice,
             addedAt: new Date(fav.added_at).toISOString(),
           };
         })
