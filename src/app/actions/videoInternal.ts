@@ -720,6 +720,7 @@ const internalGenerateAudioChunkSchema = z
     voice: z.string(),
     startTime: z.number().min(0), // Start time of the specific sub-segment
     endTime: z.number().min(0), // End time of the specific sub-segment
+    text: z.string().min(1, "Text to synthesize cannot be empty"), // Added: text to synthesize
   })
   .refine((data) => data.endTime > data.startTime, {
     message: "End time must be greater than start time",
@@ -732,7 +733,8 @@ export const internalGenerateAudioChunk = publicAction
     async ({
       parsedInput,
     }): Promise<ActionResponse<{ storagePath: string }>> => {
-      const { videoId, language, voice, startTime, endTime } = parsedInput;
+      const { videoId, language, voice, startTime, endTime, text } =
+        parsedInput;
       const supabase = supabaseServiceRoleClient;
 
       console.log(
@@ -831,109 +833,29 @@ export const internalGenerateAudioChunk = publicAction
 
         // --- Only proceed if chunk doesn't exist --- //
 
-        // 2. Fetch the SINGLE transcription row for the video
-        console.log(
-          `[internalGenerateAudioChunk] Fetching transcription row for video ${videoId}`
-        );
-        const { data: transcriptionDataUntyped, error: transcriptionError } =
-          await supabase
-            .from("transcription_segments")
-            .select("id, content, translations") // Select needed fields
-            .eq("video_id", videoId)
-            .eq("status", "completed") // Ensure transcription is complete
-            .single(); // Expect exactly one row
+        // STEPS 2-4 (Fetch transcription row, Extract Text) are REMOVED
+        // The text is now passed directly via parsedInput.text
 
-        if (transcriptionError)
-          throw new AppError(
-            AppErrorCode.DATABASE_ERROR,
-            `DB error fetching transcription for chunk gen: ${transcriptionError.message}`
-          );
-        // No need to check for null, single() throws if not found
+        const textToSynthesize = text; // Use the text from parsedInput directly
 
-        const transcriptionData = transcriptionDataUntyped as any; // Use 'as any' for simplicity
-
-        // 4. Extract Text for the Specific SUB-SEGMENT Time Range & Language
-        let textToSynthesize = "";
-        let sourceSegments:
-          | ReplicateSegmentOutput["segments"]
-          | undefined
-          | null = null;
-        console.log(
-          `[internalGenerateAudioChunk] Extracting text for language: ${language}`
-        );
-
-        if (language === "en") {
-          const originalContent =
-            transcriptionData.content as ReplicateSegmentOutput | null;
-          sourceSegments = originalContent?.segments;
-          if (!sourceSegments) {
-            throw new AppError(
-              AppErrorCode.DEPENDENCY_NOT_READY,
-              `Original transcription content missing or invalid for ${videoId} (EN).`
-            );
-          }
-        } else {
-          const translatedContent = transcriptionData.translations?.[
-            language
-          ] as ReplicateSegmentOutput | null;
-          sourceSegments = translatedContent?.segments;
-          if (!sourceSegments) {
-            throw new AppError(
-              AppErrorCode.DEPENDENCY_NOT_READY,
-              `Translation '${language}' not found or invalid for ${videoId}.`
-            );
-          }
-        }
-
-        // Find the specific sub-segment text matching startTime and endTime
-        console.log(
-          `[internalGenerateAudioChunk] Searching for target segment ${startTime}-${endTime}...`
-        );
-        const targetSegment = sourceSegments.find(
-          (s) =>
-            s.start !== undefined &&
-            Math.abs(s.start - startTime) < 0.01 && // Allow minor float differences
-            s.end !== undefined &&
-            Math.abs(s.end - endTime) < 0.01
-        );
-
-        if (targetSegment?.text) {
-          textToSynthesize = targetSegment.text.trim();
-        } else {
-          console.warn(
-            `[internalGenerateAudioChunk] Could not find exact sub-segment text for ${language}, ${startTime}-${endTime}. Using fallback range extraction.`
-          );
-          // Fallback: Use the range extraction (might concatenate parts of adjacent segments)
-          // This helper needs the full ReplicateSegmentOutput structure, not just the segments array.
-          // Reconstruct the minimum needed structure for the helper.
-          const reconstructOutput: ReplicateSegmentOutput = {
-            segments: sourceSegments,
-          };
-          textToSynthesize = extractTextFromSegments(
-            [reconstructOutput],
-            startTime,
-            endTime
-          );
-        }
-
+        // Ensure text is not empty (already handled by Zod schema min(1), but good for clarity)
         if (!textToSynthesize.trim()) {
           console.warn(
-            `[internalGenerateAudioChunk] No text found for TTS in ${language} for ${videoId} (${startTime}-${endTime}). Skipping chunk generation.`
+            `[internalGenerateAudioChunk] No text provided for TTS in ${language} for ${videoId} (${startTime}-${endTime}). Skipping chunk generation.`
           );
-          // Indicate skipped generation with an empty path
           return {
             success: true,
-            data: { storagePath: "" }, // Caller must check for empty path
+            data: { storagePath: "" }, // Indicate skipped generation
           };
         }
         console.log(
-          `[internalGenerateAudioChunk] Text extracted (first 100): "${textToSynthesize.substring(
+          `[internalGenerateAudioChunk] Text to synthesize (first 100): "${textToSynthesize.substring(
             0,
             100
           )}..."`
         );
 
-        // 5. Call appropriate TTS function (Unchanged)
+        // 5. Call appropriate TTS function (Unchanged from here, but uses `textToSynthesize` which is now direct)
         let ttsResult: { audioBuffer: Buffer; storagePath: string };
         console.log(
           `[internalGenerateAudioChunk] Calling ${ttsProvider} TTS...`
@@ -1201,12 +1123,28 @@ export const internalSpawnTtsJobs = publicAction
           );
 
           const triggerPromises = batch.map((subSegment) => {
+            const textToSynthesize = subSegment.text?.trim() || ""; // Get text from subSegment
+
+            // Skip triggering if text is empty after trimming
+            if (!textToSynthesize) {
+              console.warn(
+                `INTERNAL ACTION: Skipping TTS for segment ${subSegment.start}-${subSegment.end} due to empty text.`
+              );
+              // Return a resolved promise that indicates success but notes the skip
+              // This ensures Promise.allSettled processes it as a "fulfilled" outcome
+              return Promise.resolve({
+                success: true,
+                data: { note: "Skipped segment due to empty text" },
+              });
+            }
+
             const payload = {
               videoId: videoId,
               language: language,
               voice: voice,
               startTime: subSegment.start!, // Assert non-null based on filter
               endTime: subSegment.end!, // Assert non-null based on filter
+              text: textToSynthesize, // Pass the extracted text
             };
             // Call helper but await its result within the batch
             return triggerInternalAction("internalGenerateAudioChunk", payload);
@@ -1217,24 +1155,44 @@ export const internalSpawnTtsJobs = publicAction
 
           let batchTriggerErrors = 0;
           results.forEach((result, index) => {
-            if (
-              result.status === "fulfilled" &&
-              result.value.success === true
-            ) {
-              jobsTriggered++;
+            if (result.status === "fulfilled") {
+              // Action was called, check its internal success/failure
+              if (result.value.success) {
+                // Check if it was a deliberately skipped segment
+                if (
+                  (result.value as any).data?.note ===
+                  "Skipped segment due to empty text"
+                ) {
+                  console.log(
+                    `INTERNAL ACTION: Segment ${batch[index].start}-${batch[index].end} was skipped (fulfilled).`
+                  );
+                } else {
+                  // Successfully triggered job
+                  jobsTriggered++;
+                }
+              } else {
+                // Action was called but returned success: false
+                batchTriggerErrors++;
+                totalTriggerErrors++;
+                processingErrorOccurred = true; // Mark that an error occurred
+                const segment = batch[index];
+                const errorInfo = (
+                  result.value as { success: false; error: any }
+                ).error; // Type assertion
+                console.error(
+                  `INTERNAL ACTION: Failed to trigger TTS for ${language}/${voice}, segment ${segment.start}-${segment.end} (action returned error):`,
+                  errorInfo
+                );
+              }
             } else {
-              // Handle rejected promises or failed internal actions
+              // result.status === "rejected" - Promise from triggerInternalAction itself was rejected
               batchTriggerErrors++;
               totalTriggerErrors++;
               processingErrorOccurred = true; // Mark that an error occurred
               const segment = batch[index];
-              const errorInfo =
-                result.status === "rejected"
-                  ? result.reason
-                  : result.value.error;
               console.error(
-                `INTERNAL ACTION: Failed to trigger TTS for ${language}/${voice}, segment ${segment.start}-${segment.end}:`,
-                errorInfo
+                `INTERNAL ACTION: Failed to trigger TTS for ${language}/${voice}, segment ${segment.start}-${segment.end} (promise rejected):`,
+                result.reason
               );
             }
           });
