@@ -381,17 +381,20 @@ export const internalRequestFullTranscription = publicAction
 const internalTranslateFullContentSchema = z.object({
   segmentId: z.string().uuid(), // ID of the single transcription_segments row
   targetLanguage: z.string().length(2), // ISO 639-1 code
+  videoId: z.string().uuid(), // Added: Video ID
+  voice: z.string(), // Added: Voice for the target language
 });
 
 export const internalTranslateFullContent = publicAction
   .schema(internalTranslateFullContentSchema)
   .action(async ({ parsedInput }): Promise<ActionResponse<null>> => {
-    const { segmentId, targetLanguage } = parsedInput;
+    const { segmentId, targetLanguage, videoId, voice } = parsedInput; // Destructure new inputs
     const supabase = supabaseServiceRoleClient;
     const BATCH_SIZE = 5; // Process 5 segments per batch
+    const langVoiceKey = `${targetLanguage}_${voice}`; // Construct langVoiceKey
 
     console.log(
-      `INTERNAL ACTION: Translating FULL content for segment row ${segmentId} to language: ${targetLanguage} in batches of ${BATCH_SIZE}`
+      `INTERNAL ACTION: Translating FULL content for segment row ${segmentId} to language: ${targetLanguage} (Video: ${videoId}, Voice: ${voice}) in batches of ${BATCH_SIZE}`
     );
 
     try {
@@ -690,6 +693,74 @@ export const internalTranslateFullContent = publicAction
       console.log(
         `INTERNAL ACTION: Successfully translated (batched) and stored FULL ${targetLanguage} content for row ${segmentId}.`
       );
+
+      // 8. Update video processing_status to 'generating_audio' for this langVoiceKey
+      console.log(
+        `[TranslateFullContent] Updating video ${videoId} status for ${langVoiceKey} to 'generating_audio' via RPC.`
+      );
+      const generatingAudioStatusDetail = {
+        status: "generating_audio",
+        progress: 0, // Reset progress for the new stage
+        error_message: null,
+        last_updated: new Date().toISOString(),
+      };
+      await updateVideoStatusRPC(
+        supabase,
+        videoId,
+        langVoiceKey,
+        generatingAudioStatusDetail
+      );
+      console.log(
+        `[TranslateFullContent] Successfully updated video status for ${langVoiceKey} to 'generating_audio'.`
+      );
+
+      // 9. Trigger internalSpawnTtsJobs
+      console.log(
+        `[TranslateFullContent] Triggering internalSpawnTtsJobs for video ${videoId}, language ${targetLanguage}, voice ${voice}.`
+      );
+      const spawnTtsPayload = {
+        videoId: videoId,
+        language: targetLanguage,
+        voice: voice,
+      };
+      const triggerResult = await triggerInternalAction(
+        "internalSpawnTtsJobs",
+        spawnTtsPayload
+      );
+
+      if (!triggerResult.success) {
+        console.error(
+          `[TranslateFullContent] Failed to trigger internalSpawnTtsJobs for ${langVoiceKey}. Error: ${triggerResult.error}`
+        );
+        // If triggering spawn fails, we should update the status to 'failed'
+        const spawnFailedStatusDetail = {
+          status: "failed",
+          error_message: `Failed to trigger TTS job spawning: ${triggerResult.error}`,
+          last_updated: new Date().toISOString(),
+          progress: 0,
+        };
+        try {
+          await updateVideoStatusRPC(
+            supabase,
+            videoId,
+            langVoiceKey,
+            spawnFailedStatusDetail
+          );
+        } catch (e) {
+          console.error(
+            `[TranslateFullContent] Critical: Failed to update status to 'failed' for ${langVoiceKey} after TTS spawn trigger failure. Error: ${e}`
+          );
+        }
+        // Propagate the error so the action result indicates failure
+        throw new AppError(
+          AppErrorCode.SERVICE_ERROR,
+          `Failed to trigger TTS job spawning for ${langVoiceKey}: ${triggerResult.error}`
+        );
+      }
+      console.log(
+        `[TranslateFullContent] Successfully triggered internalSpawnTtsJobs for ${langVoiceKey}.`
+      );
+
       return { success: true, data: null };
     } catch (error: unknown) {
       console.error(

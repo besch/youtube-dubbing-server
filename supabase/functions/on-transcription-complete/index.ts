@@ -248,7 +248,12 @@ serve(async (req) => {
 
     // --- Prepare status updates and trigger calls --- //
     const statusUpdates: { key: string; detail: any }[] = [];
-    const translationTriggers: { segmentId: string; lang: string }[] = [];
+    const translationTriggers: {
+      segmentId: string;
+      lang: string;
+      videoId: string;
+      voice: string;
+    }[] = []; // Added videoId and voice
     const ttsSpawnTriggers: { videoId: string; lang: string; voice: string }[] =
       [];
     let overallError: Error | null = null; // Track if any trigger fails critically
@@ -318,8 +323,10 @@ serve(async (req) => {
         });
       } else {
         // --- Non-English: Schedule status update and translation trigger --- //
+        // The status update to 'translating_full' is still important here to indicate the process has moved to translation.
+        // The subsequent update to 'generating_audio' and TTS spawn will be handled by internalTranslateFullContent.
         console.log(
-          `[on-transcription-complete] Target ${langVoiceKey} requires translation. Scheduling translation trigger.`
+          `[on-transcription-complete] Target ${langVoiceKey} requires translation. Scheduling status update to 'translating_full' and translation trigger.`
         );
         statusUpdates.push({
           key: langVoiceKey,
@@ -331,8 +338,13 @@ serve(async (req) => {
           },
         });
 
-        // Schedule translation trigger
-        translationTriggers.push({ segmentId: segmentId, lang: language });
+        // Schedule translation trigger - include videoId and voice
+        translationTriggers.push({
+          segmentId: segmentId,
+          lang: language,
+          videoId: dbVideoId, // Pass videoId
+          voice: voice, // Pass voice
+        });
       }
     }
 
@@ -378,10 +390,12 @@ serve(async (req) => {
         return await triggerNextAction("internalTranslateFullContent", {
           segmentId: trigger.segmentId,
           targetLanguage: trigger.lang,
+          videoId: trigger.videoId, // Pass videoId
+          voice: trigger.voice, // Pass voice
         });
       } catch (error) {
         console.error(
-          `[on-transcription-complete] Failed to trigger internalTranslateFullContent for lang ${trigger.lang}, video ${dbVideoId}: ${error.message}`
+          `[on-transcription-complete] Failed to trigger internalTranslateFullContent for lang ${trigger.lang}, video ${trigger.videoId}: ${error.message}`
         );
         // Find the langVoiceKey for this failed trigger to update its status
         const failedLangVoiceKey = Object.keys(processingConfig).find(
@@ -399,7 +413,7 @@ serve(async (req) => {
           try {
             await updateVideoStatusRPC(
               supabaseAdmin,
-              dbVideoId,
+              trigger.videoId,
               failedLangVoiceKey,
               failureDetail
             );
@@ -423,7 +437,7 @@ serve(async (req) => {
         });
       } catch (error) {
         console.error(
-          `[on-transcription-complete] Failed to trigger internalSpawnTtsJobs for ${trigger.lang}_${trigger.voice}, video ${dbVideoId}: ${error.message}`
+          `[on-transcription-complete] Failed to trigger internalSpawnTtsJobs for ${trigger.lang}_${trigger.voice}, video ${trigger.videoId}: ${error.message}`
         );
         const failedLangVoiceKey = `${trigger.lang}_${trigger.voice}`;
         // Check if this key was indeed one being processed (its status should have been generating_audio after successful update)
@@ -440,7 +454,7 @@ serve(async (req) => {
           try {
             await updateVideoStatusRPC(
               supabaseAdmin,
-              dbVideoId,
+              trigger.videoId,
               failedLangVoiceKey,
               failureDetail
             );

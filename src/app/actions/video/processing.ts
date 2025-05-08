@@ -868,12 +868,22 @@ export const initiateVideoProcessingJob = protectedAction
             for (const lang of languagesToTranslate) {
               try {
                 // Await the call now
+                // Find the voice for this language from the original processingTargets
+                const voiceForLang = processingTargets[lang]?.voice;
+                if (!voiceForLang) {
+                  console.error(
+                    `[InitiateJob TRIGGERING] Could not find voice for language ${lang} in processingTargets. Skipping translation trigger.`
+                  );
+                  continue;
+                }
                 console.log(
-                  `[InitiateJob TRIGGERING] Calling internalTranslateFullContent for lang ${lang}, segment ${transcriptionData.id}`
+                  `[InitiateJob TRIGGERING] Calling internalTranslateFullContent for lang ${lang}, segment ${transcriptionData.id}, videoId ${videoId}, voice ${voiceForLang}`
                 );
                 await internalTranslateFullContent({
                   segmentId: transcriptionData.id,
                   targetLanguage: lang,
+                  videoId: videoId, // Pass videoId
+                  voice: voiceForLang, // Pass voice
                 });
               } catch (translateTriggerError: any) {
                 console.error(
