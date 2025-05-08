@@ -475,23 +475,28 @@ export const internalTranslateFullContent = publicAction
           `Source and target language (${targetLanguage}) are the same for row ${segmentId}. Skipping translation call.`
         );
         // Store original as 'translation' if needed? For consistency, let's do it.
-        const updatedTranslations = {
-          ...existingTranslations,
-          [targetLanguage]: originalContent, // Store original content under the target language key
-        };
         console.log(
-          `TranslateFullContent: Storing original content as translation for ${targetLanguage}. Updating DB...`
+          `TranslateFullContent: Storing original content as translation for ${targetLanguage} using RPC. Updating DB...`
         );
-        const { error: updateError } = await supabase
-          .from("transcription_segments")
-          .update({ translations: updatedTranslations } as any)
-          .eq("id", segmentId);
-        if (updateError) {
+        // Use RPC to update the specific language key atomically
+        const { error: rpcUpdateError } = await supabase.rpc(
+          "update_translation_for_language" as any, // Cast to any to bypass strict type check
+          {
+            p_segment_id: segmentId,
+            p_lang_code: targetLanguage, // This is sourceLangCode
+            p_translation_content: originalContent, // The original content itself
+          }
+        );
+
+        if (rpcUpdateError) {
           console.error(
-            `TranslateFullContent: DB Error storing original content as translation for ${segmentId}:`,
-            updateError
+            `TranslateFullContent: DB Error storing original content as translation for ${segmentId} (lang: ${targetLanguage}) via RPC:`,
+            rpcUpdateError
           );
-          // Don't fail the whole action, just log it?
+          throw new AppError(
+            AppErrorCode.DATABASE_ERROR,
+            `DB error storing original content as translation for ${segmentId} (lang: ${targetLanguage}) via RPC: ${rpcUpdateError.message}`
+          );
         }
         return { success: true, data: null };
       }

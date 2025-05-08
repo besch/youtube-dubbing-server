@@ -253,10 +253,10 @@ serve(async (req) => {
       lang: string;
       videoId: string;
       voice: string;
-    }[] = []; // Added videoId and voice
+    }[] = [];
     const ttsSpawnTriggers: { videoId: string; lang: string; voice: string }[] =
       [];
-    let overallError: Error | null = null; // Track if any trigger fails critically
+    let overallError: Error | null = null;
 
     if (
       !fullTranscriptionContent ||
@@ -269,13 +269,12 @@ serve(async (req) => {
       // Mark relevant processes as failed using the RPC helper
       for (const langVoiceKey of targetProcesses) {
         const failureDetail = {
-          ...processingConfig[langVoiceKey], // Keep existing info if possible
+          ...processingConfig[langVoiceKey],
           status: "failed",
           error_message:
             "Transcription completed but content was empty/invalid.",
           last_updated: new Date().toISOString(),
         };
-        // Immediately try to update status to failed
         try {
           await updateVideoStatusRPC(
             supabaseAdmin,
@@ -292,8 +291,34 @@ serve(async (req) => {
       throw new Error("Transcription content missing or invalid.");
     }
 
+    // --- Store Original Transcription in Translations Field ---
+    const originalLanguageCode = fullTranscriptionContent.detected_language;
+    if (originalLanguageCode && originalLanguageCode.length === 2) {
+      console.log(
+        `[on-transcription-complete] Original transcription language detected as: ${originalLanguageCode}. Attempting to store it in translations field for segment ${segmentId}.`
+      );
+      try {
+        await supabaseAdmin.rpc("update_translation_for_language", {
+          p_segment_id: segmentId,
+          p_lang_code: originalLanguageCode,
+          p_translation_content: fullTranscriptionContent,
+        });
+        console.log(
+          `[on-transcription-complete] Successfully stored original (${originalLanguageCode}) transcription in translations field for segment ${segmentId}.`
+        );
+      } catch (rpcError) {
+        console.error(
+          `[on-transcription-complete] Error storing original (${originalLanguageCode}) transcription in translations for segment ${segmentId}: ${rpcError.message}. Proceeding with target processing.`
+        );
+      }
+    } else {
+      console.warn(
+        `[on-transcription-complete] Could not reliably determine a 2-letter original language code from transcription content (detected: '${originalLanguageCode}') for segment ${segmentId}. Original transcription will not be automatically added to the 'translations' field here.`
+      );
+    }
+    // --- End Store Original Transcription ---
+
     // --- Logic for Each Target Process (Language/Voice) --- //
-    // Determine updates and triggers first, apply later
     for (const langVoiceKey of targetProcesses) {
       const [language, voice] = langVoiceKey.split("_");
       console.log(
