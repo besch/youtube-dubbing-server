@@ -131,15 +131,15 @@ serve(async (req) => {
     );
 
     // --- Validation --- //
-    // Triggered when NEW.translations is distinct from OLD.translations
     if (
       payload.type !== "UPDATE" ||
-      !payload.record.translations ||
+      !payload.record.translations || // Ensure translations field exists
+      payload.record.status === "failed" || // Don't process if the main segment row is failed
       JSON.stringify(payload.record.translations) ===
-        JSON.stringify(payload.old_record?.translations)
+        JSON.stringify(payload.old_record?.translations) // Ensure actual change
     ) {
       console.log(
-        `[on-translation-complete] Ignoring update for segment ${payload.record.id} - Not a relevant translation update.`
+        `[on-translation-complete] Ignoring update for segment ${payload.record.id} - Not a relevant translation update or segment is failed.`
       );
       return new Response(JSON.stringify({ message: "Irrelevant update" }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -166,6 +166,7 @@ serve(async (req) => {
             )}`,
           },
         },
+        // Add auth schema if not public, e.g. auth: { schema: 'auth' }
       }
     );
 
@@ -190,11 +191,21 @@ serve(async (req) => {
       {}) as VideoProcessingStatus;
 
     // --- Identify Newly Added/Updated Translations --- //
-    const updatedLanguages = Object.keys(newTranslations).filter(
-      (lang) =>
-        JSON.stringify(newTranslations[lang]) !==
-        JSON.stringify(oldTranslations[lang])
-    );
+    const updatedLanguages = Object.keys(newTranslations).filter((lang) => {
+      // Check if new lang content is valid and different from old
+      const newLangContent = newTranslations[
+        lang
+      ] as ReplicateSegmentOutput | null;
+      const oldLangContent = oldTranslations[
+        lang
+      ] as ReplicateSegmentOutput | null;
+      return (
+        newLangContent &&
+        Array.isArray(newLangContent.segments) &&
+        newLangContent.segments.length > 0 &&
+        JSON.stringify(newLangContent) !== JSON.stringify(oldLangContent)
+      );
+    });
 
     if (updatedLanguages.length === 0) {
       console.log(
@@ -217,28 +228,30 @@ serve(async (req) => {
     const statusUpdatePromises: Promise<void>[] = [];
     const ttsSpawnPromises: Promise<any>[] = [];
     let overallError: Error | null = null;
+    let processedTargetCount = 0;
 
     for (const language of updatedLanguages) {
       const translatedContent = newTranslations[
         language
       ] as ReplicateSegmentOutput | null;
 
+      // This check is a bit redundant due to filter above, but good for safety
       if (
         !translatedContent ||
         !Array.isArray(translatedContent.segments) ||
         translatedContent.segments.length === 0
       ) {
         console.warn(
-          `[on-translation-complete] Translation content for language ${language} in segment ${segmentId} is empty or invalid. Skipping TTS.`
+          `[on-translation-complete] Translation content for language ${language} in segment ${segmentId} is empty or invalid (should have been caught by filter). Skipping TTS.`
         );
         continue;
       }
 
       // Find corresponding lang/voice combinations that were waiting for translation
       const targetProcesses = Object.keys(processingConfig).filter((key) => {
-        const [lang, voice] = key.split("_");
+        const [langKey, voiceKey] = key.split("_");
         return (
-          lang === language &&
+          langKey === language &&
           processingConfig[key]?.status === "translating_full"
         );
       });
@@ -254,11 +267,14 @@ serve(async (req) => {
         const [, voice] = langVoiceKey.split("_"); // Get voice from key
 
         console.log(
-          `[on-translation-complete] Processing target ${langVoiceKey} (status was 'translating_full'). Triggering audio generation.`
+          `[on-translation-complete] Processing target ${langVoiceKey} (status was 'translating_full'). Scheduling status update to 'generating_audio' and TTS spawn.`
         );
+        processedTargetCount++;
 
         const statusDetail: VideoProcessingStatusDetail = {
           status: "generating_audio", // Update status first
+          progress: 0, // Reset progress for new stage
+          error_message: null,
           last_updated: new Date().toISOString(),
         };
 
@@ -273,6 +289,7 @@ serve(async (req) => {
         );
 
         // Prepare trigger promise (will run after status updates)
+        // This call is okay from an Edge Function.
         ttsSpawnPromises.push(
           triggerNextAction("internalSpawnTtsJobs", {
             videoId: dbVideoId,
@@ -308,7 +325,7 @@ serve(async (req) => {
     // --- Execute TTS Spawn Triggers (Only if status updates succeeded) --- //
     if (ttsSpawnPromises.length > 0) {
       console.log(
-        `[on-translation-complete] Executing ${ttsSpawnPromises.length} TTS spawn triggers...`
+        `[on-translation-complete] Executing ${ttsSpawnPromises.length} TTS spawn triggers for video ${dbVideoId}...`
       );
       const triggerResults = await Promise.allSettled(ttsSpawnPromises);
       const failedTriggers = triggerResults.filter(
@@ -319,15 +336,21 @@ serve(async (req) => {
           `[on-translation-complete] ${failedTriggers.length} TTS spawn triggers FAILED for video ${dbVideoId}. Errors:`,
           failedTriggers.map((f: any) => f.reason?.message)
         );
-        // The internalSpawnTtsJobs action should handle setting the status to failed on trigger errors.
-        // Log here, but allow the process to finish.
+        // The internalSpawnTtsJobs action is responsible for setting its target lang_voice key to 'failed'
+        // if it encounters an error during spawning. So, we just log here.
         overallError = new Error(
           `Failed to execute ${failedTriggers.length} TTS spawn triggers.`
         );
       }
+    } else if (processedTargetCount > 0) {
+      // This case means we had targets that should have spawned TTS but didn't make it to ttsSpawnPromises
+      // This shouldn't happen with current logic but is a safeguard.
+      console.warn(
+        `[on-translation-complete] Video ${dbVideoId}: Had ${processedTargetCount} targets identified for TTS, but no spawn jobs were queued. This might indicate an issue.`
+      );
     } else {
       console.log(
-        `[on-translation-complete] No TTS spawn triggers to execute.`
+        `[on-translation-complete] No TTS spawn triggers to execute for video ${dbVideoId}.`
       );
     }
 

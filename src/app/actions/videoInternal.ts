@@ -17,46 +17,6 @@ import { generateOpenAiTts } from "@/lib/openai-tts";
 import { generateGoogleTts } from "@/lib/google-tts";
 import { SupabaseClient } from "@supabase/supabase-js"; // Import SupabaseClient
 
-// --- Helper Function: Extract Text from Segments for Time Range ---
-// NOTE: This function might need adjustments later depending on how
-// internalGenerateAudioChunk uses it with the full transcription data.
-function extractTextFromSegments(
-  segmentsOutputs: (ReplicateSegmentOutput | null | undefined)[],
-  targetStartTime: number,
-  targetEndTime: number
-): string {
-  let extractedText = "";
-  const addedSentences = new Set<string>();
-
-  for (const output of segmentsOutputs) {
-    if (output?.segments) {
-      for (const sentence of output.segments) {
-        const sentenceStart = sentence?.start ?? -1;
-        const sentenceEnd = sentence?.end ?? -1;
-        const sentenceText = sentence?.text?.trim() ?? "";
-
-        if (
-          sentenceStart >= 0 &&
-          sentenceEnd >= 0 &&
-          sentenceText &&
-          !addedSentences.has(sentenceText)
-        ) {
-          // Check for overlap between sentence time and target time range
-          if (
-            Math.max(sentenceStart, targetStartTime) <
-            Math.min(sentenceEnd, targetEndTime)
-          ) {
-            extractedText += sentenceText + " ";
-            addedSentences.add(sentenceText);
-          }
-        }
-      }
-    }
-  }
-  return extractedText.trim();
-}
-// --- End Helper Function --- //
-
 // --- Helper: Trigger Internal Action via API ---
 // Replicates the logic used by Supabase functions to call internal Next.js actions
 async function triggerInternalAction(actionName: string, payload: any) {
@@ -691,80 +651,13 @@ export const internalTranslateFullContent = publicAction
         `>>> TranslateFullContent: DB Update successful for row ${segmentId}.`
       );
       console.log(
-        `INTERNAL ACTION: Successfully translated (batched) and stored FULL ${targetLanguage} content for row ${segmentId}.`
-      );
-
-      // 8. Update video processing_status to 'generating_audio' for this langVoiceKey
-      console.log(
-        `[TranslateFullContent] Updating video ${videoId} status for ${langVoiceKey} to 'generating_audio' via RPC.`
-      );
-      const generatingAudioStatusDetail = {
-        status: "generating_audio",
-        progress: 0, // Reset progress for the new stage
-        error_message: null,
-        last_updated: new Date().toISOString(),
-      };
-      await updateVideoStatusRPC(
-        supabase,
-        videoId,
-        langVoiceKey,
-        generatingAudioStatusDetail
-      );
-      console.log(
-        `[TranslateFullContent] Successfully updated video status for ${langVoiceKey} to 'generating_audio'.`
-      );
-
-      // 9. Trigger internalSpawnTtsJobs
-      console.log(
-        `[TranslateFullContent] Triggering internalSpawnTtsJobs for video ${videoId}, language ${targetLanguage}, voice ${voice}.`
-      );
-      const spawnTtsPayload = {
-        videoId: videoId,
-        language: targetLanguage,
-        voice: voice,
-      };
-      const triggerResult = await triggerInternalAction(
-        "internalSpawnTtsJobs",
-        spawnTtsPayload
-      );
-
-      if (!triggerResult.success) {
-        console.error(
-          `[TranslateFullContent] Failed to trigger internalSpawnTtsJobs for ${langVoiceKey}. Error: ${triggerResult.error}`
-        );
-        // If triggering spawn fails, we should update the status to 'failed'
-        const spawnFailedStatusDetail = {
-          status: "failed",
-          error_message: `Failed to trigger TTS job spawning: ${triggerResult.error}`,
-          last_updated: new Date().toISOString(),
-          progress: 0,
-        };
-        try {
-          await updateVideoStatusRPC(
-            supabase,
-            videoId,
-            langVoiceKey,
-            spawnFailedStatusDetail
-          );
-        } catch (e) {
-          console.error(
-            `[TranslateFullContent] Critical: Failed to update status to 'failed' for ${langVoiceKey} after TTS spawn trigger failure. Error: ${e}`
-          );
-        }
-        // Propagate the error so the action result indicates failure
-        throw new AppError(
-          AppErrorCode.SERVICE_ERROR,
-          `Failed to trigger TTS job spawning for ${langVoiceKey}: ${triggerResult.error}`
-        );
-      }
-      console.log(
-        `[TranslateFullContent] Successfully triggered internalSpawnTtsJobs for ${langVoiceKey}.`
+        `INTERNAL ACTION: Successfully translated (batched) and stored FULL ${targetLanguage} content for row ${segmentId}. Video: ${videoId}, Voice: ${voice}`
       );
 
       return { success: true, data: null };
     } catch (error: unknown) {
       console.error(
-        `INTERNAL ACTION: Error translating full content (batched) for row ${segmentId} to ${targetLanguage}:`,
+        `INTERNAL ACTION: Error translating full content (batched) for row ${segmentId} to ${targetLanguage} (Video: ${videoId}, Voice: ${voice}):`,
         error
       );
       // Log the detailed error object
