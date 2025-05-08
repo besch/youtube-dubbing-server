@@ -328,6 +328,10 @@ export const initiateVideoProcessingJob = protectedAction
     }): Promise<ActionResponse<InitiateProcessingOutput>> => {
       const userId = ctx.user.id;
       const { youtubeUrl, processingTargets } = parsedInput;
+      console.log(
+        `[InitiateJob START] User: ${userId}, URL: ${youtubeUrl}, Targets:`,
+        JSON.stringify(processingTargets)
+      );
 
       const downloaderServiceUrl = process.env.DOWNLOADER_SERVICE_URL;
       if (!downloaderServiceUrl) {
@@ -371,7 +375,8 @@ export const initiateVideoProcessingJob = protectedAction
           existingProcessingStatus =
             (existingVideo.processing_status as Record<string, any>) || {};
           console.log(
-            `InitiateJob: Found existing video ${videoId} for ${youtubeId}`
+            `InitiateJob: Found existing video ${videoId} for ${youtubeId}. Initial DB processing_status:`,
+            JSON.stringify(existingProcessingStatus)
           );
         } else {
           console.log(
@@ -463,7 +468,7 @@ export const initiateVideoProcessingJob = protectedAction
         existingProcessingStatus =
           (currentVideoData.processing_status as Record<string, any>) || {};
         console.log(
-          `InitiateJob: Re-fetched status for ${videoId}:`,
+          `InitiateJob: Re-fetched status for ${videoId} (used as existingProcessingStatus):`,
           JSON.stringify(existingProcessingStatus)
         );
 
@@ -534,17 +539,36 @@ export const initiateVideoProcessingJob = protectedAction
         const statusUpdatePromises: Promise<void>[] = [];
         const languagesToTranslate = new Set<string>();
         const targetsToSpawnTts = new Set<string>(); // Store "lang_voice" keys
+        console.log(
+          `[InitiateJob PRE-LOOP] For video ${videoId} - isDownloadComplete: ${isDownloadComplete}, isTranscriptionComplete: ${isTranscriptionComplete}, transcriptionData ID: ${transcriptionData?.id}`
+        );
+        if (transcriptionData) {
+          console.log(
+            `[InitiateJob PRE-LOOP] Transcription translations:`,
+            JSON.stringify(transcriptionData.translations)
+          );
+        }
 
         for (const langCode in processingTargets) {
           const voice = processingTargets[langCode].voice;
           const langVoiceKey = `${langCode}_${voice}`;
+          console.log(
+            `[InitiateJob LOOP] Processing target: ${langVoiceKey} (Lang: ${langCode}, Voice: ${voice})`
+          );
 
           const currentTargetStatusDetail =
             existingProcessingStatus[langVoiceKey];
           const currentStatus = currentTargetStatusDetail?.status;
+          console.log(
+            `[InitiateJob LOOP ${langVoiceKey}] Existing status detail:`,
+            JSON.stringify(currentTargetStatusDetail)
+          );
 
           // MODIFIED: Process if not completed, OR if it failed (to allow retry)
           const shouldProcessTarget = currentStatus !== "completed";
+          console.log(
+            `[InitiateJob LOOP ${langVoiceKey}] Should process? ${shouldProcessTarget} (currentStatus: ${currentStatus})`
+          );
 
           if (shouldProcessTarget) {
             let needsUpdate = false;
@@ -564,6 +588,13 @@ export const initiateVideoProcessingJob = protectedAction
                   translationsObj[langCode] &&
                   Array.isArray(translationsObj[langCode].segments) &&
                   translationsObj[langCode].segments.length > 0;
+                console.log(
+                  `[InitiateJob LOOP ${langVoiceKey}] Checked for existing translation for '${langCode}': ${translationExists}`
+                );
+              } else {
+                console.log(
+                  `[InitiateJob LOOP ${langVoiceKey}] No transcriptionData.translations or not an object for '${langCode}'. Assuming translation does not exist.`
+                );
               }
 
               if (translationExists) {
@@ -576,7 +607,7 @@ export const initiateVideoProcessingJob = protectedAction
                 targetInitialStatus = "translating_full";
                 languagesToTranslate.add(langCode);
                 console.log(
-                  `InitiateJob: Target ${langVoiceKey} initial status -> translating_full (Translation Needed)`
+                  `InitiateJob: Target ${langVoiceKey} initial status -> translating_full (Translation Needed for ${langCode})`
                 );
               }
             } else if (isDownloadComplete && !isTranscriptionComplete) {
@@ -590,6 +621,9 @@ export const initiateVideoProcessingJob = protectedAction
                 `InitiateJob: Target ${langVoiceKey} initial status -> pending (Waiting for Download)`
               );
             }
+            console.log(
+              `[InitiateJob LOOP ${langVoiceKey}] Determined targetInitialStatus: ${targetInitialStatus}`
+            );
 
             if (
               !currentTargetStatusDetail || // Target is completely new
@@ -603,6 +637,10 @@ export const initiateVideoProcessingJob = protectedAction
                 error_message: null, // Clear previous errors
                 last_updated: new Date().toISOString(),
               };
+              console.log(
+                `[InitiateJob LOOP ${langVoiceKey}] Queuing status update to:`,
+                JSON.stringify(newStatusDetail)
+              );
               statusUpdatePromises.push(
                 updateVideoStatusRPC(
                   supabase,
@@ -613,12 +651,12 @@ export const initiateVideoProcessingJob = protectedAction
               );
             } else {
               console.log(
-                `InitiateJob: Target ${langVoiceKey} already has status ${currentStatus} and doesn't need reset. No update needed.`
+                `[InitiateJob LOOP ${langVoiceKey}] No status update needed. currentTargetStatusDetail exists, currentStatus (${currentStatus}) === targetInitialStatus (${targetInitialStatus}), and not 'failed'.`
               );
             }
           } else {
             console.log(
-              `InitiateJob: Skipping target ${langVoiceKey} as it's already completed.`
+              `InitiateJob: Skipping target ${langVoiceKey} as it's already completed or should not be processed.`
             );
           }
         }
@@ -626,14 +664,14 @@ export const initiateVideoProcessingJob = protectedAction
         // Await all status updates before proceeding
         if (statusUpdatePromises.length > 0) {
           console.log(
-            `InitiateJob: Awaiting ${statusUpdatePromises.length} status updates...`
+            `[InitiateJob MID] Awaiting ${statusUpdatePromises.length} status updates...`
           );
           try {
             await Promise.all(statusUpdatePromises);
-            console.log(`InitiateJob: Status updates completed.`);
+            console.log(`[InitiateJob MID] All status updates awaited.`);
           } catch (error) {
             console.error(
-              "InitiateJob: Error during batch status update:",
+              "[InitiateJob MID] Error during batch status update (Promise.all rejected):",
               error
             );
             // If status updates fail, we should probably return the error
@@ -666,7 +704,7 @@ export const initiateVideoProcessingJob = protectedAction
         const committedProcessingStatus =
           (postUpdateVideoData.processing_status as Record<string, any>) || {};
         console.log(
-          `InitiateJob: Committed status for trigger logic:`,
+          `InitiateJob: Committed status for trigger logic (after updates, before triggers):`,
           JSON.stringify(committedProcessingStatus)
         );
 
@@ -776,7 +814,15 @@ export const initiateVideoProcessingJob = protectedAction
           targetsToSpawnTts.size > 0 && isTranscriptionComplete; // TTS spawning requires transcription
 
         console.log(
-          `InitiateJob: Trigger Check - Download: ${triggerDownload}, Transcription: ${needsTranscriptionTrigger}, Translation: ${needsTranslationTrigger}, TTS Spawn: ${needsTtsSpawnTrigger}`
+          `[InitiateJob TRIGGER_CHECK] For video ${videoId} - Needs Transcription Trigger: ${needsTranscriptionTrigger} (isDownloadComplete: ${isDownloadComplete}, isTranscriptionComplete: ${isTranscriptionComplete}, any target 'transcribing_full': ${Object.values(
+            committedProcessingStatus
+          ).some(
+            (s: any) => s?.status === "transcribing_full"
+          )}), Needs Translation Trigger: ${needsTranslationTrigger} (languagesToTranslate size: ${
+            languagesToTranslate.size
+          }, isTranscriptionComplete: ${isTranscriptionComplete}), Needs TTS Spawn Trigger: ${needsTtsSpawnTrigger} (targetsToSpawnTts size: ${
+            targetsToSpawnTts.size
+          }, isTranscriptionComplete: ${isTranscriptionComplete})`
         );
 
         if (triggerTranscription) {
@@ -788,6 +834,9 @@ export const initiateVideoProcessingJob = protectedAction
           } else {
             try {
               // Call the internal action directly
+              console.log(
+                `[InitiateJob TRIGGERING] Calling internalRequestFullTranscription for video ${videoId} with path ${downloadStoragePath}`
+              );
               // NOTE: We don't need to await this if the goal is just to kick it off.
               // The Supabase triggers will handle the flow from its completion.
               // However, if we wanted to know if the trigger call itself failed immediately, we could await.
@@ -812,13 +861,16 @@ export const initiateVideoProcessingJob = protectedAction
           // Use the calculated sets (languagesToTranslate, targetsToSpawnTts) and check prereqs
           if (needsTranslationTrigger && transcriptionData?.id) {
             console.log(
-              `InitiateJob: Triggering translation for languages: ${[
+              `[InitiateJob TRIGGERING] internalTranslateFullContent for languages: ${[
                 ...languagesToTranslate,
-              ].join(", ")}`
+              ].join(", ")} using segmentId ${transcriptionData.id}`
             );
             for (const lang of languagesToTranslate) {
               try {
                 // Await the call now
+                console.log(
+                  `[InitiateJob TRIGGERING] Calling internalTranslateFullContent for lang ${lang}, segment ${transcriptionData.id}`
+                );
                 await internalTranslateFullContent({
                   segmentId: transcriptionData.id,
                   targetLanguage: lang,
@@ -839,14 +891,17 @@ export const initiateVideoProcessingJob = protectedAction
           // Trigger TTS Spawning
           if (needsTtsSpawnTrigger) {
             console.log(
-              `InitiateJob: Triggering TTS spawning for targets: ${[
+              `[InitiateJob TRIGGERING] internalSpawnTtsJobs for targets: ${[
                 ...targetsToSpawnTts,
-              ].join(", ")}`
+              ].join(", ")} for video ${videoId}`
             );
             for (const langVoiceKey of targetsToSpawnTts) {
               const [lang, voice] = langVoiceKey.split("_");
               try {
                 // Don't await - let the on-translation-complete trigger handle this
+                console.log(
+                  `[InitiateJob TRIGGERING] Calling internalSpawnTtsJobs for lang ${lang}, voice ${voice}`
+                );
                 internalSpawnTtsJobs({
                   videoId: videoId,
                   language: lang,
@@ -874,6 +929,11 @@ export const initiateVideoProcessingJob = protectedAction
           ? committedProcessingStatus // Use last known committed status if fetch fails
           : finalVideoData?.processing_status || committedProcessingStatus;
 
+        console.log(
+          `[InitiateJob END] Successfully returning. VideoId: ${videoId}, DownloadJobId: ${downloadJobId}, Final Processing Status:`,
+          JSON.stringify(finalProcessingStatus)
+        );
+
         return {
           success: true,
           data: {
@@ -900,6 +960,10 @@ export const initiateVideoProcessingJob = protectedAction
                   ? error.message
                   : "Unknown error during video processing initiation"
               );
+        console.error(
+          `[InitiateJob ENDING WITH ERROR] For ${youtubeId}:`,
+          JSON.stringify(appErr)
+        );
         return { success: false, error: appErr };
       }
     }
