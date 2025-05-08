@@ -1,8 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { supabaseServiceRoleClient } from "@/lib/supabase/serviceRoleClient";
-import { AppError, AppErrorCode } from "@/app/actions/actions"; // Import error types if needed
-// Import generated types
-import type { Database, Tables, Enums } from "@/types/supabase";
+import type { Tables } from "@/types/supabase";
 
 // Define the expected Replicate webhook payload structure
 interface TranscriptionWord {
