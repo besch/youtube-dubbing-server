@@ -24,9 +24,8 @@ import {
 } from "@/app/actions/translation/translation";
 
 // Import the new actions
-import { getFeatureFlags } from "@/actions/getFeatureFlags";
-import { markOnboardingComplete } from "@/actions/markOnboardingComplete";
-
+import { searchMovies } from "@/app/actions/movie/search";
+import { fetchSubtitles } from "@/app/actions/subtitle/fetch";
 import { AppError, AppErrorCode } from "@/app/actions/actions";
 
 type ActionFunction = (input: any) => Promise<any>;
@@ -46,8 +45,8 @@ const actionRegistry: Record<string, ActionFunction> = {
   "video/initiateVideoProcessingJob": initiateVideoProcessingJob,
   "video/getCompletedAudioChunks": getCompletedAudioChunks,
   "video/getVideoByUrl": getVideoByUrl,
-  getFeatureFlags: getFeatureFlags,
-  markOnboardingComplete: markOnboardingComplete,
+  "movie/search": searchMovies,
+  "subtitle/fetch": fetchSubtitles,
 };
 
 export async function POST(request: NextRequest) {
@@ -166,8 +165,27 @@ export async function POST(request: NextRequest) {
     }
 
     // If no errors, assume success and return data
-    // Ensure the structure matches client expectations ({ success: true, data: ... })
-    return NextResponse.json({ success: true, data: result.data });
+    // The safe action execution result (`result`) contains the ActionResponse
+    // returned by the action function within its `data` property.
+    if (result.data) {
+      // Return the ActionResponse directly
+      return NextResponse.json(result.data);
+    } else {
+      // Should not happen if there were no errors, but handle defensively
+      console.error(
+        `API Route: Action ${actionPath} succeeded but returned no data.`
+      );
+      return NextResponse.json(
+        {
+          success: false,
+          error: new AppError(
+            AppErrorCode.UNEXPECTED_ERROR,
+            "Action succeeded but returned no data"
+          ).toJSON(),
+        },
+        { status: 500 }
+      );
+    }
   } catch (error) {
     console.error(
       `API Route: Unexpected error in POST handler for ${request.url}:`,
