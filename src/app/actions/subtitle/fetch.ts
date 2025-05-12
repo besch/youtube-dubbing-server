@@ -215,11 +215,10 @@ async function getBestSubtitle(
 }
 
 function insertNewLineIfWrongFormattedSRT(input: string): string {
-  // Adjusted to handle cases where there might be no newline after the number
-  // and to ensure it's at the start of a line.
-  return input
-    .replace(/^(\d+)(?!\r?\n)/gm, "\n$1\r\n")
-    .replace(/^(\d+)(\r?\n)(?=\d)/gm, "\n$1$2");
+  // Matches an index number at the start of a line followed by a newline.
+  // Replaces it with: newline + index + original newline.
+  // Goal: Ensure a blank line before the index number.
+  return input.replace(/^(\d+)(\r?\n)/gm, "\n$1$2");
 }
 
 async function downloadAndExtractSubtitle(
