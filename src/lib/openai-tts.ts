@@ -3,16 +3,18 @@ import { Buffer } from "buffer";
 import { AppError, AppErrorCode } from "@/app/actions/actions";
 
 // --- Environment Variable Check ---
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-if (!OPENAI_API_KEY) {
-  console.error("OPENAI_API_KEY is not set for TTS generation.");
+const OPENAI_API_KEY_NEW = process.env.OPENAI_API_KEY_NEW;
+if (!OPENAI_API_KEY_NEW) {
+  console.error("OPENAI_API_KEY_NEW is not set for TTS generation.");
   // Optionally throw an error during initialization if critical
-  // throw new Error("OPENAI_API_KEY is required for TTS functionality.");
+  // throw new Error("OPENAI_API_KEY_NEW is required for TTS functionality.");
 }
 
 // --- OpenAI Client Initialization ---
 // Initialize OpenAI client only if the key is available
-const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
+const openai = OPENAI_API_KEY_NEW
+  ? new OpenAI({ apiKey: OPENAI_API_KEY_NEW })
+  : null;
 
 // --- Types and Constants ---
 export type OpenAiTtsVoice =

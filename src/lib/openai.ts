@@ -1,14 +1,14 @@
 import OpenAI from "openai";
 
-const apiKey = process.env.OPENAI_API_KEY;
+const apiKey = process.env.OPENAI_API_KEY_NEW;
 
 if (!apiKey) {
   // In development, you might allow this, but log a warning.
   // In production, this should likely be an error.
   console.warn(
-    "Missing env.OPENAI_API_KEY. OpenAI functionality will be disabled."
+    "Missing env.OPENAI_API_KEY_NEW. OpenAI functionality will be disabled."
   );
-  // throw new Error("Missing env.OPENAI_API_KEY");
+  // throw new Error("Missing env.OPENAI_API_KEY_NEW");
 }
 
 // Initialize OpenAI client (handles apiKey being potentially undefined)

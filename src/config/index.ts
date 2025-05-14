@@ -10,7 +10,7 @@ const envSchema = z.object({
   // API keys and services
   REPLICATE_API_KEY: z.string().optional(),
   REPLICATE_WEBHOOK_SECRET: z.string().optional(),
-  OPENAI_API_KEY: z.string(),
+  OPENAI_API_KEY_NEW: z.string(),
   ANTHROPIC_API_KEY: z.string(),
   GOOGLE_API_KEY: z.string(), // Use API Key directly
 
@@ -422,7 +422,7 @@ export const config = {
   apiKeys: {
     replicate: process.env.REPLICATE_API_KEY,
     replicateWebhookSecret: process.env.REPLICATE_WEBHOOK_SECRET,
-    openai: process.env.OPENAI_API_KEY!,
+    openai: process.env.OPENAI_API_KEY_NEW!,
     anthropic: process.env.ANTHROPIC_API_KEY!,
     googleApiKey: process.env.GOOGLE_API_KEY!, // Add API key
   },

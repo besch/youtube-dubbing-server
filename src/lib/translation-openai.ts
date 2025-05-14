@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { AppError, AppErrorCode } from "@/app/actions/actions";
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY_NEW,
 });
 
 export interface TranslationOptions {
@@ -16,7 +16,7 @@ export async function translateText(
   options: TranslationOptions
 ): Promise<string> {
   try {
-    if (!process.env.OPENAI_API_KEY) {
+    if (!process.env.OPENAI_API_KEY_NEW) {
       throw new AppError(
         AppErrorCode.OPENAI_API_ERROR,
         "OpenAI API key not configured."

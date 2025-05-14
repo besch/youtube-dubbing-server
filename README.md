@@ -7,7 +7,7 @@ This is the server component of the YouTube Dubbing application.
 1. Create a `.env.local` file with the following variables:
 
 ```
-OPENAI_API_KEY=your_openai_key
+OPENAI_API_KEY_NEW=your_openai_key
 REPLICATE_API_KEY=your_replicate_key
 NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key

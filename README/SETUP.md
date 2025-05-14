@@ -179,7 +179,7 @@ supabase secrets set NEXTJS_API_URL=https://your-vercel-deployment-url
 Create a `.env.local` file in the `server` directory:
 
 ```plaintext
-OPENAI_API_KEY=your_openai_key
+OPENAI_API_KEY_NEW=your_openai_key
 REPLICATE_API_KEY=your_replicate_key
 NEXT_PUBLIC_SUPABASE_URL=your_supabase_url
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key

@@ -6,7 +6,7 @@ and youtube-downloader is responsible to download youtube video and save it in s
 We're gonna create mobile app that uses react-native and expo to create a youtube dubbing app. Server using nextjs and supabase.
 
 server api key:
-process.env.OPENAI_API_KEY
+process.env.OPENAI_API_KEY_NEW
 process.env.REPLICATE_API_KEY
 process.env.NEXT_PUBLIC_SUPABASE_URL
 process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
@@ -114,7 +114,7 @@ in the app user can start watch youtube video while app make requests to server 
 audio should be generated 5 seconds before audio suppose to start(track video player time)
 
 "const openai = new OpenAI({
-apiKey: process.env.OPENAI_API_KEY,
+apiKey: process.env.OPENAI_API_KEY_NEW,
 });
 
 const mp3 = await openai.audio.speech.create({
