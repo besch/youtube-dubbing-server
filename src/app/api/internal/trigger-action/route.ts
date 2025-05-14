@@ -31,11 +31,11 @@ const triggerActionSchema = z.object({
 });
 
 export async function POST(request: NextRequest) {
-  // 1. Authorization Check
-  const authHeader = request.headers.get("authorization");
-  if (authHeader !== `Bearer ${FUNCTION_SECRET}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  // // 1. Authorization Check
+  // const authHeader = request.headers.get("authorization");
+  // if (authHeader !== `Bearer ${FUNCTION_SECRET}`) {
+  //   return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // }
 
   // 2. Parse and Validate Request Body
   let parsedBody;

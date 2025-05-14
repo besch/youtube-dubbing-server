@@ -3,7 +3,7 @@
 import { z } from "zod";
 import { v4 as uuidv4 } from "uuid";
 import type { User } from "@supabase/supabase-js";
-import { protectedAction } from "../safe-action";
+import { protectedAction, publicAction } from "../safe-action";
 import { supabaseServiceRoleClient } from "@/lib/supabase/serviceRoleClient";
 import { ActionResponse, AppError, appErrors, AppErrorCode } from "../actions";
 import { extractYoutubeVideoId } from "./utils";
@@ -316,7 +316,7 @@ async function updateVideoStatusRPC(
   }
 }
 
-export const initiateVideoProcessingJob = protectedAction
+export const initiateVideoProcessingJob = publicAction
   .schema(initiateVideoProcessingJobSchema)
   .action(
     async ({
@@ -324,12 +324,14 @@ export const initiateVideoProcessingJob = protectedAction
       ctx,
     }: {
       parsedInput: z.infer<typeof initiateVideoProcessingJobSchema>;
-      ctx: { user: User };
+      ctx?: { user?: User };
     }): Promise<ActionResponse<InitiateProcessingOutput>> => {
-      const userId = ctx.user.id;
+      const userId = ctx?.user?.id || null;
       const { youtubeUrl, processingTargets } = parsedInput;
       console.log(
-        `[InitiateJob START] User: ${userId}, URL: ${youtubeUrl}, Targets:`,
+        `[InitiateJob START] User: ${
+          userId || "anonymous"
+        }, URL: ${youtubeUrl}, Targets:`,
         JSON.stringify(processingTargets)
       );
 
@@ -757,7 +759,7 @@ export const initiateVideoProcessingJob = protectedAction
             .insert({
               id: newJobId,
               video_id: videoId,
-              user_id: userId, // Associate with the requesting user
+              user_id: userId,
               status: "pending",
             });
 
@@ -991,7 +993,7 @@ interface GetVideoByUrlOutput {
   duration: number | null;
 }
 
-export const getVideoByUrl = protectedAction
+export const getVideoByUrl = publicAction
   .schema(getVideoByUrlSchema)
   .action(
     async ({

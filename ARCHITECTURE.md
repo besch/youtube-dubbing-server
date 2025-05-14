@@ -281,8 +281,56 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
   - Request audio chunks on-demand during seek operations if the target time's chunk hasn't been generated yet.
 - **Note:** Atomic updates for `processing_status` have been implemented using an SQL RPC function (`update_processing_status`) to mitigate race conditions.
 
-## 8. Chrome Extension Architecture (`extension/`)
+## 8. Client-Side (Chrome Extension)
 
 ### 8.1. Overview
 
 The Chrome Extension allows users to apply dubbing directly while watching videos on youtube.com. It interacts with the existing backend server (`server/`) for authentication, initiating processing jobs, and fetching generated audio data.
+
+### 8.2. YouTube Video Dubbing Flow
+
+**8.2.1. Video Identification & Initiation:** (Largely unchanged, but clarify token source for SubtitleManager)
+
+1.  **Content Script (`content.ts`):**
+    - Detects YouTube video pages using `getYouTubeVideoIdFromUrl`.
+    - On user initiation via `DubbingPage.tsx` (which calls `initiateYouTubeDubbingProcess` in `movieSlice.ts`), a message `initializeYouTubeDubbing` is sent to `content.ts`. This message includes `videoId` (server DB ID), `youtubeUrl`, `languageCode`, and `dubbingVoice`.
+    - `content.ts` retrieves the auth token (e.g., via a new internal helper `getAuthToken()` that uses `chrome.storage.local.get("authToken")`) and the current video player's time (`initialVideoTimeMs` via a new public getter `dubbingManager.getCurrentVideoTimeMs()`). It then calls `dubbingManager.initializeForYouTube(...)` with these details, the token, and `initialVideoTimeMs`.
+
+**8.2.2. Transcription Fetching and Display (NEW SECTION / MODIFICATION):**
+
+1.  **`DubbingManager.ts` (`initializeForYouTube`):**
+
+    - Receives `videoId` (server ID), `languageCode`, and `token` from `content.ts`.
+    - Calls `this.subtitleManager.fetchAndSetYouTubeTranscription(videoId, languageCode, token)`.
+
+2.  **`SubtitleManager.ts` (`fetchAndSetYouTubeTranscription`):**
+
+    - Sends a `getYouTubeTranscription` message to `background.ts`, passing `videoId`, `languageCode`, and `token`.
+    - Receives transcription data from `background.ts`.
+    - Parses the transcription data (e.g., from server's JSON format of segments like `{start_time, end_time, text}`) into the internal `Subtitle[]` format (milliseconds for time, text).
+    - Calls its own `setActiveSubtitles(parsedSubtitles)` to store and sort the transcription.
+
+3.  **`Background.ts` (handler for `getYouTubeTranscription`):**
+
+    - Receives `videoId`, `languageCode`, `token`.
+    - Calls `api.getCompletedTranscriptionSegmentsApi({ videoId, language: languageCode }, token)`.
+    - The server action `video/getCompletedTranscriptionSegments` retrieves the full transcription data (e.g., `transcription_segments.content` for original, or a specific translation from `transcription_segments.translations`).
+    - `background.ts` returns the relevant transcription segments (array) to `SubtitleManager.ts`.
+
+4.  \*\*Displaying Subtitles (`DubbingManager.ts` -> `VideoManager.ts` / UI):
+    - `DubbingManager.sendCurrentSubtitleInfo` (called by `VideoManager.handlePreciseTime`):
+      - If `isYouTubeDubbingActive` is true, it now calls `this.subtitleManager.getCurrentSubtitles(currentTimeMs)` to get the actual transcription text for the current time.
+      - Sends these subtitles via `chrome.runtime.sendMessage({ action: "currentSubtitles", data: {..., subtitles: actualSubtitles, isYouTube: true } })`.
+    - The UI (`DubbingPage.tsx` or other components listening for `currentSubtitles`) can then display these. The `isYouTube: true` flag helps differentiate.
+
+**8.2.3. Audio Chunk Playback (Mostly unchanged, but note token source for chunks):**
+
+1.  **`DubbingManager.ts` (`playYouTubeAudioChunk` / `preloadYouTubeAudioChunks`):**
+    - When needing an audio chunk, it now internally calls `getAuthToken()` to retrieve the token just before calling `audioFileManager.getAudioBuffer(...)` which in turn messages `background.ts` for `generateAudioChunk`.
+    - `preloadYouTubeAudioChunks` is a new helper to proactively fetch upcoming chunks by calling `playYouTubeAudioChunk` with `isPreload = true`.
+
+**8.2.4. State Management in Content Script (`DubbingManager.ts`):** - `DubbingManagerState` now includes `isSrtDubbingActive` and `currentSrtName` for better context management. - Added helper methods `resetInternalState(softReset: boolean)` and `getDefaultState()` for improved state management. - Added `preloadYouTubeAudioChunks(startTimeMs, isInitialLoad)` for proactive audio fetching.
+
+**8.2.5. Configuration (`config.ts`):** - Added `youtubeInitialPreloadChunkCount` and `youtubeLookAheadChunkCount` for controlling YouTube audio preloading. - Added `defaultSubtitleOffset`.
+
+**8.2.6. Settings Management (`SettingsManager.ts` - NEW CLASS):** - A new `SettingsManager` class in `extension/content` is responsible for managing user-configurable settings (loading from/saving to `chrome.storage.local`). `DubbingManager` initializes it. - (Further details on its interaction can be added as it's fleshed out).
