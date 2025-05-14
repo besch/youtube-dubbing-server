@@ -2,7 +2,7 @@
 
 import { z } from "zod";
 import type { Tables } from "@/types/supabase";
-import { protectedAction } from "../safe-action";
+import { protectedAction, publicAction } from "../safe-action";
 import { supabaseServiceRoleClient } from "@/lib/supabase/serviceRoleClient";
 import { ActionResponse, AppError, AppErrorCode } from "../actions";
 import { config } from "@/config";
@@ -25,7 +25,7 @@ const generateAudioChunkSchema = z
     path: ["endTime"],
   });
 
-export const generateAudioChunk = protectedAction
+export const generateAudioChunk = publicAction
   .schema(generateAudioChunkSchema)
   .action(
     async ({ parsedInput }): Promise<ActionResponse<{ publicUrl: string }>> => {
