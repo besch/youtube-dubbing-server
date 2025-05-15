@@ -9,7 +9,7 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
 - **Project Structure:**
   - `mobile/`: Expo/React Native application (Client).
   - `server/`: Next.js backend (API, DB Interaction, Orchestration Trigger, Job Status Management).
-  - `youtube-download/`: Python FastAPI service (YouTube full audio download & upload).
+  - `youtube-download/`: Python FastAPI service (YouTube full audio download, SRT subtitle download/processing & upload).
   - `server/supabase/functions/`: Deno Edge Functions for orchestrating backend processing steps (e.g., `on-download-complete`, `on-transcription-complete`, `on-translation-complete`).
   - **REMOVED:** `audio-segmenter/`: Python FastAPI service (No longer needed with full audio transcription).
 - **Technology Stack:**
@@ -118,6 +118,7 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
   │   │   │   ├── internal/              # Internal actions (called by Supabase Functions)
   │   │   │   │   └── trigger-action/
   │   │   │   │       └── route.ts
+  │   │   │   │
   │   │   │   └── webhooks/              # External webhooks (Replicate)
   │   │   ├── actions/                   # Server action definitions (video.ts, videoInternal.ts)
   │   │   ├── (app)/
@@ -216,7 +217,30 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
 
 ## 4. Downloader Service (`youtube-download/`)
 
-- Unchanged conceptually, but its completion now triggers the `on-download-complete` Supabase Function.
+- This service is responsible for downloading full audio from YouTube videos and also for downloading/processing SRT subtitles.
+- **Audio Download (`/` endpoint in `app/main.py`):**
+  - Downloads audio, uploads to Supabase Storage (`youtube-audio` bucket).
+  - Updates `download_jobs` table in Supabase.
+  - Its completion (status update in `download_jobs`) triggers the `on-download-complete` Supabase Function (located in `server/supabase/functions/`), which then initiates the transcription process on the main server.
+- **SRT Subtitle Download & Processing (`/download-srt/` endpoint in `app/main.py`):**
+  - Accepts a YouTube URL and a target language code.
+  - **Language Fallback Strategy:**
+    - Attempts to download subtitles directly in the target language.
+    - If not found, it searches for English (`en`) subtitles to use as a source.
+    - If English is not found, it attempts to use any other available language as a source for translation.
+  - **Formatting (via `app/services/subtitle_formatter.py`):**
+    - **If translation is NOT required** (i.e., subtitles are successfully downloaded in the target language):
+      - The raw downloaded SRT content is processed by the `subtitle_formatter.clean_srt_content` function.
+      - This function parses the SRT content, removes duplicate consecutive subtitle lines (to reduce stutter common in auto-captions), and then reconstructs it back into a valid SRT formatted string.
+      - The cleaned SRT string is returned as the response.
+    - **If translation IS required** (i.e., subtitles were downloaded in a source language different from the target):
+      - The raw downloaded SRT content is first processed by `subtitle_formatter.format_subtitle_text_for_translation`.
+      - This function parses the SRT, removes duplicate consecutive lines, concatenates all subtitle text into a single block (normalizing internal newlines to spaces), and then splits this block into a list of complete sentences (primarily using `.`, `?`, `!` as delimiters).
+      - This list of sentences is then passed to the translation service (`app/services/subtitle_translator.py`).
+      - The translated sentences (typically joined into a single text block by the translator) are returned as the response.
+  - **Translation (via `app/services/subtitle_translator.py`):**
+    - If source subtitles need translation, the list of formatted sentences (from `format_subtitle_text_for_translation`) is translated in chunks.
+    - This process uses the Gemini API (e.g., `gemini-1.5-flash-latest` model) for the actual translation task.
 
 ## 5. Audio Segmenter Service (`audio-segmenter/`)
 
