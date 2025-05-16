@@ -22,9 +22,6 @@ try {
     googleTtsClient = new TextToSpeechClient({
       apiKey: config.apiKeys.googleApiKey,
     });
-    console.log(
-      "Google Text-to-Speech client initialized successfully using API Key."
-    );
   } else {
     // This case should ideally not be reached if the check above is strict
     // or if the env var is guaranteed, but handle defensively.

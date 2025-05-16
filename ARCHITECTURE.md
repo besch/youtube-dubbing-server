@@ -222,7 +222,7 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
   - Downloads audio, uploads to Supabase Storage (`youtube-audio` bucket).
   - Updates `download_jobs` table in Supabase.
   - Its completion (status update in `download_jobs`) triggers the `on-download-complete` Supabase Function (located in `server/supabase/functions/`), which then initiates the transcription process on the main server.
-- **SRT Subtitle Download & Processing (`/download-srt/` endpoint in `app/main.py`):**
+- **SRT Subtitle Download & Processing (`/download-srt` endpoint in `app/main.py`):**
   - Accepts a YouTube URL and a target language code.
   - **Language Fallback Strategy:**
     - Attempts to download subtitles directly in the target language.
