@@ -26,6 +26,7 @@ import {
 // Import the new actions
 import { searchMovies } from "@/app/actions/movie/search";
 import { fetchSubtitles } from "@/app/actions/subtitle/fetch";
+import { fetchYouTubeSubtitles } from "@/app/actions/subtitle/fetch-youtube";
 import { AppError, AppErrorCode } from "@/app/actions/actions";
 
 type ActionFunction = (input: any) => Promise<any>;
@@ -47,6 +48,7 @@ const actionRegistry: Record<string, ActionFunction> = {
   "video/getVideoByUrl": getVideoByUrl,
   "movie/search": searchMovies,
   "subtitle/fetch": fetchSubtitles,
+  "subtitle/fetch-youtube": fetchYouTubeSubtitles,
 };
 
 export async function POST(request: NextRequest) {
