@@ -309,52 +309,67 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
 
 ### 8.1. Overview
 
-The Chrome Extension allows users to apply dubbing directly while watching videos on youtube.com. It interacts with the existing backend server (`server/`) for authentication, initiating processing jobs, and fetching generated audio data.
+The Chrome Extension allows users to apply dubbing directly while watching videos on youtube.com or other supported movie/show platforms. It interacts with the existing backend server (`server/`) for initiating processing jobs (for movies/shows that require backend processing) and fetching generated audio data or subtitles. For YouTube videos, it can fetch subtitles directly without backend processing status tracking.
 
-### 8.2. YouTube Video Dubbing Flow
+### 8.2. Extension User Flow
 
-**8.2.1. Video Identification & Initiation:** (Largely unchanged, but clarify token source for SubtitleManager)
+1.  **Video Detection & UI (`MovieSearchPage.tsx`, `MovieSearch.tsx`):**
 
-1.  **Content Script (`content.ts`):**
-    - Detects YouTube video pages using `getYouTubeVideoIdFromUrl`.
-    - On user initiation via `DubbingPage.tsx` (which calls `initiateYouTubeDubbingProcess` in `movieSlice.ts`), a message `initializeYouTubeDubbing` is sent to `content.ts`. This message includes `videoId` (server DB ID), `youtubeUrl`, `languageCode`, and `dubbingVoice`.
-    - `content.ts` retrieves the auth token (e.g., via a new internal helper `getAuthToken()` that uses `chrome.storage.local.get("authToken")`) and the current video player's time (`initialVideoTimeMs` via a new public getter `dubbingManager.getCurrentVideoTimeMs()`). It then calls `dubbingManager.initializeForYouTube(...)` with these details, the token, and `initialVideoTimeMs`.
+    - The extension popup opens to `MovieSearchPage.tsx`.
+    - It detects if the current tab is a YouTube video page.
+    - **YouTube Video Flow:**
+      - If a YouTube video is detected, a prominent button "Dub Current YouTube Video" (or similar) is shown.
+      - Clicking this button dispatches `fetchAndPrepareYouTubeSubtitles` from `movieSlice.ts`. This thunk uses the globally selected language (from extension settings/Redux state) to fetch SRT subtitles directly via the `/download-srt` endpoint of the `youtube-download` service.
+      - If successful, the SRT content is stored in Redux, and the UI navigates to `DubbingPage.tsx`.
+    - **Movie/Show Search Flow:**
+      - Users can search for movies or shows using the `MovieSearch.tsx` component.
+      - When a movie/show is selected from the search results:
+        - The selected item is displayed on `MovieSearchPage.tsx` (e.g., using `MovieCard.tsx`).
+        - If the selected item is a series, input fields for season and episode numbers appear.
+        - A "Fetch Subtitles" button is displayed.
+      - Clicking "Fetch Subtitles":
+        - Dispatches `selectSubtitle` from `movieSlice.ts`. This thunk uses the selected movie's IMDb ID, the globally selected language, season/episode numbers (if applicable), and the current tab's URL (for context, though subtitles are primarily fetched by IMDb ID) to get SRT subtitles from the backend (which in turn might use OpenSubtitles or similar providers).
+        - If successful, the SRT content is stored in Redux, and the UI navigates to `DubbingPage.tsx`.
+    - **SRT Upload:** Users can also upload an SRT file directly using `SubtitleUpload.tsx`. This also stores the SRT in Redux and navigates to `DubbingPage.tsx`.
+    - Global language for dubbing is managed via `SettingsPage.tsx` and stored in Redux.
 
-**8.2.2. Transcription Fetching and Display (NEW SECTION / MODIFICATION):**
+2.  **Dubbing Activation (`DubbingPage.tsx`):**
 
-1.  **`DubbingManager.ts` (`initializeForYouTube`):**
+    - This page displays information about the selected movie/show or active YouTube URL, and the selected language.
+    - It provides controls (`DubbingControls.tsx`) to start/stop the dubbing process.
+    - Clicking "Start Dubbing":
+      - Dispatches `toggleDubbingProcess` from `movieSlice.ts`.
+      - This thunk sends a message (`initializeDubbing` or `initializeYouTubeDubbing`) to the content script (`content.ts`).
+      - The message includes the SRT content, language code, voice selection, and relevant IDs (IMDb ID for movies, YouTube video ID string for YouTube).
 
-    - Receives `videoId` (server ID), `languageCode`, and `token` from `content.ts`.
-    - Calls `this.subtitleManager.fetchAndSetYouTubeTranscription(videoId, languageCode, token)`.
+3.  **Content Script (`content.ts`):**
 
-2.  **`SubtitleManager.ts` (`fetchAndSetYouTubeTranscription`):**
+    - Receives the initialization message.
+    - Sets up `DubbingManager.ts` with the provided SRT content and other parameters.
+    - `DubbingManager` uses `SubtitleManager` to parse and manage subtitles from the SRT.
+    - `VideoManager` tracks video player state and time.
+    - When dubbing is active, `AudioFileManager` (via `DubbingManager`) requests audio chunks from `background.ts` for the current subtitle text.
 
-    - Sends a `getYouTubeTranscription` message to `background.ts`, passing `videoId`, `languageCode`, and `token`.
-    - Receives transcription data from `background.ts`.
-    - Parses the transcription data (e.g., from server's JSON format of segments like `{start_time, end_time, text}`) into the internal `Subtitle[]` format (milliseconds for time, text).
-    - Calls its own `setActiveSubtitles(parsedSubtitles)` to store and sort the transcription.
+4.  **Background Script (`background.ts`):**
 
-3.  **`Background.ts` (handler for `getYouTubeTranscription`):**
+    - Handles `generateAudioChunk` messages from the content script.
+    - **For YouTube videos (direct TTS):** It will call a simplified server action (e.g., `audio/generateDubbingAudioDirect`) that takes text, language, and voice, and returns a TTS audio URL directly, without database interaction for video processing status.
+    - **For movies/shows (potentially with backend processing):** If the flow involved `initiateVideoProcessingJob` (not the case for the simplified YouTube flow described above, but kept for general movie dubbing that might still use backend jobs), it would interact with actions that might check database job statuses or fetch pre-generated chunks. However, the primary mode now for the extension after subtitle acquisition is on-demand TTS.
 
-    - Receives `videoId`, `languageCode`, `token`.
-    - Calls `api.getCompletedTranscriptionSegmentsApi({ videoId, language: languageCode }, token)`.
-    - The server action `video/getCompletedTranscriptionSegments` retrieves the full transcription data (e.g., `transcription_segments.content` for original, or a specific translation from `transcription_segments.translations`).
-    - `background.ts` returns the relevant transcription segments (array) to `SubtitleManager.ts`.
+5.  **Audio Playback & Subtitle Display:**
+    - `DubbingManager` coordinates playing audio chunks synchronized with video playback.
+    - It also sends current subtitle information to the popup UI (`DubbingPage.tsx`) for display if needed.
 
-4.  \*\*Displaying Subtitles (`DubbingManager.ts` -> `VideoManager.ts` / UI):
-    - `DubbingManager.sendCurrentSubtitleInfo` (called by `VideoManager.handlePreciseTime`):
-      - If `isYouTubeDubbingActive` is true, it now calls `this.subtitleManager.getCurrentSubtitles(currentTimeMs)` to get the actual transcription text for the current time.
-      - Sends these subtitles via `chrome.runtime.sendMessage({ action: "currentSubtitles", data: {..., subtitles: actualSubtitles, isYouTube: true } })`.
-    - The UI (`DubbingPage.tsx` or other components listening for `currentSubtitles`) can then display these. The `isYouTube: true` flag helps differentiate.
+**Simplified YouTube Flow (No Backend DB Job for the Video):**
 
-**8.2.3. Audio Chunk Playback (Mostly unchanged, but note token source for chunks):**
+1.  User on YouTube, opens extension.
+2.  `MovieSearchPage.tsx` shows "Dub Current YouTube Video".
+3.  User clicks button -> `fetchAndPrepareYouTubeSubtitles` (gets SRT for current YouTube video ID and global language).
+4.  Navigate to `DubbingPage.tsx`. SRT content is now in Redux.
+5.  User clicks "Start Dubbing" -> `toggleDubbingProcess` sends `initializeYouTubeDubbing` to `content.ts` with SRT, YouTube video ID string, language, voice.
+6.  `content.ts` initializes. `AudioFileManager` requests audio for current subtitle text from `background.ts`.
+7.  `background.ts` calls a direct TTS server action (no DB `videoId` needed, just text, lang, voice).
+8.  Audio plays.
 
-1.  **`DubbingManager.ts` (`playYouTubeAudioChunk` / `preloadYouTubeAudioChunks`):**
-    - When needing an audio chunk, it now internally calls `getAuthToken()` to retrieve the token just before calling `audioFileManager.getAudioBuffer(...)` which in turn messages `background.ts` for `generateAudioChunk`.
-    - `preloadYouTubeAudioChunks` is a new helper to proactively fetch upcoming chunks by calling `playYouTubeAudioChunk` with `isPreload = true`.
-
-**8.2.4. State Management in Content Script (`DubbingManager.ts`):** - `DubbingManagerState` now includes `isSrtDubbingActive` and `currentSrtName` for better context management. - Added helper methods `resetInternalState(softReset: boolean)` and `getDefaultState()` for improved state management. - Added `preloadYouTubeAudioChunks(startTimeMs, isInitialLoad)` for proactive audio fetching.
-
-**8.2.5. Configuration (`config.ts`):** - Added `youtubeInitialPreloadChunkCount` and `youtubeLookAheadChunkCount` for controlling YouTube audio preloading. - Added `defaultSubtitleOffset`.
-
-**8.2.6. Settings Management (`SettingsManager.ts` - NEW CLASS):** - A new `SettingsManager` class in `extension/content` is responsible for managing user-configurable settings (loading from/saving to `chrome.storage.local`). `DubbingManager` initializes it. - (Further details on its interaction can be added as it's fleshed out).
+This revised flow removes the `LanguageSelectionPage.tsx` and streamlines the process by initiating subtitle fetching directly from `MovieSearchPage.tsx` for both movies and YouTube videos, then proceeding to `DubbingPage.tsx`.
+The core backend processing for _movies and shows that might still use the job system_ (initiated via `initiateVideoProcessingJobApi` by the mobile app) remains largely the same on the server-side as described in sections 3-6, but the Chrome Extension's primary interaction after acquiring subtitles is geared towards on-demand TTS.
