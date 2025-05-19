@@ -988,9 +988,9 @@ const getVideoByUrlSchema = z.object({
 });
 
 interface GetVideoByUrlOutput {
-  id: string;
-  processing_status: Tables<"videos">["processing_status"];
-  duration: number | null;
+  youtube_id: string;
+  title: string;
+  thumbnail_url: string | null;
 }
 
 export const getVideoByUrl = publicAction
@@ -1013,25 +1013,28 @@ export const getVideoByUrl = publicAction
       }
 
       try {
-        const supabase = supabaseServiceRoleClient;
+        const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(
+          youtubeUrl
+        )}&format=json`;
+        console.log(`Fetching oEmbed metadata from: ${oembedUrl}`);
+        const oembedResponse = await fetch(oembedUrl);
 
-        const { data: existingVideo, error: videoCheckError } = await supabase
-          .from("videos")
-          .select("id, processing_status, duration")
-          .eq("youtube_id", youtubeId)
-          .maybeSingle();
-
-        if (videoCheckError) {
-          console.error("Error fetching video by youtube_id:", videoCheckError);
-          throw appErrors.DATABASE_ERROR;
-        }
-
-        if (!existingVideo) {
-          // Return success with null data if video not found
+        if (!oembedResponse.ok) {
+          console.warn(
+            `oEmbed request for ${youtubeId} failed with status ${oembedResponse.status}.`
+          );
           return { success: true, data: null };
         }
 
-        return { success: true, data: existingVideo };
+        const oembedData = await oembedResponse.json();
+        return {
+          success: true,
+          data: {
+            youtube_id: youtubeId,
+            title: oembedData.title || "Untitled Video",
+            thumbnail_url: oembedData.thumbnail_url || null,
+          },
+        };
       } catch (error: any) {
         console.error("Error in getVideoByUrl action:", error);
         if (error instanceof AppError) {
