@@ -22,10 +22,11 @@ import { toast } from "sonner";
 import { Check } from "lucide-react";
 import type { Database } from "@/types/supabase";
 
-type Profile = Pick<
-  Database["public"]["Tables"]["profiles"]["Row"],
-  "id" | "subscription_status" | "stripe_customer_id" | "daily_video_count"
->;
+type Profile = {
+  id: string;
+  subscription_status: "free" | "premium";
+  daily_video_count: number;
+};
 
 interface SubscriptionPlansProps {
   profile: Profile | null;

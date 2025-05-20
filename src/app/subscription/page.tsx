@@ -12,17 +12,18 @@ export default async function SubscriptionPage() {
   const supabase = createServerComponentClient({ cookies });
 
   const {
-    data: { session },
-  } = await supabase.auth.getSession();
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
 
   let profile = null;
 
   // Only try to get profile if user is authenticated
-  if (session) {
+  if (user && !userError) {
     const { data, error: profileError } = await supabase
       .from("profiles")
-      .select("id, subscription_status, stripe_customer_id, daily_video_count")
-      .eq("id", session.user.id)
+      .select("id, subscription_status, daily_video_count")
+      .eq("id", user.id)
       .single();
 
     if (profileError && profileError.code !== "PGRST116") {
@@ -33,16 +34,21 @@ export default async function SubscriptionPage() {
         hint: profileError.hint,
       });
     } else if (data) {
-      profile = data;
-    } else if (session) {
+      // Create a plain object with only the needed fields
+      profile = {
+        id: data.id,
+        subscription_status: data.subscription_status,
+        daily_video_count: data.daily_video_count,
+      };
+    } else {
       // If no profile exists but user is authenticated, create one
       const { data: newProfile, error: createError } = await supabase
         .from("profiles")
         .insert({
-          id: session.user.id,
-          email: session.user.email,
-          full_name: session.user.user_metadata?.full_name || null,
-          avatar_url: session.user.user_metadata?.avatar_url || null,
+          id: user.id,
+          email: user.email,
+          full_name: user.user_metadata?.full_name || null,
+          avatar_url: user.user_metadata?.avatar_url || null,
           subscription_status: "free",
           daily_video_count: 0,
           settings: {
@@ -50,20 +56,32 @@ export default async function SubscriptionPage() {
             default_language: "en",
           },
         })
-        .select(
-          "id, subscription_status, stripe_customer_id, daily_video_count"
-        )
+        .select("id, subscription_status, daily_video_count")
         .single();
 
-      if (!createError) {
-        profile = newProfile;
+      if (!createError && newProfile) {
+        // Create a plain object with only the needed fields
+        profile = {
+          id: newProfile.id,
+          subscription_status: newProfile.subscription_status,
+          daily_video_count: newProfile.daily_video_count,
+        };
       }
     }
   }
 
+  // Create a serializable profile object
+  const serializedProfile = profile
+    ? {
+        id: profile.id,
+        subscription_status: profile.subscription_status,
+        daily_video_count: profile.daily_video_count,
+      }
+    : null;
+
   return (
     <div className="container py-10">
-      <SubscriptionPlans profile={profile} />
+      <SubscriptionPlans profile={serializedProfile} />
     </div>
   );
 }
