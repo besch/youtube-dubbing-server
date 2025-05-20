@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { createBrowserClient } from "@supabase/ssr";
+import { createSubscription } from "@/app/actions/subscription";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -11,214 +11,98 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Icons } from "@/components/icons";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { toast } from "sonner";
-import { Check } from "lucide-react";
+import { CheckCircle2Icon } from "lucide-react";
 import type { Database } from "@/types/supabase";
-import {
-  createSubscription,
-  createCustomerPortal,
-} from "@/app/actions/subscription";
+import type { ActionResponse } from "@/types/actions";
 
-type Profile = {
-  id: string;
-  subscription_status: "free" | "premium";
-  daily_video_count: number;
-};
+type Profile = Database["public"]["Tables"]["profiles"]["Row"];
 
 interface SubscriptionPlansProps {
-  profile: Profile | null;
+  profile: Profile;
 }
 
+const plans = [
+  {
+    name: "Monthly",
+    price: "$9.99",
+    description: "Billed monthly",
+    priceId: process.env.NEXT_PUBLIC_STRIPE_MONTHLY_PRICE_ID,
+    period: "month",
+  },
+  {
+    name: "Yearly",
+    price: "$99.99",
+    description: "Billed annually (Save 17%)",
+    priceId: process.env.NEXT_PUBLIC_STRIPE_YEARLY_PRICE_ID,
+    period: "year",
+  },
+];
+
+const features = ["Unlimited video dubbing", "Cancel anytime"];
+
 export function SubscriptionPlans({ profile }: SubscriptionPlansProps) {
-  const router = useRouter();
-  const [isLoading, setIsLoading] = useState(false);
-  const supabase = createBrowserClient<Database>(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
+  const [isLoading, setIsLoading] = useState<string | null>(null);
 
-  const currentPlan = profile?.subscription_status || "free";
-
-  const handleUpgrade = async () => {
+  const handleSubscribe = async (priceId: string) => {
     try {
-      setIsLoading(true);
-      console.log("Starting subscription upgrade...");
+      setIsLoading(priceId);
+      const result = await createSubscription({ priceId });
 
-      // Get user directly
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (userError || !user) {
-        console.error("No authenticated user:", userError);
-        toast.error("Please sign in to upgrade your subscription");
-        router.push("/login");
+      if (result.serverError) {
+        console.error("Server error:", result.serverError);
         return;
       }
 
-      const result = await createSubscription({
-        priceId: process.env.NEXT_PUBLIC_STRIPE_MONTHLY_PRICE_ID!,
-      });
-
-      console.log("Subscription action result:", result);
-
-      if (!result.data?.success) {
-        const errorMessage =
-          result.data?.error?.message ||
-          result.serverError ||
-          "Failed to create subscription";
-        console.error("Subscription failed:", errorMessage);
-        toast.error(errorMessage);
+      if (result.validationError) {
+        console.error("Validation error:", result.validationError);
         return;
       }
 
-      if (!result.data.data?.url) {
-        console.error("No checkout URL in response");
-        toast.error("Failed to create checkout session");
-        return;
+      if (result.data?.success && result.data.data?.url) {
+        window.location.href = result.data.data.url;
+      } else {
+        console.error("No checkout URL received from Stripe");
       }
-
-      console.log("Redirecting to checkout URL:", result.data.data.url);
-      router.push(result.data.data.url);
     } catch (error) {
-      console.error("Subscription error:", error);
-      toast.error("Failed to create subscription. Please try again.");
+      console.error("Error creating subscription:", error);
     } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleManageSubscription = async () => {
-    try {
-      setIsLoading(true);
-
-      // Check auth state before proceeding
-      const {
-        data: { session },
-        error: sessionError,
-      } = await supabase.auth.getSession();
-
-      if (sessionError || !session) {
-        console.error("No active session:", sessionError);
-        toast.error("Please sign in to manage your subscription");
-        router.push("/login");
-        return;
-      }
-
-      const result = await createCustomerPortal({});
-
-      if (!result.data?.success || !result.data.data?.url) {
-        throw new Error(
-          result.serverError || "Failed to create customer portal session"
-        );
-      }
-
-      router.push(result.data.data.url);
-    } catch (error) {
-      console.error("Customer portal error:", error);
-      toast.error("Failed to open customer portal. Please try again.");
-    } finally {
-      setIsLoading(false);
+      setIsLoading(null);
     }
   };
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h3 className="text-lg font-medium">Subscription Plans</h3>
-        <p className="text-sm text-muted-foreground">
-          Choose the plan that best fits your needs
-        </p>
-      </div>
-      <div className="grid gap-6 lg:grid-cols-2">
-        <Card>
+    <div className="grid md:grid-cols-2 gap-8 max-w-5xl mx-auto">
+      {plans.map((plan) => (
+        <Card key={plan.name} className="flex flex-col">
           <CardHeader>
-            <CardTitle>Free Plan</CardTitle>
-            <CardDescription>Basic features for casual users</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              <div className="flex items-center">
-                <Check className="mr-2 h-4 w-4 text-green-500" />
-                <span>Basic dubbing features</span>
-              </div>
-              <div className="flex items-center">
-                <Check className="mr-2 h-4 w-4 text-green-500" />
-                <span>Standard quality audio</span>
-              </div>
-              <div className="flex items-center">
-                <Check className="mr-2 h-4 w-4 text-green-500" />
-                <span>Limited monthly usage</span>
-              </div>
+            <CardTitle className="text-2xl">{plan.name}</CardTitle>
+            <div className="mt-2">
+              <span className="text-4xl font-bold">{plan.price}</span>
+              <span className="text-muted-foreground"> / {plan.period}</span>
             </div>
+            <CardDescription>{plan.description}</CardDescription>
+          </CardHeader>
+          <CardContent className="flex-grow">
+            <ul className="space-y-3">
+              {features.map((feature) => (
+                <li key={feature} className="flex items-center space-x-2">
+                  <CheckCircle2Icon className="h-5 w-5 text-green-500" />
+                  <span>{feature}</span>
+                </li>
+              ))}
+            </ul>
           </CardContent>
           <CardFooter>
             <Button
-              variant={currentPlan === "free" ? "default" : "outline"}
+              onClick={() => handleSubscribe(plan.priceId!)}
+              disabled={isLoading === plan.priceId}
               className="w-full"
-              disabled={currentPlan === "free"}
-              onClick={handleManageSubscription}
             >
-              {currentPlan === "free" ? "Current Plan" : "Downgrade"}
+              {isLoading === plan.priceId ? "Loading..." : "Subscribe Now"}
             </Button>
           </CardFooter>
         </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Premium Plan</CardTitle>
-            <CardDescription>Advanced features for power users</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              <div className="flex items-center">
-                <Check className="mr-2 h-4 w-4 text-green-500" />
-                <span>All Free features</span>
-              </div>
-              <div className="flex items-center">
-                <Check className="mr-2 h-4 w-4 text-green-500" />
-                <span>High-quality audio</span>
-              </div>
-              <div className="flex items-center">
-                <Check className="mr-2 h-4 w-4 text-green-500" />
-                <span>Unlimited usage</span>
-              </div>
-              <div className="flex items-center">
-                <Check className="mr-2 h-4 w-4 text-green-500" />
-                <span>Priority support</span>
-              </div>
-            </div>
-          </CardContent>
-          <CardFooter>
-            <Button
-              variant={currentPlan === "premium" ? "default" : "outline"}
-              className="w-full"
-              disabled={isLoading}
-              onClick={
-                currentPlan === "premium"
-                  ? handleManageSubscription
-                  : handleUpgrade
-              }
-            >
-              {isLoading ? (
-                <span className="flex items-center">
-                  <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
-                  Processing...
-                </span>
-              ) : currentPlan === "premium" ? (
-                "Manage Subscription"
-              ) : (
-                "Upgrade to Premium"
-              )}
-            </Button>
-          </CardFooter>
-        </Card>
-      </div>
+      ))}
     </div>
   );
 }

@@ -1,7 +1,9 @@
 import { Metadata } from "next";
-import { createServerClient } from "@supabase/ssr";
+import { createClient } from "@/lib/supabase/server";
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { SubscriptionPlans } from "@/components/subscription/subscription-plans";
+import { SubscriptionStatus } from "@/components/subscription/subscription-status";
 
 export const metadata: Metadata = {
   title: "Subscription",
@@ -10,95 +12,35 @@ export const metadata: Metadata = {
 
 export default async function SubscriptionPage() {
   const cookieStore = cookies();
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        get(name: string) {
-          return cookieStore.get(name)?.value;
-        },
-        set(name: string, value: string, options: any) {
-          cookieStore.set({ name, value, ...options });
-        },
-        remove(name: string, options: any) {
-          cookieStore.set({ name, value: "", ...options });
-        },
-      },
-    }
-  );
+  const supabase = createClient(cookieStore);
 
   const {
-    data: { user },
-    error: userError,
-  } = await supabase.auth.getUser();
+    data: { session },
+  } = await supabase.auth.getSession();
 
-  let profile = null;
-
-  // Only try to get profile if user is authenticated
-  if (user && !userError) {
-    const { data, error: profileError } = await supabase
-      .from("profiles")
-      .select("id, subscription_status, daily_video_count")
-      .eq("id", user.id)
-      .single();
-
-    if (profileError && profileError.code !== "PGRST116") {
-      console.error("Profile error details:", {
-        code: profileError.code,
-        message: profileError.message,
-        details: profileError.details,
-        hint: profileError.hint,
-      });
-    } else if (data) {
-      // Create a plain object with only the needed fields
-      profile = {
-        id: data.id,
-        subscription_status: data.subscription_status,
-        daily_video_count: data.daily_video_count,
-      };
-    } else {
-      // If no profile exists but user is authenticated, create one
-      const { data: newProfile, error: createError } = await supabase
-        .from("profiles")
-        .insert({
-          id: user.id,
-          email: user.email,
-          full_name: user.user_metadata?.full_name || null,
-          avatar_url: user.user_metadata?.avatar_url || null,
-          subscription_status: "free",
-          daily_video_count: 0,
-          settings: {
-            voice_mapping: { default: "alloy" },
-            default_language: "en",
-          },
-        })
-        .select("id, subscription_status, daily_video_count")
-        .single();
-
-      if (!createError && newProfile) {
-        // Create a plain object with only the needed fields
-        profile = {
-          id: newProfile.id,
-          subscription_status: newProfile.subscription_status,
-          daily_video_count: newProfile.daily_video_count,
-        };
-      }
-    }
+  if (!session?.user) {
+    redirect("/login");
   }
 
-  // Create a serializable profile object
-  const serializedProfile = profile
-    ? {
-        id: profile.id,
-        subscription_status: profile.subscription_status,
-        daily_video_count: profile.daily_video_count,
-      }
-    : null;
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("*")
+    .eq("id", session.user.id)
+    .single();
+
+  if (!profile) {
+    redirect("/login");
+  }
 
   return (
-    <div className="container py-10">
-      <SubscriptionPlans profile={serializedProfile} />
+    <div className="container mx-auto px-4 py-8">
+      <h1 className="text-3xl font-bold mb-8">Subscription</h1>
+
+      {profile.subscription_status === "premium" ? (
+        <SubscriptionStatus profile={profile} />
+      ) : (
+        <SubscriptionPlans profile={profile} />
+      )}
     </div>
   );
 }
