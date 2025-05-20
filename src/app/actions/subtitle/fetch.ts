@@ -5,8 +5,8 @@ import fetch from "node-fetch"; // Keep for subdl calls
 import unzipper from "unzipper";
 import iconv from "iconv-lite";
 import detectEncoding from "detect-file-encoding-and-language";
+import { createSafeActionClient } from "next-safe-action";
 
-import { publicAction } from "../safe-action";
 import { ActionResponse, AppError, AppErrorCode } from "../actions";
 import { translateSubtitles } from "@/lib/subtitles"; // Assuming this path is correct
 
@@ -19,6 +19,8 @@ const fetchSubtitlesSchema = z.object({
   seasonNumber: z.number().int().min(1).optional(),
   episodeNumber: z.number().int().min(1).optional(),
 });
+
+type FetchSubtitlesInput = z.infer<typeof fetchSubtitlesSchema>;
 
 export interface FetchSubtitlesOutput {
   srtContent: string;
@@ -297,56 +299,57 @@ async function downloadAndExtractSubtitle(
 }
 
 // Create the safe action
-export const fetchSubtitles = publicAction
-  .schema(fetchSubtitlesSchema)
-  .action(
-    async ({ parsedInput }): Promise<ActionResponse<FetchSubtitlesOutput>> => {
-      const { imdbID, languageCode, seasonNumber, episodeNumber } = parsedInput;
+export const fetchSubtitles = createSafeActionClient()(
+  fetchSubtitlesSchema,
+  async (
+    input: FetchSubtitlesInput
+  ): Promise<ActionResponse<FetchSubtitlesOutput>> => {
+    const { imdbID, languageCode, seasonNumber, episodeNumber } = input;
 
-      console.log(
-        `Fetching subtitles for IMDb: ${imdbID}, Lang: ${languageCode}, S: ${seasonNumber}, E: ${episodeNumber}`
+    console.log(
+      `Fetching subtitles for IMDb: ${imdbID}, Lang: ${languageCode}, S: ${seasonNumber}, E: ${episodeNumber}`
+    );
+
+    try {
+      const subtitleResult = await getOrGenerateSubtitles(
+        imdbID,
+        languageCode,
+        seasonNumber,
+        episodeNumber
       );
 
-      try {
-        const subtitleResult = await getOrGenerateSubtitles(
-          imdbID,
-          languageCode,
-          seasonNumber,
-          episodeNumber
+      if (!subtitleResult || typeof subtitleResult.srtContent !== "string") {
+        console.error(
+          `FetchSubtitles: getOrGenerateSubtitles returned unexpected data for ${imdbID}. Result:`,
+          subtitleResult
         );
-
-        if (!subtitleResult || typeof subtitleResult.srtContent !== "string") {
-          console.error(
-            `FetchSubtitles: getOrGenerateSubtitles returned unexpected data for ${imdbID}. Result:`,
-            subtitleResult
-          );
-          return {
-            success: false,
-            error: new AppError(
-              AppErrorCode.UNEXPECTED_ERROR,
-              "Subtitle generation process returned invalid data."
-            ),
-          };
-        }
-
-        const { srtContent, generated } = subtitleResult;
-
-        console.log(
-          `Successfully fetched/generated subtitles for ${imdbID}. Generated: ${generated}, SRT Length: ${srtContent.length}`
-        );
-        return { success: true, data: { srtContent, generated } };
-      } catch (error: unknown) {
-        console.error("Error in fetchSubtitles action:", error);
-        if (error instanceof AppError) {
-          return { success: false, error };
-        }
         return {
           success: false,
           error: new AppError(
             AppErrorCode.UNEXPECTED_ERROR,
-            error instanceof Error ? error.message : "Failed to fetch subtitles"
+            "Subtitle generation process returned invalid data."
           ),
         };
       }
+
+      const { srtContent, generated } = subtitleResult;
+
+      console.log(
+        `Successfully fetched/generated subtitles for ${imdbID}. Generated: ${generated}, SRT Length: ${srtContent.length}`
+      );
+      return { success: true, data: { srtContent, generated } };
+    } catch (error: unknown) {
+      console.error("Error in fetchSubtitles action:", error);
+      if (error instanceof AppError) {
+        return { success: false, error };
+      }
+      return {
+        success: false,
+        error: new AppError(
+          AppErrorCode.UNEXPECTED_ERROR,
+          error instanceof Error ? error.message : "Failed to fetch subtitles"
+        ),
+      };
     }
-  );
+  }
+);

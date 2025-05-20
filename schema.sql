@@ -140,12 +140,12 @@ CREATE OR REPLACE FUNCTION "public"."handle_new_user"() RETURNS "trigger"
     SET "search_path" TO 'public'
     AS $$
 begin
-  insert into public.profiles (id, email, display_name, avatar_url)
+  insert into public.profiles (id, email, full_name, avatar_url)
   values (
     new.id,
     new.email,
-    new.raw_user_meta_data->>'full_name', -- Adjust if using different metadata for display name
-    new.raw_user_meta_data->>'avatar_url' -- Adjust if using different metadata for avatar
+    new.raw_user_meta_data->>'full_name',
+    new.raw_user_meta_data->>'avatar_url'
   );
   return new;
 end;
@@ -274,10 +274,13 @@ ALTER TABLE "public"."history" OWNER TO "postgres";
 CREATE TABLE IF NOT EXISTS "public"."profiles" (
     "id" "uuid" NOT NULL,
     "email" "text" NOT NULL,
-    "display_name" "text",
+    "full_name" "text",
     "avatar_url" "text",
-    "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
-    "updated_at" timestamp with time zone DEFAULT "now"() NOT NULL,
+    "subscription_status" "text" NOT NULL DEFAULT 'free' CHECK ("subscription_status" IN ('free', 'premium')),
+    "daily_video_count" "integer" NOT NULL DEFAULT 0,
+    "stripe_customer_id" "text" UNIQUE,
+    "created_at" timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL,
+    "updated_at" timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL,
     "settings" "jsonb" DEFAULT '{"voice_mapping": {"default": "alloy"}, "default_language": "en"}'::"jsonb" NOT NULL,
     "has_completed_onboarding" BOOLEAN DEFAULT false
 );

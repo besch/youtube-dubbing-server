@@ -1,14 +1,14 @@
 import { Metadata } from "next";
 import { createServerClient } from "@/lib/supabase";
-import { VideoProcessor } from "@/components/video/video-processor";
+import { UserProfile } from "@/components/user/user-profile";
 import { redirect } from "next/navigation";
 
 export const metadata: Metadata = {
-  title: "YouTube Dubbing",
-  description: "Watch YouTube videos with AI-generated dubbing",
+  title: "Profile",
+  description: "Manage your account settings and subscription",
 };
 
-export default async function HomePage() {
+export default async function ProfilePage() {
   const supabase = createServerClient();
 
   const {
@@ -21,7 +21,7 @@ export default async function HomePage() {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("subscription_status, daily_video_count")
+    .select("*")
     .eq("id", user.id)
     .single();
 
@@ -29,12 +29,5 @@ export default async function HomePage() {
     redirect("/login");
   }
 
-  return (
-    <div className="container py-8">
-      <VideoProcessor
-        subscriptionStatus={profile.subscription_status}
-        dailyVideoCount={profile.daily_video_count}
-      />
-    </div>
-  );
+  return <UserProfile profile={profile} />;
 }

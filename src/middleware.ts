@@ -1,38 +1,57 @@
+import { createMiddlewareClient } from "@supabase/auth-helpers-nextjs";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { updateIpAddress } from "./app/actions/subscription";
 
-export function middleware(request: NextRequest) {
-  const url = request.nextUrl.clone();
-  const userAgent = request.headers.get("user-agent") || "";
-  const isMobileApp =
-    userAgent.includes("Expo") ||
-    userAgent.includes("expo") ||
-    userAgent.includes("ReactNative");
+export async function middleware(request: NextRequest) {
+  const res = NextResponse.next();
+  const supabase = createMiddlewareClient({ req: request, res });
 
-  // If this is a request from the mobile app to the API routes, let it through
-  if (url.pathname.startsWith("/api/") || url.pathname.includes("/_next/")) {
-    return NextResponse.next();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  // Update IP address for authenticated users
+  if (user) {
+    const ip =
+      request.headers.get("x-forwarded-for") || request.ip || "unknown";
+    await updateIpAddress({ userId: user.id, ipAddress: ip });
   }
 
-  // If it's the root path
-  if (url.pathname === "/") {
-    if (isMobileApp) {
-      // Mobile apps should get JSON API responses
-      return NextResponse.json({
-        success: true,
-        message: "YouTube Dubbing API is running",
-        version: "1.0.0",
-      });
-    } else {
-      // Web browsers should be redirected to the home page
-      url.pathname = "/home";
-      return NextResponse.redirect(url);
-    }
+  // Protected routes
+  const protectedRoutes = ["/subscription", "/profile"];
+  const isProtectedRoute = protectedRoutes.some((route) =>
+    request.nextUrl.pathname.startsWith(route)
+  );
+
+  if (isProtectedRoute && !user) {
+    const redirectUrl = new URL("/login", request.url);
+    redirectUrl.searchParams.set("redirect", request.nextUrl.pathname);
+    return NextResponse.redirect(redirectUrl);
   }
 
-  return NextResponse.next();
+  // Redirect authenticated users away from auth pages
+  const authRoutes = ["/login", "/signup"];
+  const isAuthRoute = authRoutes.some((route) =>
+    request.nextUrl.pathname.startsWith(route)
+  );
+
+  if (isAuthRoute && user) {
+    return NextResponse.redirect(new URL("/", request.url));
+  }
+
+  return res;
 }
 
 export const config = {
-  matcher: ["/", "/api/:path*"],
+  matcher: [
+    /*
+     * Match all request paths except for the ones starting with:
+     * - _next/static (static files)
+     * - _next/image (image optimization files)
+     * - favicon.ico (favicon file)
+     * - public folder
+     */
+    "/((?!_next/static|_next/image|favicon.ico|public/).*)",
+  ],
 };

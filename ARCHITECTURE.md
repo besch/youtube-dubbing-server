@@ -11,7 +11,6 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
   - `server/`: Next.js backend (API, DB Interaction, Orchestration Trigger, Job Status Management).
   - `youtube-download/`: Python FastAPI service (YouTube full audio download, SRT subtitle download/processing & upload).
   - `server/supabase/functions/`: Deno Edge Functions for orchestrating backend processing steps (e.g., `on-download-complete`, `on-transcription-complete`, `on-translation-complete`).
-  - **REMOVED:** `audio-segmenter/`: Python FastAPI service (No longer needed with full audio transcription).
 - **Technology Stack:**
   - **Mobile:** React Native, Expo, TypeScript, Jotai, Supabase Client, Expo Router, `react-native-webview`, `expo-av`.
   - **Server:** Next.js (App Router), TypeScript, Supabase (Auth, DB, Functions), `next-safe-action`, Zod, Replicate Client (Transcription), OpenAI Client (TTS), Google Cloud Text-to-Speech Client, Anthropic Client (Translation).
@@ -24,7 +23,7 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
 ### 2.1. Core Structure
 
 - **Expo Managed Workflow.**
-- **Directory Structure:** (Largely unchanged, `types/supabase.ts` should be synced with server).
+- **Directory Structure:**
   ```
   mobile/
   ├── app/              # Routes ((tabs), video, onboarding, _layout.tsx)
@@ -55,48 +54,42 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
   - Stores **completed** transcription segments (`transcriptionSegments` - from the single row) fetched via `useVideoTranscription`.
   - Stores **completed** translated segments (`translatedSegments`) fetched via `useVideoTranslation` (populated based on the single transcription row's `translations` field).
   - Stores **completed** generated audio chunk data (`generatedChunks`) fetched via `useAudioGeneration`.
-  - **REMOVED:** No longer tracks requested segment end times or translation status per segment actively.
 - **Settings Integration:** Uses `useSettings` for initial language/voice/volume selections.
 - **Hook Integration:**
   - `useVideoProcessingStatus`: Central hook to interpret `videos.processing_status` (including new statuses like `transcribing_full`, `translating_full`), player state, and errors to provide user-facing status messages and loading indicators.
-  - `useVideoTranscription`: Fetches the existing completed **single** transcription row, subscribes to Realtime updates for that row. **Does not trigger transcription.**
-  - `useVideoTranslation`: Fetches/manages translated segments based on Realtime updates to the single `transcription_segments.translations` field. **Does not trigger translation.**
-  - `useAudioGeneration`: Manages the `generatedChunks` state. **Does not trigger audio generation.** Chunks are fetched via `fetchAudioChunks` when the backend status for the language/voice combination is detected as 'completed'. **REMOVED:** Realtime listening for individual chunk inserts within the hook.
+  - `useVideoTranscription`: Fetches the existing completed **single** transcription row, subscribes to Realtime updates for that row.
+  - `useVideoTranslation`: Fetches/manages translated segments based on Realtime updates to the single `transcription_segments.translations` field.
+  - `useAudioGeneration`: Manages the `generatedChunks` state. Chunks are fetched via `fetchAudioChunks` when the backend status for the language/voice combination is detected as 'completed'.
   - `useAudioPlayback`: Plays available pre-generated audio chunks based on `currentTime`.
   - `useVideoSeekHandler`: Checks for the _existence_ of required data (from the single transcription row's `content` or `translations`, and `generatedChunks`) at the seek target time.
-  - `useVideoHistory`, `useAuth`, `useSettings` (Largely unchanged).
+  - `useVideoHistory`, `useAuth`, `useSettings`.
 - **Initialization:**
-  - Calls `initiateVideoProcessingJobApi` on the server, providing the YouTube URL and desired language/voice combinations. This triggers the entire backend pipeline if necessary.
-  - Subscribes to Supabase Realtime channel for `videos` table updates (specifically `processing_status` column) for the current `dbVideoId` (via `useVideoProcessingStatus` or directly).
+  - Calls `initiateVideoProcessingJobApi` on the server, providing the YouTube URL and desired language/voice combinations.
+  - Subscribes to Supabase Realtime channel for `videos` table updates (specifically `processing_status` column) for the current `dbVideoId`.
   - Subscribes to `transcription_segments` (for the single row) Realtime channel to receive newly completed transcription/translation data.
-  - **REMOVED:** Subscription to `translated_audio_chunks` Realtime channel within `useAudioGeneration`.
-  - Fetches any pre-existing completed data using `getCompletedTranscriptionSegmentsApi` (for the single row) and `getCompletedAudioChunksApi`. The audio chunk fetch is triggered when the `videoProcessingStatus` for the current language/voice is detected as `completed` (either on initial load or through a Realtime update).
+  - Fetches any pre-existing completed data using `getCompletedTranscriptionSegmentsApi` and `getCompletedAudioChunksApi`.
 - **Realtime Updates:**
-  - Primarily listens to `videos` table for changes in `processing_status` to update the UI state via `useVideoProcessingStatus`. This 'completed' status update also triggers the fetch of audio chunks.
+  - Primarily listens to `videos` table for changes in `processing_status` to update the UI state via `useVideoProcessingStatus`.
   - Listens to the single `transcription_segments` row Realtime channel to populate local data (`transcriptionSegments`, `translatedSegments`).
-  - **REMOVED:** The app no longer directly populates `generatedChunks` via a Realtime subscription to `translated_audio_chunks` within the hook.
-- **Buffering:** Primarily handled by `useVideoProcessingStatus` based on the backend status (`generating_audio`, `transcribing_full`, `translating_full`, etc.) and player state. The app waits for the backend to make data available.
+- **Buffering:** Primarily handled by `useVideoProcessingStatus` based on the backend status and player state.
 - **Seek Handling (`useVideoSeekHandler`):**
   - `YouTubePlayer` detects seek -> `onSeek` prop -> `handleSeek(targetTime)`.
   - `handleSeek` pauses player, sets `isSeeking` state (shows overlay).
-  - **No longer calls `requestTranscriptionSegment`.**
   - Hook polls `checkSeekCompletion`.
-  - `checkSeekCompletion` verifies if transcription data (from the single row `transcriptionSegments`), translation (`isTranslationReadyForTime` - checking the single row), and audio (`isAudioChunkReady` - checking `generatedChunks`) _already exist_ for the `seekTargetTime`.
+  - `checkSeekCompletion` verifies if transcription data, translation, and audio _already exist_ for the `seekTargetTime`.
   - Once data exists, sets `isSeeking` false, resumes player, stops polling.
 - **Player State (`onStateChange`):** Relays state to `VideoPlayerScreen`. Used by `useAudioPlayback` and `useVideoProcessingStatus`.
-- **REMOVED:** No client-side lookahead logic for triggering transcription, translation, or audio generation.
 - **Audio Playback (`useAudioPlayback`):**
   - Finds the completed audio chunk (from `generatedChunks`) corresponding to `currentTime`.
   - Uses `expo-av` to load and play the chunk URL.
   - Pauses/resumes/syncs rate based on `playerState`.
-  - **Note:** Seek tolerance adjusted previously.
 - **Language/Voice Changes:**
   - When user selects a new language/voice:
     - Checks if the `processing_status` for the new combination indicates completion or ongoing processing.
     - If not processed, calls `initiateVideoProcessingJobApi` again for the _new_ target language/voice combination.
     - Resets local state (`generatedChunks`, `translatedSegments`) for the new target.
     - Fetches any existing completed data for the new target via hooks.
-- **History/Favorites:** Unchanged API calls (`updateHistoryApi`, `toggleFavoriteApi`, `getFavoriteStatusApi`).
+- **History/Favorites:** API calls (`updateHistoryApi`, `toggleFavoriteApi`, `getFavoriteStatusApi`).
 
 ### 2.4. Settings Management (`app/(tabs)/settings.tsx`)
 
@@ -107,7 +100,7 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
 ### 3.1. Core Structure
 
 - **Next.js App Router.**
-- **Directory Structure:** Added `/api/internal` route, added `on-translation-complete`.
+- **Directory Structure:**
   ```
   server/
   ├── src/
@@ -153,7 +146,6 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
 - **Realtime:** Enabled on `videos` (for `processing_status`), `transcription_segments` (single row updates), `translated_audio_chunks`.
 - **Storage:**
   - `youtube-audio`: Stores full original audio.
-  - **REMOVED:** `transcription-segments` bucket is no longer used.
   - `translated-audio`: Stores generated TTS audio chunks.
 - **Functions:** Deno Edge Functions triggered by database webhooks orchestrate the processing pipeline by calling internal Next.js actions.
 
@@ -178,13 +170,13 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
 - **Internal Actions (`videoInternal.ts` - Called by Supabase Functions):**
   - `internalRequestFullTranscription`: Called by `on-download-complete`. Gets full audio URL, starts Replicate job, updates the single `transcription_segments` row (status: `processing`).
   - `internalTranslateFullContent`: Called by `on-transcription-complete` (for non-English). Translates the entire `content` field, updates the `translations` field in the single `transcription_segments` row.
-  - `internalGenerateAudioChunk`: Called by `internalSpawnTtsJobs`. Takes details for a specific sub-segment (start/end time), extracts text from the full `content` or `translations`, calls TTS API (OpenAI/Google), uploads chunk, inserts record into `translated_audio_chunks`. **Client also needs an action to trigger this on-demand.**
+  - `internalGenerateAudioChunk`: Called by `internalSpawnTtsJobs`. Takes details for a specific sub-segment (start/end time), extracts text from the full `content` or `translations`, calls TTS API (OpenAI/Google), uploads chunk, inserts record into `translated_audio_chunks`.
   - `internalSpawnTtsJobs`: Called by `on-translation-complete`. Triggers `internalGenerateAudioChunk` **in batches** using `Promise.allSettled` for segments where `end_time <= 60`. If trigger errors occur, it uses the `update_processing_status` **RPC function** to set the `processing_status` to `failed`.
 
 ### 3.4. API Routes
 
 - **`/api/actions/[...actionName]/route.ts`:** Handles calls from the mobile app for _client-facing_ server actions.
-- **`/api/internal/trigger-action/route.ts`:** Secured endpoint (using `FUNCTION_SECRET`) for Supabase Functions to invoke internal server actions (`internalRequestFullTranscription`, `internalTranslateFullContent`, `internalSpawnTtsJobs`, `internalGenerateAudioChunk`).
+- **`/api/internal/trigger-action/route.ts`:** Secured endpoint (using `FUNCTION_SECRET`) for Supabase Functions to invoke internal server actions.
 - **`/api/webhooks/replicate/route.ts`:** Handles Replicate completion webhook. Updates the **single** `transcription_segments` row for the video (status: `completed`, stores full `content`). This update triggers the `on-transcription-complete` function.
 
 ### 3.5. Supabase Functions (`supabase/functions/`)
@@ -242,11 +234,7 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
     - If source subtitles need translation, the list of formatted sentences (from `format_subtitle_text_for_translation`) is translated in chunks.
     - This process uses the Gemini API (e.g., `gemini-1.5-flash-latest` model) for the actual translation task.
 
-## 5. Audio Segmenter Service (`audio-segmenter/`)
-
-- **REMOVED:** This service is no longer required. The new backend processing flow transcribes the entire audio file at once. Supabase Functions (`on-transcription-complete`, `on-translation-complete`) trigger TTS for individual sub-segments derived from the full transcription/translation.
-
-## 6. Communication Flow (Backend-Driven Processing - Full Transcription)
+## 5. Communication Flow (Backend-Driven Processing - Full Transcription)
 
 1.  **Mobile App -> Server API:** User selects video/language/voice -> `callServerAction('video/initiateVideoProcessingJob', { youtubeUrl, processingTargets: { 'es_nova': {...}, 'en_alloy': {...} } })`.
     - If a previous attempt for a specific language/voice combination resulted in a `failed` status, the mobile app can re-initiate by calling this action again with the same `processingTargets`. The server will then attempt to retry the failed target(s).
@@ -291,7 +279,7 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
     - `checkSeekCompletion` polls until the single `transcription_segments` row's data (`content` or `translations`) is available **AND** the necessary `generatedChunks` contain the audio data for the `seekTargetTime`. **If audio chunk is missing, `handleSeek` (or a related mechanism) needs to trigger `generateAudioChunk` action for the required segment.**
     - Once data exists, `isSeeking` becomes false, player resumes.
 
-## 7. TODOs / Pending Items
+## 6. TODOs / Pending Items
 
 - **Review Client-Side Audio Chunk Triggering:** The client needs a robust way to trigger `generateAudioChunk` on demand (for seek/playback continuation). Needs a dedicated client-callable action.
 - **Review/Refine Error Handling:** Ensure errors in internal actions consistently lead to a `failed` status update via RPC. Review Supabase Function error paths. The retry mechanism relies on this for client-initiated retries.
@@ -305,13 +293,13 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
   - Request audio chunks on-demand during seek operations if the target time's chunk hasn't been generated yet.
 - **Note:** Atomic updates for `processing_status` have been implemented using an SQL RPC function (`update_processing_status`) to mitigate race conditions.
 
-## 8. Client-Side (Chrome Extension)
+## 7. Client-Side (Chrome Extension)
 
-### 8.1. Overview
+### 7.1. Overview
 
 The Chrome Extension allows users to apply dubbing directly while watching videos on youtube.com or other supported movie/show platforms. It interacts with the existing backend server (`server/`) for initiating processing jobs (for movies/shows that require backend processing) and fetching generated audio data or subtitles. For YouTube videos, it can fetch subtitles directly without backend processing status tracking.
 
-### 8.2. Extension User Flow
+### 7.2. Extension User Flow
 
 1.  **Video Detection & UI (`MovieSearchPage.tsx`, `MovieSearch.tsx`):**
 

@@ -1,29 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  startVideoProcessing,
-  initiateVideoProcessingJob,
-  getVideoByUrl,
-} from "@/app/actions/video/processing";
-import {
-  requestTranscriptionSegment,
-  getCompletedTranscriptionSegments,
-} from "@/app/actions/transcription/segments";
-import {
-  generateAudioChunk,
-  getCompletedAudioChunks,
-} from "@/app/actions/audio/generation";
-import { updateHistory, getHistory } from "@/app/actions/user/history";
-import {
-  toggleFavorite,
-  getFavoriteStatus,
-  getFavorites,
-} from "@/app/actions/user/favorites";
-import {
-  translateSegmentContent,
-  translateVideoTitle,
-} from "@/app/actions/translation/translation";
-
-// Import the new actions
+import { getVideoByUrl } from "@/app/actions/video/video";
 import { searchMovies } from "@/app/actions/movie/search";
 import { fetchSubtitles } from "@/app/actions/subtitle/fetch";
 import { fetchYouTubeSubtitles } from "@/app/actions/subtitle/fetch-youtube";
@@ -32,19 +8,6 @@ import { AppError, AppErrorCode } from "@/app/actions/actions";
 type ActionFunction = (input: any) => Promise<any>;
 
 const actionRegistry: Record<string, ActionFunction> = {
-  "video/startVideoProcessing": startVideoProcessing,
-  "video/requestTranscriptionSegment": requestTranscriptionSegment,
-  "video/getCompletedTranscriptionSegments": getCompletedTranscriptionSegments,
-  "video/generateAudioChunk": generateAudioChunk,
-  "video/updateHistory": updateHistory,
-  "video/toggleFavorite": toggleFavorite,
-  "video/getFavoriteStatus": getFavoriteStatus,
-  "video/translateSegmentContent": translateSegmentContent,
-  "video/getFavorites": getFavorites,
-  "video/getHistory": getHistory,
-  "video/translateVideoTitle": translateVideoTitle,
-  "video/initiateVideoProcessingJob": initiateVideoProcessingJob,
-  "video/getCompletedAudioChunks": getCompletedAudioChunks,
   "video/getVideoByUrl": getVideoByUrl,
   "movie/search": searchMovies,
   "subtitle/fetch": fetchSubtitles,
@@ -131,9 +94,6 @@ export async function POST(request: NextRequest) {
         `API Route: Action ${actionPath} resulted in server error:`,
         result.serverError
       );
-      // Note: handleServerError in safe-action.ts should format this,
-      // but we construct a response here just in case.
-      // The actual error object might be complex, so we send a generic message.
       return NextResponse.json(
         {
           success: false,
@@ -152,7 +112,6 @@ export async function POST(request: NextRequest) {
         `API Route: Action ${actionPath} resulted in validation error:`,
         result.validationError
       );
-      // Send back the validation errors
       return NextResponse.json(
         {
           success: false,
@@ -167,13 +126,9 @@ export async function POST(request: NextRequest) {
     }
 
     // If no errors, assume success and return data
-    // The safe action execution result (`result`) contains the ActionResponse
-    // returned by the action function within its `data` property.
     if (result.data) {
-      // Return the ActionResponse directly
       return NextResponse.json(result.data);
     } else {
-      // Should not happen if there were no errors, but handle defensively
       console.error(
         `API Route: Action ${actionPath} succeeded but returned no data.`
       );
@@ -193,7 +148,6 @@ export async function POST(request: NextRequest) {
       `API Route: Unexpected error in POST handler for ${request.url}:`,
       error
     );
-    // Generic catch block for errors *outside* the action execution (e.g., request.json() failure)
     return NextResponse.json(
       {
         success: false,
