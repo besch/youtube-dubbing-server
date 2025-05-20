@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { stripe } from "@/lib/stripe";
 import { createClient } from "@/lib/supabase/server";
 import { cookies } from "next/headers";
+import type Stripe from "stripe";
 
 export async function POST(req: Request) {
   const body = await req.text();
@@ -28,7 +29,7 @@ export async function POST(req: Request) {
 
     switch (event.type) {
       case "checkout.session.completed": {
-        const session = event.data.object;
+        const session = event.data.object as Stripe.Checkout.Session;
         const userId = session.metadata?.userId;
 
         if (!userId) {
@@ -39,7 +40,10 @@ export async function POST(req: Request) {
           .from("profiles")
           .update({
             subscription_status: "premium",
-            subscription_id: session.subscription,
+            subscription_id: session.subscription as string,
+            subscription_end_date: new Date(
+              Date.now() + 30 * 24 * 60 * 60 * 1000
+            ).toISOString(), // 30 days from now
           })
           .eq("id", userId);
 
@@ -54,7 +58,7 @@ export async function POST(req: Request) {
       }
 
       case "customer.subscription.deleted": {
-        const subscription = event.data.object;
+        const subscription = event.data.object as Stripe.Subscription;
         const userId = subscription.metadata?.userId;
 
         if (!userId) {
@@ -66,6 +70,7 @@ export async function POST(req: Request) {
           .update({
             subscription_status: "free",
             subscription_id: null,
+            subscription_end_date: null,
           })
           .eq("id", userId);
 

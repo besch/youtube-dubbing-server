@@ -1177,3 +1177,119 @@ BEGIN
 END;
 $$;
 COMMENT ON FUNCTION public.update_translation_for_language(uuid, text, jsonb) IS 'Atomically updates a specific language key within the transcription_segments.translations JSONB column.';
+
+-- Update profiles table to match the actual structure
+ALTER TABLE public.profiles
+  DROP COLUMN IF EXISTS stripe_customer_id,
+  DROP COLUMN IF EXISTS has_completed_onboarding,
+  ADD COLUMN IF NOT EXISTS last_ip_address text,
+  ADD COLUMN IF NOT EXISTS last_video_count_reset timestamp with time zone,
+  ADD COLUMN IF NOT EXISTS subscription_end_date timestamp with time zone,
+  ADD COLUMN IF NOT EXISTS subscription_id text,
+  ADD COLUMN IF NOT EXISTS display_name text,
+  ALTER COLUMN daily_video_count DROP NOT NULL,
+  ALTER COLUMN subscription_status DROP NOT NULL,
+  ALTER COLUMN settings SET DEFAULT '{"voice_mapping": {"default": "alloy"}, "default_language": "en"}'::jsonb;
+
+-- Add daily_video_limits table
+CREATE TABLE IF NOT EXISTS public.daily_video_limits (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    video_id uuid NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT daily_video_limits_pkey PRIMARY KEY (id),
+    CONSTRAINT daily_video_limits_user_id_video_id_key UNIQUE (user_id, video_id),
+    CONSTRAINT daily_video_limits_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.profiles(id) ON DELETE CASCADE,
+    CONSTRAINT daily_video_limits_video_id_fkey FOREIGN KEY (video_id) REFERENCES public.videos(id) ON DELETE CASCADE
+);
+
+-- Add subscription_events table
+CREATE TABLE IF NOT EXISTS public.subscription_events (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    user_id uuid NOT NULL,
+    event_type text NOT NULL,
+    event_data jsonb,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT subscription_events_pkey PRIMARY KEY (id),
+    CONSTRAINT subscription_events_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.profiles(id) ON DELETE CASCADE
+);
+
+-- Add onedub_api_logs table
+CREATE TABLE IF NOT EXISTS public.onedub_api_logs (
+    id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+    endpoint text NOT NULL,
+    url text NOT NULL,
+    ip_address text NOT NULL,
+    parameters jsonb NOT NULL,
+    success boolean NOT NULL,
+    error_code text,
+    error_message text,
+    steps jsonb,
+    timestamp timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT onedub_api_logs_pkey PRIMARY KEY (id)
+);
+
+-- Update transcription_segments table
+ALTER TABLE public.transcription_segments
+  ADD COLUMN IF NOT EXISTS segment_storage_path text;
+
+-- Add RLS policies for new tables
+ALTER TABLE public.daily_video_limits ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.subscription_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.onedub_api_logs ENABLE ROW LEVEL SECURITY;
+
+-- Policies for daily_video_limits
+CREATE POLICY "Users can view their own daily video limits" 
+ON public.daily_video_limits FOR SELECT 
+USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert their own daily video limits" 
+ON public.daily_video_limits FOR INSERT 
+WITH CHECK (auth.uid() = user_id);
+
+-- Policies for subscription_events
+CREATE POLICY "Users can view their own subscription events" 
+ON public.subscription_events FOR SELECT 
+USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert their own subscription events" 
+ON public.subscription_events FOR INSERT 
+WITH CHECK (auth.uid() = user_id);
+
+-- Policies for onedub_api_logs
+CREATE POLICY "Service role can manage API logs" 
+ON public.onedub_api_logs FOR ALL 
+TO service_role 
+USING (true);
+
+-- Add to realtime publication
+ALTER PUBLICATION supabase_realtime ADD TABLE public.daily_video_limits;
+ALTER PUBLICATION supabase_realtime ADD TABLE public.subscription_events;
+
+-- Grant permissions
+GRANT ALL ON TABLE public.daily_video_limits TO anon, authenticated, service_role;
+GRANT ALL ON TABLE public.subscription_events TO anon, authenticated, service_role;
+GRANT ALL ON TABLE public.onedub_api_logs TO anon, authenticated, service_role;
+
+-- Add function to reset daily video count
+CREATE OR REPLACE FUNCTION public.reset_daily_video_count()
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  UPDATE public.profiles
+  SET daily_video_count = 0,
+      last_video_count_reset = now()
+  WHERE last_video_count_reset IS NULL 
+     OR last_video_count_reset < now() - interval '1 day';
+END;
+$$;
+
+-- Add cron job to reset daily video count
+SELECT cron.schedule(
+  'reset-daily-video-count',
+  '0 0 * * *', -- Run at midnight every day
+  $$SELECT public.reset_daily_video_count()$$
+);

@@ -114,43 +114,43 @@ export const createSubscription = action(
         };
       }
 
-      let customerId = profile.stripe_customer_id;
-      console.log("Existing customer ID:", customerId);
+      // Create a new Stripe customer
+      console.log("Creating new Stripe customer for user:", session.user.id);
+      const customer = await stripe.customers.create({
+        email: session.user.email,
+        metadata: {
+          userId: session.user.id,
+        },
+      });
 
-      if (!customerId) {
-        console.log("Creating new Stripe customer for user:", session.user.id);
-        const customer = await stripe.customers.create({
-          email: session.user.email,
-          metadata: {
-            userId: session.user.id,
+      console.log("New customer created:", customer.id);
+
+      // Create a subscription event record
+      const { error: eventError } = await supabase
+        .from("subscription_events")
+        .insert({
+          user_id: session.user.id,
+          event_type: "subscription_created",
+          event_data: {
+            customer_id: customer.id,
+            price_id: priceId,
           },
         });
-        customerId = customer.id;
-        console.log("New customer created:", customerId);
 
-        const { error: updateError } = await supabase
-          .from("profiles")
-          .update({ stripe_customer_id: customerId })
-          .eq("id", session.user.id);
-
-        if (updateError) {
-          console.error(
-            "Error updating profile with customer ID:",
-            updateError
-          );
-          return {
-            success: false,
-            error: {
-              message: "Failed to update profile",
-              code: "DATABASE_ERROR",
-            },
-          };
-        }
+      if (eventError) {
+        console.error("Error creating subscription event:", eventError);
+        return {
+          success: false,
+          error: {
+            message: "Failed to create subscription event",
+            code: "DATABASE_ERROR",
+          },
+        };
       }
 
       console.log("Creating Stripe checkout session");
       const checkoutSession = await stripe.checkout.sessions.create({
-        customer: customerId,
+        customer: customer.id,
         line_items: [
           {
             price: priceId,
@@ -220,12 +220,16 @@ export const createCustomerPortal = action(
         .eq("id", user.id)
         .single();
 
-      if (!profile?.stripe_customer_id) {
+      if (!profile?.subscription_id) {
         return { success: false, error: appErrors.NOT_FOUND };
       }
 
+      // Get the subscription from Stripe
+      const subscription = await stripe.subscriptions.retrieve(
+        profile.subscription_id
+      );
       const portalSession = await stripe.billingPortal.sessions.create({
-        customer: profile.stripe_customer_id,
+        customer: subscription.customer as string,
         return_url: `${process.env.NEXT_PUBLIC_APP_URL}/subscription`,
       });
 
