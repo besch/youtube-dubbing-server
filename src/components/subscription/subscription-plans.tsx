@@ -38,12 +38,6 @@ export function SubscriptionPlans({ profile }: SubscriptionPlansProps) {
   const currentPlan = profile?.subscription_status || "free";
 
   const handleUpgrade = async () => {
-    if (!profile) {
-      // Redirect to login with return URL
-      router.push(`/login?redirectTo=/subscription`);
-      return;
-    }
-
     try {
       setIsLoading(true);
       const result = await createSubscription({
