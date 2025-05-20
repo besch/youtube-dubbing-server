@@ -3,29 +3,31 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { updateIpAddress } from "./app/actions/subscription";
 
-export async function middleware(request: NextRequest) {
+export async function middleware(req: NextRequest) {
   const res = NextResponse.next();
-  const supabase = createMiddlewareClient({ req: request, res });
+  const supabase = createMiddlewareClient({ req, res });
 
   const {
-    data: { user },
-  } = await supabase.auth.getUser();
+    data: { session },
+  } = await supabase.auth.getSession();
+
+  // If user is not signed in and the current path is /profile
+  if (!session && req.nextUrl.pathname === "/profile") {
+    const redirectUrl = req.nextUrl.clone();
+    redirectUrl.pathname = "/login";
+    redirectUrl.searchParams.set("redirectTo", req.nextUrl.pathname);
+    return NextResponse.redirect(redirectUrl);
+  }
 
   // Update IP address for authenticated users
-  if (user) {
-    const ip =
-      request.headers.get("x-forwarded-for") || request.ip || "unknown";
-    await updateIpAddress({ userId: user.id, ipAddress: ip });
+  if (session) {
+    const ip = req.headers.get("x-forwarded-for") || req.ip || "unknown";
+    await updateIpAddress({ userId: session.user.id, ipAddress: ip });
   }
 
   // Special handling for auth callback - let it pass through
-  if (request.nextUrl.pathname.startsWith("/auth/callback")) {
+  if (req.nextUrl.pathname.startsWith("/auth/callback")) {
     return res;
-  }
-
-  // Only protect subscription-related routes
-  if (request.nextUrl.pathname.startsWith("/subscription") && !user) {
-    return NextResponse.redirect(new URL("/login", request.url));
   }
 
   return res;
@@ -41,5 +43,6 @@ export const config = {
      * - public folder
      */
     "/((?!_next/static|_next/image|favicon.ico|public/).*)",
+    "/profile",
   ],
 };

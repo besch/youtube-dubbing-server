@@ -1,6 +1,5 @@
 import { Metadata } from "next";
 import { createServerClient } from "@/lib/supabase";
-import { VideoProcessor } from "@/components/video/video-processor";
 
 export const metadata: Metadata = {
   title: "YouTube Dubbing",
@@ -24,12 +23,5 @@ export default async function HomePage() {
     profile = data;
   }
 
-  return (
-    <div className="container py-8">
-      <VideoProcessor
-        subscriptionStatus={profile?.subscription_status || "free"}
-        dailyVideoCount={profile?.daily_video_count || 0}
-      />
-    </div>
-  );
+  return <div className="container py-8"></div>;
 }

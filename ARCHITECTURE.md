@@ -361,3 +361,166 @@ The Chrome Extension allows users to apply dubbing directly while watching video
 
 This revised flow removes the `LanguageSelectionPage.tsx` and streamlines the process by initiating subtitle fetching directly from `MovieSearchPage.tsx` for both movies and YouTube videos, then proceeding to `DubbingPage.tsx`.
 The core backend processing for _movies and shows that might still use the job system_ (initiated via `initiateVideoProcessingJobApi` by the mobile app) remains largely the same on the server-side as described in sections 3-6, but the Chrome Extension's primary interaction after acquiring subtitles is geared towards on-demand TTS.
+
+## 8. Authentication & Authorization
+
+### 8.1. Authentication Flow
+
+- **Provider:** Supabase Auth with Google OAuth
+- **Authentication Flow:**
+  1. User clicks "Sign in with Google" button
+  2. Redirected to Google OAuth consent screen
+  3. After successful authentication, redirected to `/auth/callback`
+  4. Callback route exchanges code for session
+  5. User is redirected to home page
+  6. Session is maintained via cookies
+
+### 8.2. Chrome Extension Authentication
+
+- **Token Management:**
+
+  - Website generates extension-specific token on login
+  - Token stored in extension's local storage
+  - Token used for all extension API calls
+  - Token invalidated on website logout
+
+- **Extension Auth Flow:**
+
+  1. User logs in on website
+  2. Extension receives auth token via message passing
+  3. Extension stores token securely
+  4. Token used for all dubbing operations
+  5. Extension can initiate logout, clearing local token
+
+- **Security:**
+  - Tokens are short-lived (24 hours)
+  - Automatic token refresh mechanism
+  - Secure storage in extension
+  - Token validation on all API calls
+
+### 8.3. User Profiles
+
+- **Profile Creation:**
+
+  - Automatically created on first sign-in
+  - Stored in `profiles` table with default values:
+    - `subscription_status`: "free"
+    - `daily_video_count`: 0
+
+- **Profile Fields:**
+  ```sql
+  id: uuid (references auth.users)
+  email: string
+  full_name: string | null
+  avatar_url: string | null
+  subscription_status: "free" | "premium"
+  daily_video_count: number
+  last_video_date: string | null
+  created_at: timestamp
+  updated_at: timestamp
+  ```
+
+## 9. Subscription Plans & Features
+
+### 9.1. Free Plan
+
+- **Limitations:**
+
+  - 4 videos per day
+  - Basic voice options only
+  - No access to premium voices
+
+- **Features:**
+  - Access to all basic dubbing features
+  - Support for all languages
+  - Basic voice quality
+
+### 9.2. Premium Plan
+
+- **Benefits:**
+
+  - Unlimited videos per day
+  - Access to all premium voices
+  - Early access to new features
+
+- **Features:**
+  - All free plan features
+  - Premium voice options
+  - Advanced audio quality options
+
+### 9.3. Subscription Management
+
+- **Subscription Status Tracking:**
+
+  - Stored in `profiles` table
+  - Updated via Stripe webhooks
+  - Affects user's daily limits and feature access
+
+- **Usage Tracking:**
+  - `daily_video_count` resets at midnight UTC
+  - `last_video_date` tracks last video processing
+  - Premium users bypass daily count checks
+
+### 9.4. Feature Access Control
+
+- **Middleware Protection:**
+
+  - Only `/subscription` route requires authentication
+  - All other routes are publicly accessible
+  - Feature access controlled at component level
+
+- **Component-Level Access:**
+  - Premium features conditionally rendered based on `subscription_status`
+  - Usage limits enforced in server actions
+  - Premium voices only available to premium users
+
+### 9.5. Subscription Flow
+
+1. **Free User Flow:**
+
+   - Can use basic features
+   - Limited to 4 videos per day
+   - Can upgrade to premium at any time
+   - Redirected to subscription page when:
+     - Daily limit exceeded
+     - Attempting to use premium voice
+
+2. **Premium User Flow:**
+
+   - Unlimited video processing
+   - Access to all premium features
+   - Can manage subscription via `/subscription` page
+
+3. **Upgrade Flow:**
+
+   - User clicks upgrade button or hits limit
+   - Redirected to Stripe checkout
+   - After successful payment:
+     - Subscription status updated
+     - Premium features unlocked
+     - Usage limits removed
+
+4. **Downgrade Flow:**
+   - User can cancel subscription
+   - Continues to have premium access until end of billing period
+   - Reverts to free plan after period ends
+   - Access to premium features maintained until subscription expires
+
+### 9.6. Usage Monitoring
+
+- **Daily Limits:**
+
+  - Free users: 4 videos per day
+  - Premium users: Unlimited
+  - Reset occurs at midnight UTC
+
+- **Premium Voice Access:**
+
+  - Free users redirected to subscription page
+  - Premium users have full access
+  - Grace period for cancelled subscriptions
+
+- **Error Handling:**
+  - Clear messaging for limit exceeded
+  - Smooth upgrade flow
+  - Graceful fallback to free features

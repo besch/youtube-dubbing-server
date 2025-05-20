@@ -59,8 +59,8 @@ export function UserProfile({ profile }: UserProfileProps) {
                 <span>{profile.email}</span>
               </div>
               <div className="flex items-center gap-2">
-                <span className="font-medium">Display Name:</span>
-                <span>{profile.display_name || "Not set"}</span>
+                <span className="font-medium">Name:</span>
+                <span>{profile.full_name || "Not set"}</span>
               </div>
             </div>
           </div>
@@ -74,16 +74,6 @@ export function UserProfile({ profile }: UserProfileProps) {
                   {profile.subscription_status}
                 </span>
               </div>
-              {profile.subscription_status === "premium" && (
-                <div className="flex items-center gap-2">
-                  <span className="font-medium">Valid until:</span>
-                  <span>
-                    {new Date(
-                      profile.subscription_end_date!
-                    ).toLocaleDateString()}
-                  </span>
-                </div>
-              )}
             </div>
           </div>
 

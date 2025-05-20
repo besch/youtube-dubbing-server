@@ -2,7 +2,14 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Card } from "@/components/ui/card";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Icons } from "@/components/icons";
@@ -12,26 +19,33 @@ import {
   createCustomerPortal,
 } from "@/app/actions/subscription";
 import { toast } from "sonner";
+import { Check } from "lucide-react";
+import type { Database } from "@/types/supabase";
+
+type Profile = Database["public"]["Tables"]["profiles"]["Row"];
 
 interface SubscriptionPlansProps {
-  currentPlan: "free" | "premium";
-  userId: string;
+  profile: Profile | null;
 }
 
-export function SubscriptionPlans({
-  currentPlan,
-  userId,
-}: SubscriptionPlansProps) {
+export function SubscriptionPlans({ profile }: SubscriptionPlansProps) {
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
-  const [billingInterval, setBillingInterval] = useState<"monthly" | "yearly">(
-    "monthly"
-  );
 
-  const handleSubscribe = async (priceId: string) => {
+  const currentPlan = profile?.subscription_status || "free";
+
+  const handleUpgrade = async () => {
+    if (!profile) {
+      // Redirect to login with return URL
+      router.push(`/login?redirectTo=/subscription`);
+      return;
+    }
+
     try {
       setIsLoading(true);
-      const result = await createSubscription({ priceId });
+      const result = await createSubscription({
+        priceId: process.env.NEXT_PUBLIC_STRIPE_MONTHLY_PRICE_ID!,
+      });
 
       if (!result.data?.success || !result.data.data?.url) {
         throw new Error(result.serverError || "Failed to create subscription");
@@ -67,252 +81,97 @@ export function SubscriptionPlans({
   };
 
   return (
-    <div className="w-full max-w-5xl mx-auto p-4">
-      <Tabs
-        defaultValue="monthly"
-        value={billingInterval}
-        onValueChange={(value) =>
-          setBillingInterval(value as "monthly" | "yearly")
-        }
-        className="w-full"
-      >
-        <div className="flex flex-col items-center gap-4 mb-8">
-          <h2 className="text-3xl font-bold">Choose Your Plan</h2>
-          <TabsList className="grid w-full max-w-md grid-cols-2">
-            <TabsTrigger value="monthly">Monthly</TabsTrigger>
-            <TabsTrigger value="yearly">
-              Yearly
-              <Badge variant="secondary" className="ml-2">
-                Save 17%
-              </Badge>
-            </TabsTrigger>
-          </TabsList>
-        </div>
-
-        <div className="grid gap-6 md:grid-cols-2">
-          <TabsContent value="monthly">
-            <Card className="p-6">
-              <div className="flex flex-col gap-4">
-                <div>
-                  <h3 className="text-2xl font-bold">Free</h3>
-                  <p className="text-muted-foreground">
-                    Basic features for casual users
-                  </p>
-                </div>
-                <div className="flex items-baseline gap-1">
-                  <span className="text-4xl font-bold">$0</span>
-                  <span className="text-muted-foreground">/month</span>
-                </div>
-                <ul className="space-y-2">
-                  <li className="flex items-center gap-2">
-                    <Icons.check className="h-4 w-4 text-green-500" />
-                    <span>3 videos per day</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Icons.check className="h-4 w-4 text-green-500" />
-                    <span>Basic audio quality</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Icons.check className="h-4 w-4 text-green-500" />
-                    <span>Standard processing speed</span>
-                  </li>
-                </ul>
-                {currentPlan === "free" ? (
-                  <Button disabled className="w-full">
-                    Current Plan
-                  </Button>
-                ) : (
-                  <Button
-                    variant="outline"
-                    onClick={handleManageSubscription}
-                    disabled={isLoading}
-                    className="w-full"
-                  >
-                    {isLoading && (
-                      <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
-                    )}
-                    Manage Subscription
-                  </Button>
-                )}
+    <div className="space-y-6">
+      <div>
+        <h3 className="text-lg font-medium">Subscription Plans</h3>
+        <p className="text-sm text-muted-foreground">
+          Choose the plan that best fits your needs
+        </p>
+      </div>
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>Free Plan</CardTitle>
+            <CardDescription>Basic features for casual users</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              <div className="flex items-center">
+                <Check className="mr-2 h-4 w-4 text-green-500" />
+                <span>Basic dubbing features</span>
               </div>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="monthly">
-            <Card className="p-6 border-primary">
-              <div className="flex flex-col gap-4">
-                <div>
-                  <h3 className="text-2xl font-bold">Premium</h3>
-                  <p className="text-muted-foreground">
-                    Advanced features for power users
-                  </p>
-                </div>
-                <div className="flex items-baseline gap-1">
-                  <span className="text-4xl font-bold">$9.99</span>
-                  <span className="text-muted-foreground">/month</span>
-                </div>
-                <ul className="space-y-2">
-                  <li className="flex items-center gap-2">
-                    <Icons.check className="h-4 w-4 text-green-500" />
-                    <span>Unlimited videos</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Icons.check className="h-4 w-4 text-green-500" />
-                    <span>High-quality audio</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Icons.check className="h-4 w-4 text-green-500" />
-                    <span>Priority processing</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Icons.check className="h-4 w-4 text-green-500" />
-                    <span>Advanced customization</span>
-                  </li>
-                </ul>
-                {currentPlan === "premium" ? (
-                  <Button
-                    variant="outline"
-                    onClick={handleManageSubscription}
-                    disabled={isLoading}
-                    className="w-full"
-                  >
-                    {isLoading && (
-                      <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
-                    )}
-                    Manage Subscription
-                  </Button>
-                ) : (
-                  <Button
-                    onClick={() =>
-                      handleSubscribe(
-                        process.env.NEXT_PUBLIC_STRIPE_MONTHLY_PRICE_ID!
-                      )
-                    }
-                    disabled={isLoading}
-                    className="w-full"
-                  >
-                    {isLoading && (
-                      <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
-                    )}
-                    Subscribe Now
-                  </Button>
-                )}
+              <div className="flex items-center">
+                <Check className="mr-2 h-4 w-4 text-green-500" />
+                <span>Standard quality audio</span>
               </div>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="yearly">
-            <Card className="p-6">
-              <div className="flex flex-col gap-4">
-                <div>
-                  <h3 className="text-2xl font-bold">Free</h3>
-                  <p className="text-muted-foreground">
-                    Basic features for casual users
-                  </p>
-                </div>
-                <div className="flex items-baseline gap-1">
-                  <span className="text-4xl font-bold">$0</span>
-                  <span className="text-muted-foreground">/year</span>
-                </div>
-                <ul className="space-y-2">
-                  <li className="flex items-center gap-2">
-                    <Icons.check className="h-4 w-4 text-green-500" />
-                    <span>3 videos per day</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Icons.check className="h-4 w-4 text-green-500" />
-                    <span>Basic audio quality</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Icons.check className="h-4 w-4 text-green-500" />
-                    <span>Standard processing speed</span>
-                  </li>
-                </ul>
-                {currentPlan === "free" ? (
-                  <Button disabled className="w-full">
-                    Current Plan
-                  </Button>
-                ) : (
-                  <Button
-                    variant="outline"
-                    onClick={handleManageSubscription}
-                    disabled={isLoading}
-                    className="w-full"
-                  >
-                    {isLoading && (
-                      <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
-                    )}
-                    Manage Subscription
-                  </Button>
-                )}
+              <div className="flex items-center">
+                <Check className="mr-2 h-4 w-4 text-green-500" />
+                <span>Limited monthly usage</span>
               </div>
-            </Card>
-          </TabsContent>
+            </div>
+          </CardContent>
+          <CardFooter>
+            <Button
+              variant={currentPlan === "free" ? "default" : "outline"}
+              className="w-full"
+              disabled={currentPlan === "free"}
+              onClick={handleManageSubscription}
+            >
+              {currentPlan === "free" ? "Current Plan" : "Downgrade"}
+            </Button>
+          </CardFooter>
+        </Card>
 
-          <TabsContent value="yearly">
-            <Card className="p-6 border-primary">
-              <div className="flex flex-col gap-4">
-                <div>
-                  <h3 className="text-2xl font-bold">Premium</h3>
-                  <p className="text-muted-foreground">
-                    Advanced features for power users
-                  </p>
-                </div>
-                <div className="flex items-baseline gap-1">
-                  <span className="text-4xl font-bold">$99.99</span>
-                  <span className="text-muted-foreground">/year</span>
-                </div>
-                <ul className="space-y-2">
-                  <li className="flex items-center gap-2">
-                    <Icons.check className="h-4 w-4 text-green-500" />
-                    <span>Unlimited videos</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Icons.check className="h-4 w-4 text-green-500" />
-                    <span>High-quality audio</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Icons.check className="h-4 w-4 text-green-500" />
-                    <span>Priority processing</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <Icons.check className="h-4 w-4 text-green-500" />
-                    <span>Advanced customization</span>
-                  </li>
-                </ul>
-                {currentPlan === "premium" ? (
-                  <Button
-                    variant="outline"
-                    onClick={handleManageSubscription}
-                    disabled={isLoading}
-                    className="w-full"
-                  >
-                    {isLoading && (
-                      <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
-                    )}
-                    Manage Subscription
-                  </Button>
-                ) : (
-                  <Button
-                    onClick={() =>
-                      handleSubscribe(
-                        process.env.NEXT_PUBLIC_STRIPE_YEARLY_PRICE_ID!
-                      )
-                    }
-                    disabled={isLoading}
-                    className="w-full"
-                  >
-                    {isLoading && (
-                      <Icons.spinner className="mr-2 h-4 w-4 animate-spin" />
-                    )}
-                    Subscribe Now
-                  </Button>
-                )}
+        <Card>
+          <CardHeader>
+            <CardTitle>Premium Plan</CardTitle>
+            <CardDescription>Advanced features for power users</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              <div className="flex items-center">
+                <Check className="mr-2 h-4 w-4 text-green-500" />
+                <span>All Free features</span>
               </div>
-            </Card>
-          </TabsContent>
-        </div>
-      </Tabs>
+              <div className="flex items-center">
+                <Check className="mr-2 h-4 w-4 text-green-500" />
+                <span>High-quality audio</span>
+              </div>
+              <div className="flex items-center">
+                <Check className="mr-2 h-4 w-4 text-green-500" />
+                <span>Unlimited usage</span>
+              </div>
+              <div className="flex items-center">
+                <Check className="mr-2 h-4 w-4 text-green-500" />
+                <span>Priority support</span>
+              </div>
+            </div>
+          </CardContent>
+          <CardFooter>
+            <Button
+              variant={currentPlan === "premium" ? "default" : "outline"}
+              className="w-full"
+              disabled={isLoading}
+              onClick={
+                currentPlan === "premium"
+                  ? handleManageSubscription
+                  : handleUpgrade
+              }
+            >
+              {isLoading ? (
+                <span className="flex items-center">
+                  <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                  Processing...
+                </span>
+              ) : currentPlan === "premium" ? (
+                "Manage Subscription"
+              ) : (
+                "Upgrade to Premium"
+              )}
+            </Button>
+          </CardFooter>
+        </Card>
+      </div>
     </div>
   );
 }

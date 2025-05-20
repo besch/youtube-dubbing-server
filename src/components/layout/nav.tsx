@@ -22,6 +22,14 @@ export function Nav() {
       setUser(user);
     };
     getUser();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => subscription.unsubscribe();
   }, [supabase.auth]);
 
   const handleSignOut = async () => {
@@ -52,16 +60,26 @@ export function Nav() {
             >
               Home
             </Link>
+            <Link
+              href="/subscription"
+              className={`transition-colors hover:text-foreground/80 ${
+                pathname === "/subscription"
+                  ? "text-foreground"
+                  : "text-foreground/60"
+              }`}
+            >
+              Subscription
+            </Link>
             {user && (
               <Link
-                href="/subscription"
+                href="/profile"
                 className={`transition-colors hover:text-foreground/80 ${
-                  pathname === "/subscription"
+                  pathname === "/profile"
                     ? "text-foreground"
                     : "text-foreground/60"
                 }`}
               >
-                Subscription
+                Profile
               </Link>
             )}
           </nav>

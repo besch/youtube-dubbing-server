@@ -3,45 +3,106 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import type { Database } from "@/types/supabase";
 
+async function sendMessageToExtension(
+  extensionId: string,
+  data: {
+    type: string;
+    token: string;
+    subscriptionStatus: string;
+    dailyVideoCount: number;
+  }
+) {
+  const maxRetries = 3;
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(
+        `chrome-extension://${extensionId}/background.html`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(data),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+      if (result.success) {
+        return true;
+      }
+      throw new Error(result.error || "Unknown error");
+    } catch (error) {
+      lastError = error as Error;
+      if (attempt < maxRetries) {
+        await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+      }
+    }
+  }
+
+  console.error(
+    "Failed to send message to extension after retries:",
+    lastError
+  );
+  return false;
+}
+
 export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get("code");
 
-  if (!code) {
-    console.error("No code provided in callback");
-    return NextResponse.redirect(
-      `${requestUrl.origin}/login?error=No code provided`
-    );
-  }
-
-  try {
-    const cookieStore = cookies();
-    const supabase = createRouteHandlerClient<Database>({
-      cookies: () => cookieStore,
-    });
-
-    const { error, data } = await supabase.auth.exchangeCodeForSession(code);
+  if (code) {
+    const supabase = createRouteHandlerClient<Database>({ cookies });
+    const {
+      data: { session },
+      error,
+    } = await supabase.auth.exchangeCodeForSession(code);
 
     if (error) {
-      console.error("Auth callback error:", error);
       return NextResponse.redirect(
-        `${requestUrl.origin}/login?error=Authentication failed`
+        `${requestUrl.origin}/login?error=${error.message}`
       );
     }
 
-    if (!data.session) {
-      console.error("No session after code exchange");
+    if (!session) {
       return NextResponse.redirect(
         `${requestUrl.origin}/login?error=No session created`
       );
     }
 
-    // Successful authentication
+    // Get user's subscription status and daily video count
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("subscription_status, daily_video_count")
+      .eq("id", session.user.id)
+      .single();
+
+    // Send message to extension
+    const extensionId = process.env.EXTENSION_ID;
+    if (extensionId) {
+      const success = await sendMessageToExtension(extensionId, {
+        type: "AUTH_TOKEN",
+        token: session.access_token,
+        subscriptionStatus: profile?.subscription_status || "free",
+        dailyVideoCount: profile?.daily_video_count || 0,
+      });
+
+      if (!success) {
+        console.error("Failed to send token to extension");
+        // Continue with the redirect even if extension communication fails
+        // The extension can retry later when the user opens it
+      }
+    }
+
     return NextResponse.redirect(requestUrl.origin);
-  } catch (error) {
-    console.error("Auth callback error:", error);
-    return NextResponse.redirect(
-      `${requestUrl.origin}/login?error=Authentication failed`
-    );
   }
+
+  return NextResponse.redirect(
+    `${requestUrl.origin}/login?error=No code provided`
+  );
 }
