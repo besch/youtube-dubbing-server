@@ -1,5 +1,5 @@
 import { Metadata } from "next";
-import { createServerComponentClient } from "@supabase/auth-helpers-nextjs";
+import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { SubscriptionPlans } from "@/components/subscription/subscription-plans";
 
@@ -9,7 +9,24 @@ export const metadata: Metadata = {
 };
 
 export default async function SubscriptionPage() {
-  const supabase = createServerComponentClient({ cookies });
+  const cookieStore = cookies();
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        get(name: string) {
+          return cookieStore.get(name)?.value;
+        },
+        set(name: string, value: string, options: any) {
+          cookieStore.set({ name, value, ...options });
+        },
+        remove(name: string, options: any) {
+          cookieStore.set({ name, value: "", ...options });
+        },
+      },
+    }
+  );
 
   const {
     data: { user },

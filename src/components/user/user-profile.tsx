@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
+import { createBrowserClient } from "@supabase/ssr";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -30,7 +30,10 @@ interface UserProfileProps {
 export function UserProfile({ profile }: UserProfileProps) {
   const [isLoading, setIsLoading] = useState(false);
   const router = useRouter();
-  const supabase = createClientComponentClient<Database>();
+  const supabase = createBrowserClient<Database>(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  );
 
   const handleSignOut = async () => {
     try {

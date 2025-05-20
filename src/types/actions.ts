@@ -1,9 +1,14 @@
 import { AppError } from "@/lib/errors";
 
-export interface ActionResponse<T = unknown> {
+export interface ActionError {
+  message: string;
+  code: string;
+}
+
+export interface ActionResponse<T = void> {
   success: boolean;
   data?: T;
-  error?: AppError;
+  error?: ActionError;
 }
 
 export interface SubscriptionResponse {

@@ -28,45 +28,127 @@ export const createSubscription = action(
   createSubscriptionSchema,
   async ({ priceId }): Promise<ActionResponse<{ url: string }>> => {
     try {
+      console.log("Starting subscription creation with priceId:", priceId);
+
+      if (!process.env.NEXT_PUBLIC_STRIPE_MONTHLY_PRICE_ID) {
+        console.error(
+          "Missing NEXT_PUBLIC_STRIPE_MONTHLY_PRICE_ID environment variable"
+        );
+        return {
+          success: false,
+          error: {
+            message: "Server configuration error",
+            code: "CONFIG_ERROR",
+          },
+        };
+      }
+
+      if (!process.env.NEXT_PUBLIC_APP_URL) {
+        console.error("Missing NEXT_PUBLIC_APP_URL environment variable");
+        return {
+          success: false,
+          error: {
+            message: "Server configuration error",
+            code: "CONFIG_ERROR",
+          },
+        };
+      }
+
       const cookieStore = cookies();
       const supabase = createClient(cookieStore);
 
+      // Get session first
       const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
 
-      if (!user || userError) {
-        return { success: false, error: appErrors.UNAUTHORIZED };
+      console.log("Session check:", {
+        hasSession: !!session,
+        error: sessionError,
+        userId: session?.user?.id,
+      });
+
+      if (sessionError) {
+        console.error("Session error:", sessionError);
+        return {
+          success: false,
+          error: {
+            message: "Authentication error",
+            code: "AUTH_ERROR",
+          },
+        };
       }
 
-      const { data: profile } = await supabase
+      if (!session?.user) {
+        console.error("No user in session");
+        return {
+          success: false,
+          error: {
+            message: "Authentication required",
+            code: "UNAUTHORIZED",
+          },
+        };
+      }
+
+      const { data: profile, error: profileError } = await supabase
         .from("profiles")
         .select("*")
-        .eq("id", user.id)
+        .eq("id", session.user.id)
         .single();
 
+      console.log("Profile fetch:", {
+        profile: !!profile,
+        error: profileError,
+        userId: session.user.id,
+      });
+
       if (!profile) {
-        return { success: false, error: appErrors.NOT_FOUND };
+        console.error("Profile not found for user:", session.user.id);
+        return {
+          success: false,
+          error: {
+            message: "Profile not found",
+            code: "NOT_FOUND",
+          },
+        };
       }
 
       let customerId = profile.stripe_customer_id;
+      console.log("Existing customer ID:", customerId);
 
       if (!customerId) {
+        console.log("Creating new Stripe customer for user:", session.user.id);
         const customer = await stripe.customers.create({
-          email: user.email,
+          email: session.user.email,
           metadata: {
-            userId: user.id,
+            userId: session.user.id,
           },
         });
         customerId = customer.id;
+        console.log("New customer created:", customerId);
 
-        await supabase
+        const { error: updateError } = await supabase
           .from("profiles")
           .update({ stripe_customer_id: customerId })
-          .eq("id", user.id);
+          .eq("id", session.user.id);
+
+        if (updateError) {
+          console.error(
+            "Error updating profile with customer ID:",
+            updateError
+          );
+          return {
+            success: false,
+            error: {
+              message: "Failed to update profile",
+              code: "DATABASE_ERROR",
+            },
+          };
+        }
       }
 
+      console.log("Creating Stripe checkout session");
       const checkoutSession = await stripe.checkout.sessions.create({
         customer: customerId,
         line_items: [
@@ -79,12 +161,24 @@ export const createSubscription = action(
         success_url: `${process.env.NEXT_PUBLIC_APP_URL}/subscription?success=true`,
         cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/subscription?canceled=true`,
         metadata: {
-          userId: user.id,
+          userId: session.user.id,
         },
       });
 
+      console.log("Checkout session created:", {
+        sessionId: checkoutSession.id,
+        hasUrl: !!checkoutSession.url,
+      });
+
       if (!checkoutSession.url) {
-        throw new AppError("Failed to create checkout session", "STRIPE_ERROR");
+        console.error("No checkout URL in session");
+        return {
+          success: false,
+          error: {
+            message: "Failed to create checkout session",
+            code: "STRIPE_ERROR",
+          },
+        };
       }
 
       return { success: true, data: { url: checkoutSession.url } };
@@ -92,7 +186,13 @@ export const createSubscription = action(
       console.error("Subscription creation error:", error);
       return {
         success: false,
-        error: error instanceof AppError ? error : appErrors.UNEXPECTED_ERROR,
+        error: {
+          message:
+            error instanceof Error
+              ? error.message
+              : "An unexpected error occurred",
+          code: "UNEXPECTED_ERROR",
+        },
       };
     }
   }

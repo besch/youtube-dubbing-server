@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { createBrowserClient } from "@supabase/ssr";
 import {
   Card,
   CardContent,
@@ -14,13 +15,13 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Icons } from "@/components/icons";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { toast } from "sonner";
+import { Check } from "lucide-react";
+import type { Database } from "@/types/supabase";
 import {
   createSubscription,
   createCustomerPortal,
 } from "@/app/actions/subscription";
-import { toast } from "sonner";
-import { Check } from "lucide-react";
-import type { Database } from "@/types/supabase";
 
 type Profile = {
   id: string;
@@ -35,20 +36,54 @@ interface SubscriptionPlansProps {
 export function SubscriptionPlans({ profile }: SubscriptionPlansProps) {
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
+  const supabase = createBrowserClient<Database>(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  );
 
   const currentPlan = profile?.subscription_status || "free";
 
   const handleUpgrade = async () => {
     try {
       setIsLoading(true);
+      console.log("Starting subscription upgrade...");
+
+      // Get user directly
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError || !user) {
+        console.error("No authenticated user:", userError);
+        toast.error("Please sign in to upgrade your subscription");
+        router.push("/login");
+        return;
+      }
+
       const result = await createSubscription({
         priceId: process.env.NEXT_PUBLIC_STRIPE_MONTHLY_PRICE_ID!,
       });
 
-      if (!result.data?.success || !result.data.data?.url) {
-        throw new Error(result.serverError || "Failed to create subscription");
+      console.log("Subscription action result:", result);
+
+      if (!result.data?.success) {
+        const errorMessage =
+          result.data?.error?.message ||
+          result.serverError ||
+          "Failed to create subscription";
+        console.error("Subscription failed:", errorMessage);
+        toast.error(errorMessage);
+        return;
       }
 
+      if (!result.data.data?.url) {
+        console.error("No checkout URL in response");
+        toast.error("Failed to create checkout session");
+        return;
+      }
+
+      console.log("Redirecting to checkout URL:", result.data.data.url);
       router.push(result.data.data.url);
     } catch (error) {
       console.error("Subscription error:", error);
@@ -61,6 +96,20 @@ export function SubscriptionPlans({ profile }: SubscriptionPlansProps) {
   const handleManageSubscription = async () => {
     try {
       setIsLoading(true);
+
+      // Check auth state before proceeding
+      const {
+        data: { session },
+        error: sessionError,
+      } = await supabase.auth.getSession();
+
+      if (sessionError || !session) {
+        console.error("No active session:", sessionError);
+        toast.error("Please sign in to manage your subscription");
+        router.push("/login");
+        return;
+      }
+
       const result = await createCustomerPortal({});
 
       if (!result.data?.success || !result.data.data?.url) {
