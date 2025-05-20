@@ -32,17 +32,18 @@ export const createSubscription = action(
       const supabase = createClient(cookieStore);
 
       const {
-        data: { session },
-      } = await supabase.auth.getSession();
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
 
-      if (!session?.user) {
+      if (!user || userError) {
         return { success: false, error: appErrors.UNAUTHORIZED };
       }
 
       const { data: profile } = await supabase
         .from("profiles")
         .select("*")
-        .eq("id", session.user.id)
+        .eq("id", user.id)
         .single();
 
       if (!profile) {
@@ -53,9 +54,9 @@ export const createSubscription = action(
 
       if (!customerId) {
         const customer = await stripe.customers.create({
-          email: session.user.email,
+          email: user.email,
           metadata: {
-            userId: session.user.id,
+            userId: user.id,
           },
         });
         customerId = customer.id;
@@ -63,7 +64,7 @@ export const createSubscription = action(
         await supabase
           .from("profiles")
           .update({ stripe_customer_id: customerId })
-          .eq("id", session.user.id);
+          .eq("id", user.id);
       }
 
       const checkoutSession = await stripe.checkout.sessions.create({
@@ -78,7 +79,7 @@ export const createSubscription = action(
         success_url: `${process.env.NEXT_PUBLIC_APP_URL}/subscription?success=true`,
         cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/subscription?canceled=true`,
         metadata: {
-          userId: session.user.id,
+          userId: user.id,
         },
       });
 
@@ -105,17 +106,18 @@ export const createCustomerPortal = action(
       const supabase = createClient(cookieStore);
 
       const {
-        data: { session },
-      } = await supabase.auth.getSession();
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
 
-      if (!session?.user) {
+      if (!user || userError) {
         return { success: false, error: appErrors.UNAUTHORIZED };
       }
 
       const { data: profile } = await supabase
         .from("profiles")
         .select("*")
-        .eq("id", session.user.id)
+        .eq("id", user.id)
         .single();
 
       if (!profile?.stripe_customer_id) {
@@ -249,29 +251,24 @@ export const handleStripeWebhook = async (event: Stripe.Event) => {
           .from("profiles")
           .update({
             subscription_status: "premium",
+            stripe_subscription_id: session.subscription as string,
           })
           .eq("id", userId);
 
         if (error) {
-          throw error;
+          throw new Error("Failed to update subscription status");
         }
-
-        // Log subscription event
-        await supabase.from("subscription_events").insert({
-          user_id: userId,
-          event_type: "subscription_created",
-          stripe_event_id: session.id,
-        });
-
         break;
       }
-
       case "customer.subscription.deleted": {
         const subscription = event.data.object as Stripe.Subscription;
-        const userId = subscription.metadata?.userId;
+        const customer = (await stripe.customers.retrieve(
+          subscription.customer as string
+        )) as Stripe.Customer;
+        const userId = customer.metadata.userId;
 
         if (!userId) {
-          throw new Error("No user ID in subscription metadata");
+          throw new Error("No user ID in customer metadata");
         }
 
         // Update user's subscription status
@@ -279,27 +276,18 @@ export const handleStripeWebhook = async (event: Stripe.Event) => {
           .from("profiles")
           .update({
             subscription_status: "free",
+            stripe_subscription_id: null,
           })
           .eq("id", userId);
 
         if (error) {
-          throw error;
+          throw new Error("Failed to update subscription status");
         }
-
-        // Log subscription event
-        await supabase.from("subscription_events").insert({
-          user_id: userId,
-          event_type: "subscription_cancelled",
-          stripe_event_id: subscription.id,
-        });
-
         break;
       }
     }
-
-    return { success: true };
   } catch (error) {
-    console.error("Error handling Stripe webhook:", error);
-    return { success: false, error: "Failed to handle webhook" };
+    console.error("Webhook error:", error);
+    throw error;
   }
 };

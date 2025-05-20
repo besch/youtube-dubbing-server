@@ -15,7 +15,13 @@ import { Icons } from "@/components/icons";
 import { toast } from "sonner";
 import type { Database } from "@/types/supabase";
 
-type Profile = Database["public"]["Tables"]["profiles"]["Row"];
+type Profile = {
+  id: string;
+  email: string;
+  display_name: string | null;
+  subscription_status: string | null;
+  daily_video_count: number | null;
+};
 
 interface UserProfileProps {
   profile: Profile;
@@ -50,7 +56,7 @@ export function UserProfile({ profile }: UserProfileProps) {
             Manage your account settings and subscription
           </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-6">
+        <CardContent>
           <div className="space-y-2">
             <h3 className="text-lg font-medium">Account Information</h3>
             <div className="grid gap-2">
@@ -60,7 +66,7 @@ export function UserProfile({ profile }: UserProfileProps) {
               </div>
               <div className="flex items-center gap-2">
                 <span className="font-medium">Name:</span>
-                <span>{profile.full_name || "Not set"}</span>
+                <span>{profile.display_name || "Not set"}</span>
               </div>
             </div>
           </div>
