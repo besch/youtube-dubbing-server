@@ -7,16 +7,28 @@ import { Button } from "@/components/ui/button";
 import { Icons } from "@/components/icons";
 import { toast } from "sonner";
 import type { Database } from "@/types/supabase";
+import { useEffect, useState } from "react";
 
 export function Nav() {
   const pathname = usePathname();
   const supabase = createClientComponentClient<Database>();
+  const [user, setUser] = useState<any>(null);
+
+  useEffect(() => {
+    const getUser = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      setUser(user);
+    };
+    getUser();
+  }, [supabase.auth]);
 
   const handleSignOut = async () => {
     try {
       const { error } = await supabase.auth.signOut();
       if (error) throw error;
-      window.location.href = "/login";
+      window.location.href = "/";
     } catch (error) {
       toast.error("Failed to sign out");
       console.error(error);
@@ -40,28 +52,42 @@ export function Nav() {
             >
               Home
             </Link>
-            <Link
-              href="/subscription"
-              className={`transition-colors hover:text-foreground/80 ${
-                pathname === "/subscription"
-                  ? "text-foreground"
-                  : "text-foreground/60"
-              }`}
-            >
-              Subscription
-            </Link>
+            {user && (
+              <Link
+                href="/subscription"
+                className={`transition-colors hover:text-foreground/80 ${
+                  pathname === "/subscription"
+                    ? "text-foreground"
+                    : "text-foreground/60"
+                }`}
+              >
+                Subscription
+              </Link>
+            )}
           </nav>
         </div>
         <div className="flex flex-1 items-center justify-end space-x-4">
           <nav className="flex items-center space-x-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleSignOut}
-              className="text-sm font-medium"
-            >
-              Sign Out
-            </Button>
+            {user ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleSignOut}
+                className="text-sm font-medium"
+              >
+                Sign Out
+              </Button>
+            ) : (
+              <Link href="/login">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-sm font-medium"
+                >
+                  Sign In
+                </Button>
+              </Link>
+            )}
           </nav>
         </div>
       </div>

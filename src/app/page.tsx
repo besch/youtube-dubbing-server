@@ -1,7 +1,6 @@
 import { Metadata } from "next";
 import { createServerClient } from "@/lib/supabase";
 import { VideoProcessor } from "@/components/video/video-processor";
-import { redirect } from "next/navigation";
 
 export const metadata: Metadata = {
   title: "YouTube Dubbing",
@@ -15,25 +14,21 @@ export default async function HomePage() {
     data: { user },
   } = await supabase.auth.getUser();
 
-  if (!user) {
-    redirect("/login");
-  }
-
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("subscription_status, daily_video_count")
-    .eq("id", user.id)
-    .single();
-
-  if (!profile) {
-    redirect("/login");
+  let profile = null;
+  if (user) {
+    const { data } = await supabase
+      .from("profiles")
+      .select("subscription_status, daily_video_count")
+      .eq("id", user.id)
+      .single();
+    profile = data;
   }
 
   return (
     <div className="container py-8">
       <VideoProcessor
-        subscriptionStatus={profile.subscription_status}
-        dailyVideoCount={profile.daily_video_count}
+        subscriptionStatus={profile?.subscription_status || "free"}
+        dailyVideoCount={profile?.daily_video_count || 0}
       />
     </div>
   );

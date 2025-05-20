@@ -18,26 +18,14 @@ export async function middleware(request: NextRequest) {
     await updateIpAddress({ userId: user.id, ipAddress: ip });
   }
 
-  // Protected routes
-  const protectedRoutes = ["/subscription", "/profile"];
-  const isProtectedRoute = protectedRoutes.some((route) =>
-    request.nextUrl.pathname.startsWith(route)
-  );
-
-  if (isProtectedRoute && !user) {
-    const redirectUrl = new URL("/login", request.url);
-    redirectUrl.searchParams.set("redirect", request.nextUrl.pathname);
-    return NextResponse.redirect(redirectUrl);
+  // Special handling for auth callback - let it pass through
+  if (request.nextUrl.pathname.startsWith("/auth/callback")) {
+    return res;
   }
 
-  // Redirect authenticated users away from auth pages
-  const authRoutes = ["/login", "/signup"];
-  const isAuthRoute = authRoutes.some((route) =>
-    request.nextUrl.pathname.startsWith(route)
-  );
-
-  if (isAuthRoute && user) {
-    return NextResponse.redirect(new URL("/", request.url));
+  // Only protect subscription-related routes
+  if (request.nextUrl.pathname.startsWith("/subscription") && !user) {
+    return NextResponse.redirect(new URL("/login", request.url));
   }
 
   return res;

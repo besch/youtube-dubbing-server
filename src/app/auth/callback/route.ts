@@ -7,11 +7,41 @@ export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get("code");
 
-  if (code) {
-    const supabase = createRouteHandlerClient<Database>({ cookies });
-    await supabase.auth.exchangeCodeForSession(code);
+  if (!code) {
+    console.error("No code provided in callback");
+    return NextResponse.redirect(
+      `${requestUrl.origin}/login?error=No code provided`
+    );
   }
 
-  // URL to redirect to after sign in process completes
-  return NextResponse.redirect(requestUrl.origin);
+  try {
+    const cookieStore = cookies();
+    const supabase = createRouteHandlerClient<Database>({
+      cookies: () => cookieStore,
+    });
+
+    const { error, data } = await supabase.auth.exchangeCodeForSession(code);
+
+    if (error) {
+      console.error("Auth callback error:", error);
+      return NextResponse.redirect(
+        `${requestUrl.origin}/login?error=Authentication failed`
+      );
+    }
+
+    if (!data.session) {
+      console.error("No session after code exchange");
+      return NextResponse.redirect(
+        `${requestUrl.origin}/login?error=No session created`
+      );
+    }
+
+    // Successful authentication
+    return NextResponse.redirect(requestUrl.origin);
+  } catch (error) {
+    console.error("Auth callback error:", error);
+    return NextResponse.redirect(
+      `${requestUrl.origin}/login?error=Authentication failed`
+    );
+  }
 }
