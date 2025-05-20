@@ -19,7 +19,7 @@ export default async function SubscriptionPage() {
   if (session) {
     const { data } = await supabase
       .from("profiles")
-      .select("*")
+      .select("id, subscription_status, stripe_customer_id, daily_video_count")
       .eq("id", session.user.id)
       .single();
     profile = data;

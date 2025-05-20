@@ -281,8 +281,7 @@ CREATE TABLE IF NOT EXISTS "public"."profiles" (
     "stripe_customer_id" "text" UNIQUE,
     "created_at" timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL,
     "updated_at" timestamp with time zone DEFAULT timezone('utc'::text, now()) NOT NULL,
-    "settings" "jsonb" DEFAULT '{"voice_mapping": {"default": "alloy"}, "default_language": "en"}'::"jsonb" NOT NULL,
-    "has_completed_onboarding" BOOLEAN DEFAULT false
+    "settings" "jsonb" DEFAULT '{"voice_mapping": {"default": "alloy"}, "default_language": "en"}'::"jsonb" NOT NULL
 );
 
 

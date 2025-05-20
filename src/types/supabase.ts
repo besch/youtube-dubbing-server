@@ -17,9 +17,10 @@ export interface Database {
           avatar_url: string | null;
           subscription_status: "free" | "premium";
           daily_video_count: number;
-          last_video_date: string | null;
+          stripe_customer_id: string | null;
           created_at: string;
           updated_at: string;
+          settings: Json;
           has_completed_onboarding: boolean;
         };
         Insert: {
@@ -29,9 +30,10 @@ export interface Database {
           avatar_url?: string | null;
           subscription_status?: "free" | "premium";
           daily_video_count?: number;
-          last_video_date?: string | null;
+          stripe_customer_id?: string | null;
           created_at?: string;
           updated_at?: string;
+          settings?: Json;
           has_completed_onboarding?: boolean;
         };
         Update: {
@@ -41,9 +43,10 @@ export interface Database {
           avatar_url?: string | null;
           subscription_status?: "free" | "premium";
           daily_video_count?: number;
-          last_video_date?: string | null;
+          stripe_customer_id?: string | null;
           created_at?: string;
           updated_at?: string;
+          settings?: Json;
           has_completed_onboarding?: boolean;
         };
         Relationships: [

@@ -27,10 +27,9 @@ export async function POST(req: Request) {
     const supabase = createClient(cookieStore);
 
     switch (event.type) {
-      case "customer.subscription.created":
-      case "customer.subscription.updated": {
-        const subscription = event.data.object;
-        const userId = subscription.metadata.userId;
+      case "checkout.session.completed": {
+        const session = event.data.object;
+        const userId = session.metadata?.userId;
 
         if (!userId) {
           return new NextResponse("No user ID in metadata", { status: 400 });
@@ -39,9 +38,8 @@ export async function POST(req: Request) {
         const { error } = await supabase
           .from("profiles")
           .update({
-            subscription_status:
-              subscription.status === "active" ? "premium" : "free",
-            subscription_id: subscription.id,
+            subscription_status: "premium",
+            subscription_id: session.subscription,
           })
           .eq("id", userId);
 
@@ -57,7 +55,7 @@ export async function POST(req: Request) {
 
       case "customer.subscription.deleted": {
         const subscription = event.data.object;
-        const userId = subscription.metadata.userId;
+        const userId = subscription.metadata?.userId;
 
         if (!userId) {
           return new NextResponse("No user ID in metadata", { status: 400 });
