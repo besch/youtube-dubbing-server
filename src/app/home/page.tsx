@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { Github, Smartphone, Apple, Play } from "lucide-react";
+import { Github, Youtube, Tv2 } from "lucide-react";
 import Link from "next/link";
 
 export default function HomePage() {
@@ -8,8 +8,8 @@ export default function HomePage() {
       <main className="flex flex-col items-center justify-center flex-grow px-4 sm:px-8 py-16 sm:py-24 text-center">
         <div className="max-w-4xl mx-auto">
           <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-violet-500/30 bg-violet-950/40 px-3 py-1 text-xs font-medium text-violet-300">
-            <Smartphone size={14} className="text-violet-400" />
-            <span>Mobile App First Experience</span>
+            <Tv2 size={14} className="text-violet-400" />
+            <span>Chrome Extension Experience</span>
           </div>
 
           <h1 className="text-4xl sm:text-5xl md:text-6xl font-extrabold tracking-tight mb-4 bg-clip-text text-transparent bg-gradient-to-r from-violet-400 via-purple-500 to-orange-500">
@@ -17,24 +17,21 @@ export default function HomePage() {
           </h1>
           <p className="text-lg sm:text-xl text-neutral-300/80 max-w-2xl mx-auto mb-10">
             Experience YouTube videos in your preferred language and voice with
-            our real-time AI-powered dubbing mobile application.
+            our real-time AI-powered dubbing Chrome Extension.
           </p>
 
-          <div className="flex flex-col sm:flex-row justify-center items-center gap-4 mb-12">
-            <a
-              href="#"
-              className="flex items-center justify-center gap-2.5 w-full sm:w-auto rounded-lg bg-white px-6 py-3 text-black font-semibold shadow-md hover:bg-neutral-200 transition-colors duration-200"
-            >
-              <Apple size={20} />
-              <span>Download on the App Store</span>
-            </a>
-            <a
-              href="#"
-              className="flex items-center justify-center gap-2.5 w-full sm:w-auto rounded-lg bg-neutral-800 px-6 py-3 text-white font-semibold ring-1 ring-neutral-700 hover:bg-neutral-700 transition-colors duration-200"
-            >
-              <Play size={20} />
-              <span>Get it on Google Play</span>
-            </a>
+          <div className="my-12 px-4">
+            <div className="aspect-video max-w-3xl mx-auto rounded-xl overflow-hidden shadow-2xl border border-neutral-700/50">
+              <iframe
+                width="100%"
+                height="100%"
+                src="https://www.youtube.com/embed/f9Ti7OfXIjQ?autoplay=1&mute=1&loop=1&playlist=f9Ti7OfXIjQ&controls=0&showinfo=0&rel=0&iv_load_policy=3&modestbranding=1"
+                title="YouTube video player"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowFullScreen
+                className="rounded-xl"
+              ></iframe>
+            </div>
           </div>
 
           <div className="mb-16 px-4">

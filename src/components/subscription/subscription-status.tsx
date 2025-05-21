@@ -16,6 +16,7 @@ import { CalendarIcon } from "lucide-react";
 import { format } from "date-fns";
 import type { Database } from "@/types/supabase";
 import type { ActionResponse } from "@/types/actions";
+import { Icons } from "@/components/icons";
 
 type Profile = Database["public"]["Tables"]["profiles"]["Row"];
 
@@ -60,21 +61,32 @@ export function SubscriptionStatus({ profile }: SubscriptionStatusProps) {
   const isActive = subscriptionEndDate && subscriptionEndDate > new Date();
 
   return (
-    <Card className="max-w-2xl mx-auto">
-      <CardHeader>
+    <Card className="max-w-2xl mx-auto bg-neutral-900 border-neutral-700 shadow-xl rounded-xl my-12">
+      <CardHeader className="p-6">
         <div className="flex items-center justify-between">
           <div>
-            <CardTitle className="text-2xl">Premium Subscription</CardTitle>
-            <CardDescription>Manage your subscription settings</CardDescription>
+            <CardTitle className="text-3xl font-bold text-violet-400">
+              Premium Subscription
+            </CardTitle>
+            <CardDescription className="text-neutral-400 mt-1">
+              Manage your subscription settings
+            </CardDescription>
           </div>
-          <Badge variant={isActive ? "default" : "destructive"}>
+          <Badge
+            variant={isActive ? "default" : "destructive"}
+            className={`px-3 py-1 text-sm font-semibold rounded-full ${
+              isActive
+                ? "bg-green-500/20 text-green-400 border-green-500/50"
+                : "bg-red-500/20 text-red-400 border-red-500/50"
+            }`}
+          >
             {isActive ? "Active" : "Expired"}
           </Badge>
         </div>
       </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex items-center space-x-2 text-muted-foreground">
-          <CalendarIcon className="h-5 w-5" />
+      <CardContent className="p-6 space-y-4">
+        <div className="flex items-center space-x-3 text-neutral-300 text-lg">
+          <CalendarIcon className="h-6 w-6 text-violet-400 flex-shrink-0" />
           <span>
             {subscriptionEndDate
               ? isActive
@@ -84,13 +96,20 @@ export function SubscriptionStatus({ profile }: SubscriptionStatusProps) {
           </span>
         </div>
       </CardContent>
-      <CardFooter>
+      <CardFooter className="p-6 border-t border-neutral-800 mt-auto">
         <Button
           onClick={handleManageSubscription}
           disabled={isLoading}
-          className="w-full"
+          className="w-full bg-violet-600 hover:bg-violet-700 text-white font-semibold py-3 text-lg rounded-lg transition-colors duration-300 shadow-md hover:shadow-lg disabled:opacity-50"
         >
-          {isLoading ? "Loading..." : "Manage Subscription"}
+          {isLoading ? (
+            <>
+              <Icons.spinner className="mr-2 h-5 w-5 animate-spin" />
+              Loading...
+            </>
+          ) : (
+            "Manage Subscription"
+          )}
         </Button>
       </CardFooter>
     </Card>
