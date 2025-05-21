@@ -62,7 +62,7 @@ export function Nav() {
         <div className="mr-4 flex">
           <Link href="/" className="mr-6 flex items-center space-x-2">
             <Icons.logo className="h-6 w-6" />
-            <span className="font-bold">YouTube Dubbing</span>
+            <span className="font-bold">Dubabase</span>
           </Link>
           <nav className="flex items-center space-x-6 text-sm font-medium">
             <Link
