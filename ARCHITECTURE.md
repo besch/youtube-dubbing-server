@@ -401,23 +401,18 @@ The core backend processing for _movies and shows that might still use the job s
 ### 8.3. User Profiles
 
 - **Profile Creation:**
-
-  - Automatically created on first sign-in
-  - Stored in `profiles` table with default values:
-    - `subscription_status`: "free"
-    - `daily_video_count`: 0
-
-- **Profile Fields:**
+  - Automatically created on first sign-in via a Supabase Auth trigger that populates the `public.profiles` table.
+  - Stored in `profiles` table with default values.
+- **Profile Fields (relevant to subscription):**
   ```sql
   id: uuid (references auth.users)
   email: string
-  full_name: string | null
-  avatar_url: string | null
-  subscription_status: "free" | "premium"
-  daily_video_count: number
-  last_video_date: string | null
-  created_at: timestamp
-  updated_at: timestamp
+  # ... other general profile fields
+  subscription_status: "free" | "premium" | null -- Managed by Stripe webhooks
+  subscription_id: string | null                -- Stripe Subscription ID, managed by webhooks
+  subscription_end_date: timestamp | null       -- Current period end for the subscription, managed by webhooks
+  # daily_video_count: number -- (already listed)
+  # ... other fields like last_ip_address, last_video_count_reset, settings
   ```
 
 ## 9. Subscription Plans & Features
@@ -451,15 +446,12 @@ The core backend processing for _movies and shows that might still use the job s
 ### 9.3. Subscription Management
 
 - **Subscription Status Tracking:**
-
-  - Stored in `profiles` table
-  - Updated via Stripe webhooks
-  - Affects user's daily limits and feature access
-
+  - Key fields `subscription_status`, `subscription_id`, and `subscription_end_date` are stored in the `profiles` table.
+  - These fields are updated primarily via Stripe webhooks (`checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`) processed by the `/api/stripe/webhook/route.ts` endpoint, which in turn calls the `handleStripeWebhook` server action.
+  - The application logic reads these fields to determine a user's current plan and access rights.
 - **Usage Tracking:**
-  - `daily_video_count` resets at midnight UTC
-  - `last_video_date` tracks last video processing
-  - Premium users bypass daily count checks
+  - `daily_video_count` is used for free plan limitations.
+  - Premium users (where `subscription_status` is 'premium' and `subscription_end_date` is in the future) typically bypass these daily counts.
 
 ### 9.4. Feature Access Control
 
@@ -493,18 +485,22 @@ The core backend processing for _movies and shows that might still use the job s
 
 3. **Upgrade Flow:**
 
-   - User clicks upgrade button or hits limit
-   - Redirected to Stripe checkout
-   - After successful payment:
-     - Subscription status updated
-     - Premium features unlocked
-     - Usage limits removed
+   - User initiates an upgrade (e.g., clicks an upgrade button or hits a usage limit).
+   - User is redirected to Stripe Checkout (via a server action like `createSubscription` that generates a Stripe Checkout session).
+   - After successful payment on Stripe:
+     - Stripe sends a `checkout.session.completed` webhook event to the server.
+     - The server's webhook handler updates the user's record in the `profiles` table (sets `subscription_status` to "premium", stores the Stripe `subscription_id`, and sets `subscription_end_date` based on the subscription's current period end).
+     - Premium features are subsequently unlocked based on the updated profile status.
+     - Usage limits are effectively removed or increased as per the premium plan.
 
-4. **Downgrade Flow:**
-   - User can cancel subscription
-   - Continues to have premium access until end of billing period
-   - Reverts to free plan after period ends
-   - Access to premium features maintained until subscription expires
+4. **Downgrade/Cancellation Flow:**
+   - User typically cancels their subscription via the Stripe Customer Portal (accessed via a "Manage Subscription" link driven by a server action like `createCustomerPortal`).
+   - When a subscription is canceled or its status changes (e.g., payment failure, end of billing period after cancellation):
+     - Stripe sends webhook events such as `customer.subscription.updated` or `customer.subscription.deleted`.
+     - The server's webhook handler processes these events:
+       - For `customer.subscription.updated`: If the subscription status from Stripe is no longer 'active' or 'trialing', the `profiles.subscription_status` might be updated (e.g., to 'free' or another appropriate status), and `subscription_end_date` is updated.
+       - For `customer.subscription.deleted`: The `profiles.subscription_status` is typically set to "free", and `subscription_id` and `subscription_end_date` are cleared.
+   - The application grants premium access as long as `profiles.subscription_status` is "premium" and `profiles.subscription_end_date` is in the future. Once the `subscription_end_date` passes or the status changes due to webhook updates, the user reverts to the free plan.
 
 ### 9.6. Usage Monitoring
 
