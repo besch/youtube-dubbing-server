@@ -50,6 +50,10 @@ export function UserProfile({ profile }: UserProfileProps) {
     }
   };
 
+  const isPremium =
+    profile.subscription_status === "active" ||
+    profile.subscription_status === "premium";
+
   return (
     <div className="container max-w-4xl py-12">
       <Card className="bg-neutral-900 border-neutral-700 shadow-xl rounded-xl">
@@ -108,17 +112,23 @@ export function UserProfile({ profile }: UserProfileProps) {
           <div className="space-y-4">
             <h3 className="text-xl font-semibold text-neutral-200">Usage</h3>
             <div className="grid gap-3 text-lg">
-              <div className="flex items-center gap-3">
-                <span className="font-medium text-neutral-400 w-32">
-                  Daily videos:
-                </span>
-                <span className="text-neutral-300">
-                  {profile.daily_video_count ?? 0}/4
-                  {(profile.subscription_status === "active" ||
-                    profile.subscription_status === "premium") &&
-                    " (Unlimited)"}
-                </span>
-              </div>
+              {isPremium ? (
+                <div className="flex items-center gap-3">
+                  <span className="font-medium text-neutral-400 w-32">
+                    Status:
+                  </span>
+                  <span className="text-neutral-300">Unlimited</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-3">
+                  <span className="font-medium text-neutral-400 w-32">
+                    Daily videos:
+                  </span>
+                  <span className="text-neutral-300">
+                    {profile.daily_video_count ?? 0}/4
+                  </span>
+                </div>
+              )}
             </div>
           </div>
 

@@ -104,21 +104,12 @@ export function Nav() {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent className="w-56" align="end" forceMount>
-                <DropdownMenuLabel className="font-normal">
-                  <div className="flex flex-col space-y-1">
-                    <p className="text-sm font-medium leading-none">
-                      {user.email || "My Account"}
-                    </p>
-                  </div>
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
                 <DropdownMenuItem asChild>
                   <Link href="/profile">Profile</Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
                   <Link href="/subscription">Subscription</Link>
                 </DropdownMenuItem>
-                <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onClick={handleSignOut}
                   className="cursor-pointer"
