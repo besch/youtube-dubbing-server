@@ -6,7 +6,7 @@ import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { stripe } from "@/lib/stripe";
 import { AppError, appErrors } from "@/lib/errors";
-import type { ActionResponse } from "@/types/actions";
+import type { ActionResponse, ActionError } from "@/types/actions";
 import type Stripe from "stripe";
 
 const createSubscriptionSchema = z.object({
@@ -211,17 +211,29 @@ export const createCustomerPortal = action(
       } = await supabase.auth.getUser();
 
       if (!user || userError) {
-        return { success: false, error: appErrors.UNAUTHORIZED };
+        return {
+          success: false,
+          error: {
+            message: appErrors.UNAUTHORIZED.message,
+            code: appErrors.UNAUTHORIZED.code,
+          },
+        };
       }
 
       const { data: profile } = await supabase
         .from("profiles")
-        .select("*")
+        .select("subscription_id")
         .eq("id", user.id)
         .single();
 
       if (!profile?.subscription_id) {
-        return { success: false, error: appErrors.NOT_FOUND };
+        return {
+          success: false,
+          error: {
+            message: appErrors.NOT_FOUND.message,
+            code: appErrors.NOT_FOUND.code,
+          },
+        };
       }
 
       // Get the subscription from Stripe
@@ -236,9 +248,20 @@ export const createCustomerPortal = action(
       return { success: true, data: { url: portalSession.url } };
     } catch (error) {
       console.error("Customer portal error:", error);
+      let errorResponse: ActionError;
+      if (error instanceof AppError) {
+        errorResponse = { message: error.message, code: error.code };
+      } else if (error instanceof Error) {
+        errorResponse = { message: error.message, code: "STRIPE_CLIENT_ERROR" };
+      } else {
+        errorResponse = {
+          message: appErrors.UNEXPECTED_ERROR.message,
+          code: appErrors.UNEXPECTED_ERROR.code,
+        };
+      }
       return {
         success: false,
-        error: error instanceof AppError ? error : appErrors.UNEXPECTED_ERROR,
+        error: errorResponse,
       };
     }
   }
