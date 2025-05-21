@@ -2,12 +2,12 @@ import { google } from "googleapis";
 import { YoutubeVideoInfo } from "@/types";
 import { appErrors } from "@/app/actions/actions";
 
-interface YoutubeSearchResult extends YoutubeVideoInfo {
+export interface YoutubeSearchResult extends YoutubeVideoInfo {
   views: number;
   published_at: string;
 }
 
-interface YoutubeSearchResponse {
+export interface YoutubeSearchResponse {
   results: YoutubeSearchResult[];
   nextPageToken?: string;
 }

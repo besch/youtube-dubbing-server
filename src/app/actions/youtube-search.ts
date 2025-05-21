@@ -2,20 +2,18 @@
 
 import { createSafeActionClient } from "next-safe-action";
 import { z } from "zod";
-import { appErrors } from "@/app/actions/actions";
 import { searchYoutubeVideos } from "@/lib/youtube-api";
+import type { ActionResponse } from "@/types/actions"; // Assuming ActionResponse is defined in @/types/actions
+import type { YoutubeSearchResponse } from "@/lib/youtube-api";
 
-const action = createSafeActionClient();
-
-// Schema for YouTube search
 const searchSchema = z.object({
   query: z.string().min(1),
   maxResults: z.number().min(1).max(50).optional(),
 });
 
-export const searchYoutube = action
-  .schema(searchSchema)
-  .action(async ({ parsedInput }) => {
+export const searchYoutube = createSafeActionClient()(
+  searchSchema,
+  async (parsedInput): Promise<ActionResponse<YoutubeSearchResponse>> => {
     const { query, maxResults = 10 } = parsedInput;
 
     try {
@@ -27,15 +25,21 @@ export const searchYoutube = action
       };
     } catch (error) {
       console.error("Error searching YouTube:", error);
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : "An unknown error occurred during YouTube search.";
       return {
         success: false,
-        error:
-          error instanceof Error
-            ? {
-                code: "UNEXPECTED_ERROR",
-                message: error.message,
-              }
-            : appErrors.UNEXPECTED_ERROR,
+        error: {
+          code:
+            error instanceof Error &&
+            (error as any).code === "YOUTUBE_API_ERROR"
+              ? "YOUTUBE_API_ERROR"
+              : "UNEXPECTED_ERROR",
+          message: errorMessage,
+        },
       };
     }
-  });
+  }
+);

@@ -359,7 +359,9 @@ export const updateIpAddress = action(
 );
 
 // Handle Stripe webhook
-export const handleStripeWebhook = async (event: Stripe.Event) => {
+export const handleStripeWebhook = async (
+  event: Stripe.Event
+): Promise<{ success: boolean; error?: string }> => {
   const cookieStore = cookies();
   const supabase = createClient(cookieStore);
 
@@ -370,7 +372,10 @@ export const handleStripeWebhook = async (event: Stripe.Event) => {
         const userId = session.metadata?.userId;
 
         if (!userId) {
-          throw new Error("No user ID in session metadata");
+          console.error(
+            "Webhook Error: No user ID in session metadata for checkout.session.completed"
+          );
+          return { success: false, error: "No user ID in session metadata" };
         }
 
         // Update user's subscription status
@@ -378,43 +383,83 @@ export const handleStripeWebhook = async (event: Stripe.Event) => {
           .from("profiles")
           .update({
             subscription_status: "premium",
-            stripe_subscription_id: session.subscription as string,
+            subscription_id: session.subscription as string,
           })
           .eq("id", userId);
 
         if (error) {
-          throw new Error("Failed to update subscription status");
+          console.error(
+            "Webhook Error: Failed to update subscription status for checkout.session.completed",
+            error
+          );
+          return {
+            success: false,
+            error: "Failed to update subscription status",
+          };
         }
+        console.log(
+          `Webhook: Successfully processed checkout.session.completed for user ${userId}`
+        );
         break;
       }
       case "customer.subscription.deleted": {
         const subscription = event.data.object as Stripe.Subscription;
-        const customer = (await stripe.customers.retrieve(
-          subscription.customer as string
-        )) as Stripe.Customer;
-        const userId = customer.metadata.userId;
-
-        if (!userId) {
-          throw new Error("No user ID in customer metadata");
+        const customerId = subscription.customer as string;
+        if (!customerId) {
+          console.error(
+            "Webhook Error: No customer ID on subscription for customer.subscription.deleted"
+          );
+          return { success: false, error: "No customer ID on subscription" };
         }
+
+        const customer = await stripe.customers.retrieve(customerId);
+        if (customer.deleted || !customer.metadata?.userId) {
+          console.error(
+            "Webhook Error: Customer deleted or no userId in customer metadata for customer.subscription.deleted"
+          );
+          return {
+            success: false,
+            error: "Customer deleted or no user ID in customer metadata",
+          };
+        }
+        const userId = customer.metadata.userId;
 
         // Update user's subscription status
         const { error } = await supabase
           .from("profiles")
           .update({
             subscription_status: "free",
-            stripe_subscription_id: null,
+            subscription_id: null,
           })
           .eq("id", userId);
 
         if (error) {
-          throw new Error("Failed to update subscription status");
+          console.error(
+            "Webhook Error: Failed to update subscription status for customer.subscription.deleted",
+            error
+          );
+          return {
+            success: false,
+            error: "Failed to update subscription status",
+          };
         }
+        console.log(
+          `Webhook: Successfully processed customer.subscription.deleted for user ${userId}`
+        );
         break;
       }
+      default:
+        console.log(`Webhook: Unhandled event type ${event.type}`);
     }
+    return { success: true };
   } catch (error) {
-    console.error("Webhook error:", error);
-    throw error;
+    console.error("Webhook processing error:", error);
+    return {
+      success: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "An unknown error occurred during webhook processing",
+    };
   }
 };
