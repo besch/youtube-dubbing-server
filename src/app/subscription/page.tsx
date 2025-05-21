@@ -1,35 +1,90 @@
-import { Metadata } from "next";
-import { createClient } from "@/lib/supabase/server";
-import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
-import { SubscriptionPlans } from "@/components/subscription/subscription-plans";
+"use client";
+
+import { useEffect, useState } from "react";
+import { createClient } from "@/lib/supabase/client";
 import { SubscriptionStatus } from "@/components/subscription/subscription-status";
+import { SubscriptionPlans } from "@/components/subscription/subscription-plans";
+import { useRouter } from "next/navigation";
+import type { Database } from "@/types/supabase";
+import type { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 
-export const metadata: Metadata = {
-  title: "Subscription",
-  description: "Choose your subscription plan",
-};
+type Profile = Database["public"]["Tables"]["profiles"]["Row"];
 
-export default async function SubscriptionPage() {
-  const cookieStore = cookies();
-  const supabase = createClient(cookieStore);
+export default function SubscriptionPage() {
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const router = useRouter();
+  const supabase = createClient();
 
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
+  useEffect(() => {
+    async function loadProfile() {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
 
-  if (!session?.user) {
-    redirect("/login");
+        if (!session?.user) {
+          router.push("/login");
+          return;
+        }
+
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("*")
+          .eq("id", session.user.id)
+          .single();
+
+        if (!profile) {
+          router.push("/login");
+          return;
+        }
+
+        setProfile(profile);
+      } catch (error) {
+        console.error("Error loading profile:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+
+    loadProfile();
+
+    // Subscribe to profile changes
+    const channel = supabase
+      .channel("profile_changes")
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "profiles",
+          filter: `id=eq.${profile?.id}`,
+        },
+        (payload: RealtimePostgresChangesPayload<Profile>) => {
+          if (payload.new && "id" in payload.new) {
+            setProfile(payload.new as Profile);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [router, supabase, profile?.id]);
+
+  if (isLoading) {
+    return (
+      <div className="container mx-auto px-4 py-8">
+        <div className="flex items-center justify-center min-h-[400px]">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
+        </div>
+      </div>
+    );
   }
 
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("*")
-    .eq("id", session.user.id)
-    .single();
-
   if (!profile) {
-    redirect("/login");
+    return null;
   }
 
   return (
