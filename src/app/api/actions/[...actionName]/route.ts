@@ -4,10 +4,12 @@ import { searchMovies } from "@/app/actions/movie/search";
 import { fetchSubtitles } from "@/app/actions/subtitle/fetch";
 import { fetchYouTubeSubtitles } from "@/app/actions/subtitle/fetch-youtube";
 import { AppError, AppErrorCode } from "@/app/actions/actions";
+import { generateAudioChunk } from "@/app/actions/audio/generation";
 
 type ActionFunction = (input: any) => Promise<any>;
 
 const actionRegistry: Record<string, ActionFunction> = {
+  generateAudio: generateAudioChunk,
   "video/getVideoByUrl": getVideoByUrl,
   "movie/search": searchMovies,
   "subtitle/fetch": fetchSubtitles,

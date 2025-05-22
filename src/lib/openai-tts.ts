@@ -36,7 +36,6 @@ export const VALID_TTS_VOICES: Set<OpenAiTtsVoice> = new Set([
 interface GenerateTtsParams {
   text: string;
   voice: OpenAiTtsVoice;
-  videoId: string;
   language: string;
   startTime: number;
   endTime: number;
@@ -44,20 +43,17 @@ interface GenerateTtsParams {
 
 interface GenerateTtsResult {
   audioBuffer: Buffer;
-  storagePath: string;
-  fileName: string;
 }
 
 /**
  * Generates audio using OpenAI TTS.
  * @param params - Parameters for TTS generation.
- * @returns An object containing the audio buffer and the generated storage path.
+ * @returns An object containing the audio buffer.
  * @throws AppError if OpenAI client is not initialized or TTS fails.
  */
 export async function generateOpenAiTts({
   text,
   voice,
-  videoId,
   language,
   startTime,
   endTime,
@@ -84,7 +80,7 @@ export async function generateOpenAiTts({
   }
 
   console.log(
-    `OpenAI TTS: Generating for ${videoId}, Lang: ${language}, Voice: ${voice}, Time: ${startTime}-${endTime}`
+    `OpenAI TTS: Generating for Lang: ${language}, Voice: ${voice}, Time: ${startTime}-${endTime}`
   );
   console.log(
     `OpenAI TTS: Input text (first 100 chars): "${text.substring(0, 100)}..."`
@@ -104,15 +100,9 @@ export async function generateOpenAiTts({
 
     const audioBuffer = Buffer.from(await ttsResponse.arrayBuffer());
 
-    // Generate a consistent filename
-    const fileName = `${videoId}_${language}_${voice}_${startTime.toFixed(
-      2
-    )}_${endTime.toFixed(2)}.mp3`;
-    const storagePath = `${videoId}/${language}/${fileName}`; // Define storage path structure
+    console.log(`OpenAI TTS: Generated audio buffer.`);
 
-    console.log(`OpenAI TTS: Generated audio buffer, path: ${storagePath}`);
-
-    return { audioBuffer, storagePath, fileName };
+    return { audioBuffer };
   } catch (error: unknown) {
     console.error("OpenAI TTS Error:", error);
     const message =

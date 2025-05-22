@@ -40,28 +40,24 @@ interface GenerateGoogleTtsParams {
   text: string;
   languageCode: string; // BCP-47 code (e.g., "en-US", "de-DE")
   voiceName: string; // Specific voice name (e.g., "en-US-Standard-A")
-  videoId: string;
   startTime: number;
   endTime: number;
 }
 
 interface GenerateGoogleTtsResult {
   audioBuffer: Buffer;
-  storagePath: string;
-  fileName: string;
 }
 
 /**
  * Generates audio using Google Text-to-Speech.
  * @param params - Parameters for TTS generation.
- * @returns An object containing the audio buffer and the generated storage path.
+ * @returns An object containing the audio buffer.
  * @throws AppError if Google TTS client is not initialized or TTS fails.
  */
 export async function generateGoogleTts({
   text,
   languageCode,
   voiceName,
-  videoId,
   startTime,
   endTime,
 }: GenerateGoogleTtsParams): Promise<GenerateGoogleTtsResult> {
@@ -91,7 +87,7 @@ export async function generateGoogleTts({
   }
 
   console.log(
-    `Google TTS: Generating for ${videoId}, Lang: ${languageCode}, Voice: ${voiceName}, Time: ${startTime}-${endTime}`
+    `Google TTS: Generating for Lang: ${languageCode}, Voice: ${voiceName}, Time: ${startTime}-${endTime}`
   );
   console.log(
     `Google TTS: Input text (first 100 chars): "${text.substring(0, 100)}..."`
@@ -127,18 +123,19 @@ export async function generateGoogleTts({
 
     // Generate a consistent filename (similar to OpenAI)
     // Using BCP-47 language code and full voice name for uniqueness
-    const simpleLangCode =
-      Object.entries(config.google.simpleToGoogleMap).find(
-        ([_, googleCode]) => googleCode === languageCode
-      )?.[0] || languageCode;
-    const fileName = `${videoId}_${simpleLangCode}_${voiceName}_${startTime.toFixed(
-      2
-    )}_${endTime.toFixed(2)}.mp3`;
-    const storagePath = `${videoId}/${simpleLangCode}/${fileName}`; // Use simple lang code for path consistency
+    // const simpleLangCode =
+    //   Object.entries(config.google.simpleToGoogleMap).find(
+    //     ([_, googleCode]) => googleCode === languageCode
+    //   )?.[0] || languageCode;
+    // const fileName = `${videoId}_${simpleLangCode}_${voiceName}_${startTime.toFixed(
+    //   2
+    // )}_${endTime.toFixed(2)}.mp3`;
+    // const storagePath = `${videoId}/${simpleLangCode}/${fileName}`; // Use simple lang code for path consistency
 
-    console.log(`Google TTS: Generated audio buffer, path: ${storagePath}`);
+    console.log(`Google TTS: Generated audio buffer.`);
 
-    return { audioBuffer, storagePath, fileName };
+    // return { audioBuffer, storagePath, fileName };
+    return { audioBuffer };
   } catch (error: unknown) {
     console.error("Google TTS API Error:", error);
     const message =
