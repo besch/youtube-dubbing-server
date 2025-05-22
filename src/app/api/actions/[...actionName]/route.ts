@@ -5,6 +5,7 @@ import { fetchSubtitles } from "@/app/actions/subtitle/fetch";
 import { fetchYouTubeSubtitles } from "@/app/actions/subtitle/fetch-youtube";
 import { AppError, AppErrorCode } from "@/app/actions/actions";
 import { generateAudioChunk } from "@/app/actions/audio/generation";
+import { checkVideoLimit } from "@/app/actions/subscription";
 
 type ActionFunction = (input: any) => Promise<any>;
 
@@ -14,6 +15,7 @@ const actionRegistry: Record<string, ActionFunction> = {
   "movie/search": searchMovies,
   "subtitle/fetch": fetchSubtitles,
   "subtitle/fetch-youtube": fetchYouTubeSubtitles,
+  "subscription/checkVideoLimit": checkVideoLimit,
 };
 
 export async function POST(request: NextRequest) {

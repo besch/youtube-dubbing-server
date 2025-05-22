@@ -3,18 +3,20 @@
 import { createSafeActionClient } from "next-safe-action";
 import { z } from "zod";
 import { cookies } from "next/headers";
-import { createClient } from "@/lib/supabase/server";
+import { createClient as createServerContextClient } from "@/lib/supabase/server";
 import { stripe } from "@/lib/stripe";
 import { AppError, appErrors } from "@/lib/errors";
 import type { ActionResponse, ActionError } from "@/types/actions";
 import type Stripe from "stripe";
+import { createClient as createAdminSupabaseClient } from "@supabase/supabase-js";
+import { FREE_TIER_VIDEO_LIMIT } from "@/config/constants";
 
 const createSubscriptionSchema = z.object({
   priceId: z.string(),
 });
 
 const checkVideoLimitSchema = z.object({
-  userId: z.string(),
+  videoUrlToCheck: z.string().optional(),
 });
 
 const updateIpAddressSchema = z.object({
@@ -55,9 +57,8 @@ export const createSubscription = action(
       }
 
       const cookieStore = cookies();
-      const supabase = createClient(cookieStore);
+      const supabase = createServerContextClient(cookieStore);
 
-      // Get session first
       const {
         data: { session },
         error: sessionError,
@@ -114,7 +115,6 @@ export const createSubscription = action(
         };
       }
 
-      // Create a new Stripe customer
       console.log("Creating new Stripe customer for user:", session.user.id);
       const customer = await stripe.customers.create({
         email: session.user.email,
@@ -125,7 +125,6 @@ export const createSubscription = action(
 
       console.log("New customer created:", customer.id);
 
-      // Create a subscription event record
       const { error: eventError } = await supabase
         .from("subscription_events")
         .insert({
@@ -203,7 +202,7 @@ export const createCustomerPortal = action(
   async (): Promise<ActionResponse<{ url: string }>> => {
     try {
       const cookieStore = cookies();
-      const supabase = createClient(cookieStore);
+      const supabase = createServerContextClient(cookieStore);
 
       const {
         data: { user },
@@ -230,18 +229,14 @@ export const createCustomerPortal = action(
         return {
           success: false,
           error: {
-            message: appErrors.NOT_FOUND.message,
+            message: "User has no active subscription or customer ID.",
             code: appErrors.NOT_FOUND.code,
           },
         };
       }
 
-      // Get the subscription from Stripe
-      const subscription = await stripe.subscriptions.retrieve(
-        profile.subscription_id
-      );
       const portalSession = await stripe.billingPortal.sessions.create({
-        customer: subscription.customer as string,
+        customer: profile.subscription_id,
         return_url: `${process.env.NEXT_PUBLIC_APP_URL}/subscription`,
       });
 
@@ -252,7 +247,11 @@ export const createCustomerPortal = action(
       if (error instanceof AppError) {
         errorResponse = { message: error.message, code: error.code };
       } else if (error instanceof Error) {
-        errorResponse = { message: error.message, code: "STRIPE_CLIENT_ERROR" };
+        if ((error as any).type && (error as any).type.startsWith("Stripe")) {
+          errorResponse = { message: error.message, code: "STRIPE_API_ERROR" };
+        } else {
+          errorResponse = { message: error.message, code: "UNEXPECTED_ERROR" };
+        }
       } else {
         errorResponse = {
           message: appErrors.UNEXPECTED_ERROR.message,
@@ -270,63 +269,146 @@ export const createCustomerPortal = action(
 export const checkVideoLimit = action(
   checkVideoLimitSchema,
   async ({
-    userId,
+    videoUrlToCheck,
   }): Promise<
     ActionResponse<{
       canProcess: boolean;
-      dailyVideoCount: number;
+      dailyProcessedVideoCount: number;
       remainingVideos: number;
+      isPremium: boolean;
     }>
   > => {
     try {
       const cookieStore = cookies();
-      const supabase = createClient(cookieStore);
+      const supabase = createServerContextClient(cookieStore);
 
-      const { data: profile } = await supabase
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+      if (userError || !user) {
+        return { success: false, error: appErrors.UNAUTHORIZED };
+      }
+
+      const { data: profileData, error: profileError } = await supabase
         .from("profiles")
-        .select("*")
-        .eq("id", userId)
+        .select("subscription_status, id")
+        .eq("id", user.id)
         .single();
 
-      if (!profile) {
+      if (profileError || !profileData) {
         return { success: false, error: appErrors.NOT_FOUND };
       }
 
-      if (profile.subscription_status === "premium") {
+      const isPremium = profileData.subscription_status === "premium";
+
+      if (isPremium) {
         return {
           success: true,
           data: {
             canProcess: true,
-            dailyVideoCount: 0,
+            dailyProcessedVideoCount: 0,
             remainingVideos: Infinity,
+            isPremium: true,
           },
         };
       }
 
-      const { data: videos } = await supabase
-        .from("videos")
-        .select("created_at")
-        .eq("user_id", userId)
-        .gte("created_at", new Date().toISOString().split("T")[0])
-        .order("created_at", { ascending: false });
+      const now = new Date();
+      const startOfDayUTC = new Date(
+        Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())
+      ).toISOString();
+      const endOfDayUTC = new Date(
+        Date.UTC(
+          now.getUTCFullYear(),
+          now.getUTCMonth(),
+          now.getUTCDate() + 1,
+          0,
+          0,
+          0,
+          -1
+        )
+      ).toISOString();
 
-      const dailyVideoCount = videos?.length ?? 0;
-      const canProcess = dailyVideoCount < 3;
+      const { count: dailyProcessedVideoCount, error: countError } =
+        await supabase
+          .from("daily_video_limits")
+          .select("video_id", { count: "exact", head: true })
+          .eq("user_id", user.id)
+          .gte("created_at", startOfDayUTC)
+          .lte("created_at", endOfDayUTC);
+
+      if (countError) {
+        console.error("Error counting processed videos:", countError);
+        return { success: false, error: appErrors.UNEXPECTED_ERROR };
+      }
+
+      const currentCount = dailyProcessedVideoCount || 0;
+      let canProcessThisVideo = currentCount < FREE_TIER_VIDEO_LIMIT;
+      let videoAlreadyProcessedToday = false;
+
+      if (videoUrlToCheck) {
+        const { data: specificVideoProcessed, error: specificVideoError } =
+          await supabase
+            .from("daily_video_limits")
+            .select("id")
+            .eq("user_id", user.id)
+            .eq("video_id", videoUrlToCheck)
+            .gte("created_at", startOfDayUTC)
+            .lte("created_at", endOfDayUTC)
+            .maybeSingle();
+
+        if (specificVideoError) {
+          console.error("Error checking specific video:", specificVideoError);
+          return { success: false, error: appErrors.UNEXPECTED_ERROR };
+        }
+
+        if (specificVideoProcessed) {
+          videoAlreadyProcessedToday = true;
+          canProcessThisVideo = true;
+        }
+      }
+
+      let finalProcessedCount = currentCount;
+      if (!videoAlreadyProcessedToday && canProcessThisVideo) {
+        if (videoUrlToCheck) {
+          const { error: insertError } = await supabase
+            .from("daily_video_limits")
+            .insert({
+              user_id: user.id,
+              video_id: videoUrlToCheck,
+            });
+          if (insertError) {
+            console.error(
+              "Error inserting new video processing record:",
+              insertError
+            );
+            return { success: false, error: appErrors.UNEXPECTED_ERROR };
+          }
+          finalProcessedCount++;
+        }
+      }
+
+      const remainingVideos = Math.max(
+        0,
+        FREE_TIER_VIDEO_LIMIT - finalProcessedCount
+      );
 
       return {
         success: true,
         data: {
-          canProcess,
-          dailyVideoCount,
-          remainingVideos: Math.max(0, 3 - dailyVideoCount),
+          canProcess: canProcessThisVideo,
+          dailyProcessedVideoCount: finalProcessedCount,
+          remainingVideos: remainingVideos,
+          isPremium: false,
         },
       };
     } catch (error) {
-      console.error("Video limit check error:", error);
-      return {
-        success: false,
-        error: error instanceof AppError ? error : appErrors.UNEXPECTED_ERROR,
-      };
+      console.error("Unexpected error in checkVideoLimit:", error);
+      if (error instanceof AppError) {
+        return { success: false, error: error };
+      }
+      return { success: false, error: appErrors.UNEXPECTED_ERROR };
     }
   }
 );
@@ -336,7 +418,7 @@ export const updateIpAddress = action(
   async ({ userId, ipAddress }): Promise<ActionResponse> => {
     try {
       const cookieStore = cookies();
-      const supabase = createClient(cookieStore);
+      const supabase = createServerContextClient(cookieStore);
 
       const { error } = await supabase
         .from("profiles")
@@ -358,32 +440,55 @@ export const updateIpAddress = action(
   }
 );
 
-// Handle Stripe webhook
 export const handleStripeWebhook = async (
   event: Stripe.Event
 ): Promise<{ success: boolean; error?: string }> => {
-  const cookieStore = cookies();
-  const supabase = createClient(cookieStore);
+  if (
+    !process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    !process.env.SUPABASE_SERVICE_ROLE_KEY
+  ) {
+    console.error(
+      "Supabase URL or Service Role Key is not defined for webhook admin client."
+    );
+    return {
+      success: false,
+      error: "Server configuration error for webhooks.",
+    };
+  }
+  const supabaseAdmin = createAdminSupabaseClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
 
   try {
     switch (event.type) {
       case "checkout.session.completed": {
         const session = event.data.object as Stripe.Checkout.Session;
         const userId = session.metadata?.userId;
+        const subscriptionId = session.subscription as string;
+        const customerId = session.customer as string;
 
-        if (!userId) {
+        if (!userId || !subscriptionId || !customerId) {
           console.error(
-            "Webhook Error: No user ID in session metadata for checkout.session.completed"
+            "Webhook Error: Missing userId, subscriptionId, or customerId in session metadata for checkout.session.completed"
           );
-          return { success: false, error: "No user ID in session metadata" };
+          return { success: false, error: "Missing IDs in session metadata" };
         }
 
-        // Update user's subscription status
-        const { error } = await supabase
+        const subscription = await stripe.subscriptions.retrieve(
+          subscriptionId
+        );
+        const currentPeriodEnd = new Date(
+          subscription.current_period_end * 1000
+        ).toISOString();
+
+        const { error } = await supabaseAdmin
           .from("profiles")
           .update({
             subscription_status: "premium",
-            subscription_id: session.subscription as string,
+            subscription_id: subscriptionId,
+            stripe_customer_id: customerId,
+            subscription_end_date: currentPeriodEnd,
           })
           .eq("id", userId);
 
@@ -402,34 +507,80 @@ export const handleStripeWebhook = async (
         );
         break;
       }
-      case "customer.subscription.deleted": {
+      case "customer.subscription.updated": {
         const subscription = event.data.object as Stripe.Subscription;
         const customerId = subscription.customer as string;
-        if (!customerId) {
-          console.error(
-            "Webhook Error: No customer ID on subscription for customer.subscription.deleted"
-          );
-          return { success: false, error: "No customer ID on subscription" };
-        }
 
-        const customer = await stripe.customers.retrieve(customerId);
-        if (customer.deleted || !customer.metadata?.userId) {
+        const { data: profile, error: profileError } = await supabaseAdmin
+          .from("profiles")
+          .select("id")
+          .eq("stripe_customer_id", customerId)
+          .single();
+
+        if (profileError || !profile) {
           console.error(
-            "Webhook Error: Customer deleted or no userId in customer metadata for customer.subscription.deleted"
+            `Webhook Error: Profile not found for customer ID ${customerId} during customer.subscription.updated`
+          );
+          return { success: false, error: "Profile not found for customer ID" };
+        }
+        const userId = profile.id;
+
+        const newStatus =
+          subscription.status === "active" || subscription.status === "trialing"
+            ? "premium"
+            : "free";
+        const currentPeriodEnd = new Date(
+          subscription.current_period_end * 1000
+        ).toISOString();
+
+        const { error: updateError } = await supabaseAdmin
+          .from("profiles")
+          .update({
+            subscription_status: newStatus,
+            subscription_id: subscription.id,
+            subscription_end_date: currentPeriodEnd,
+          })
+          .eq("id", userId);
+
+        if (updateError) {
+          console.error(
+            "Webhook Error: Failed to update subscription status for customer.subscription.updated",
+            updateError
           );
           return {
             success: false,
-            error: "Customer deleted or no user ID in customer metadata",
+            error: "Failed to update subscription status",
           };
         }
-        const userId = customer.metadata.userId;
+        console.log(
+          `Webhook: Successfully processed customer.subscription.updated for user ${userId} to status ${newStatus}`
+        );
+        break;
+      }
+      case "customer.subscription.deleted": {
+        const subscription = event.data.object as Stripe.Subscription;
+        const customerId = subscription.customer as string;
 
-        // Update user's subscription status
-        const { error } = await supabase
+        const { data: profile, error: profileError } = await supabaseAdmin
+          .from("profiles")
+          .select("id")
+          .eq("stripe_customer_id", customerId)
+          .single();
+
+        if (profileError || !profile) {
+          console.error(
+            `Webhook Error: Profile not found for customer ID ${customerId} during customer.subscription.deleted`
+          );
+          return { success: false, error: "Profile not found for customer ID" };
+        }
+        const userId = profile.id;
+
+        const { error } = await supabaseAdmin
           .from("profiles")
           .update({
             subscription_status: "free",
             subscription_id: null,
+            subscription_end_date: null,
           })
           .eq("id", userId);
 

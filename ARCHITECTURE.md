@@ -498,7 +498,7 @@ The core backend processing for _movies and shows that might still use the job s
    - When a subscription is canceled or its status changes (e.g., payment failure, end of billing period after cancellation):
      - Stripe sends webhook events such as `customer.subscription.updated` or `customer.subscription.deleted`.
      - The server's webhook handler processes these events:
-       - For `customer.subscription.updated`: If the subscription status from Stripe is no longer 'active' or 'trialing', the `profiles.subscription_status` might be updated (e.g., to 'free' or another appropriate status), and `subscription_end_date` is updated.
+       - For `customer.subscription.updated`: If the subscription status from Stripe is no longer 'active', the `profiles.subscription_status` might be updated (e.g., to 'free' or another appropriate status), and `subscription_end_date` is updated.
        - For `customer.subscription.deleted`: The `profiles.subscription_status` is typically set to "free", and `subscription_id` and `subscription_end_date` are cleared.
    - The application grants premium access as long as `profiles.subscription_status` is "premium" and `profiles.subscription_end_date` is in the future. Once the `subscription_end_date` passes or the status changes due to webhook updates, the user reverts to the free plan.
 
@@ -520,3 +520,222 @@ The core backend processing for _movies and shows that might still use the job s
   - Clear messaging for limit exceeded
   - Smooth upgrade flow
   - Graceful fallback to free features
+
+## 2. Chrome Extension Architecture (`extension/`)
+
+### 2.1. Core Structure
+
+- **Manifest V3.**
+- **Directory Structure:**
+  ```
+  extension/
+  ├── public/              # manifest.json, icons
+  ├── src/
+  │   ├── assets/
+  │   ├── components/        # React UI components (DubbingControls, MovieCard, etc.)
+  │   ├── extension/         # Background script (background.ts), content script (content.ts)
+  │   ├── hooks/             # Custom React hooks
+  │   ├── lib/               # Language codes, messaging utils
+  │   ├── pages/             # Popup pages (SearchPage, DubbingPage, SettingsPage)
+  │   ├── store/             # Redux store (authSlice, movieSlice, index.ts)
+  │   ├── styles/
+  │   ├── types/             # TypeScript definitions (index.ts, serverActions.ts, actions.ts)
+  │   └── api.ts             # API call functions (checkAuthStatus, checkVideoLimit, etc.)
+  └── ...
+  ```
+- **UI:** React, Shadcn UI, Tailwind CSS, Sonner (for toasts).
+- **State Management:** Redux Toolkit (`authSlice`, `movieSlice`).
+- **Routing (Popup):** `react-router-dom`.
+
+### 2.2. Authentication Flow
+
+- **Login Trigger:** On `DubbingPage`, if user is not authenticated and tries to dub, a popup window is opened to `${process.env.REACT_APP_BASE_API_URL}/login`.
+- **Server Callback:** After successful login/signup on the server, the `/auth/callback` route sends a message to the extension's `background.ts` containing the `sessionToken` and basic profile data (subscription status, daily video count).
+- **Token Reception:** `background.ts` listens for `AUTH_TOKEN` messages via `chrome.runtime.onMessageExternal`.
+- **State Update:** Upon receiving the token and profile, `background.ts` dispatches actions to `authSlice` to store the token and profile information.
+- **Authenticated API Calls:** `api.ts` uses `callServerAction` which (if user is authenticated and token is in `authSlice`) should include the token in headers for server actions.
+- **Manifest:** `externally_connectable` is configured to allow the server to message the extension.
+
+### 2.3. Dubbing Process & Usage Limits
+
+- \*\*Dubbing Initiation (`DubbingPage.tsx`):
+  - User clicks "Start/Stop Dubbing".
+  - `handleDubbingToggle` is called.
+  - **Authentication Check:** Verifies `isAuthenticated` from `authSlice`.
+  - **Usage Limit Check:** Calls `checkVideoLimit` server action (via `api.ts`), passing `videoUrlToCheck` (derived from YouTube URL or movie IMDB ID).
+    - Server action (`subscription.ts`) checks `profiles.subscription_status`, and `videos` table (to count unique daily videos for free users).
+    - Returns `canProcess`, `remainingVideos`, `isPremium`.
+  - **UI Feedback:**
+    - If `!canProcess` and not premium, shows toast with limit message and "Go Premium" link.
+    - If premium voice selected by free user, shows toast and reverts to a free voice.
+  - **Start Dubbing:** If checks pass, dispatches `toggleDubbingProcess` thunk in `movieSlice.ts` (passing `videoUrl`).
+    - This thunk sends `initializeDubbing` or `stopDubbing` message to `content.ts`.
+- **Content Script (`content.ts`):** Manages audio playback and interaction with the webpage.
+- \*\*Settings Page (`SettingsPage.tsx`):
+  - Allows user to select dubbing voice and language.
+  - On "Apply Changes", if a premium voice is selected:
+    - Calls `checkVideoLimit` to get current premium status.
+    - If user is free and selected a premium voice, shows toast, and applies a free voice instead.
+
+### 2.5. IP Address Tracking
+
+- **Server-Side:** Middleware (`0-ip-logger.ts`) updates `last_ip_address` in `profiles` table on authenticated requests.
+- **Purpose:** Primarily for potential manual review or future automated checks to mitigate multi-account abuse. No direct automated restrictions based on IP are implemented in this phase.
+
+## 3. Server Architecture (`server/`)
+
+### 3.1. Supabase Integration
+
+- \*\*Database (`schema.sql`):
+  - `profiles` table: Added `daily_video_count` (potentially for direct counting, or derived), `last_ip_address`.
+  - `videos` table: Tracks `user_id`, `video_url`, `created_at` to count unique videos dubbed per day.
+
+### 3.2. Server Actions (`app/actions/`)
+
+- \*\*`subscription.ts` (`checkVideoLimit`):
+  - Takes `userId` (from session) and optional `videoUrlToCheck`.
+  - Fetches user profile and subscription status.
+  - If free user (no active subscription):
+    - Counts unique `video_url` entries in `videos` table for the user for the current day (UTC).
+    - Determines `canProcess` (e.g., if count < 4, or if `videoUrlToCheck` is already in today's list).
+    - Calculates `remainingVideos`.
+  - Returns `canProcess`, `dailyUniqueVideoCount`, `remainingVideos`, `isPremium`.
+
+// ... (rest of the server architecture remains largely the same as previous version, focusing on mobile app unless specified)
+
+## 8. Authentication & Authorization
+
+### 8.1. Authentication Flow (Server)
+
+- **Provider:** Supabase Auth with Google OAuth and Email/Password.
+- **Authentication Flow (Website initiated for Extension):**
+  1. Extension's "Sign in" action (e.g., on `DubbingPage` if unauthenticated) opens a popup window to the server's `/login` page (e.g., `${process.env.REACT_APP_BASE_API_URL}/login`).
+  2. User authenticates on the server (Google, Email/Password).
+  3. After successful authentication, server's `/auth/callback` route:
+     - Exchanges authorization code for a session.
+     - Fetches user's profile data (including `subscription_status`, `daily_video_count`, `stripe_customer_id`).
+     - Redirects to a dedicated success page: `/auth/callback/success`.
+     - Passes the session access token, profile data, and `NEXT_PUBLIC_EXTENSION_ID` as URL query parameters to the success page.
+  4. The `/auth/callback/success` page (client-side Next.js page):
+     - Reads the token, profile data, and extension ID from URL query parameters.
+     - Uses `chrome.runtime.sendMessage(extensionId, payload)` to send this information to the extension's background script (`background.ts`). The payload includes `{ type: "AUTH_TOKEN_FROM_SERVER", token, profile }`.
+     - Attempts to close itself (`window.close()`).
+- Session is maintained on the server via cookies for website interactions.
+
+### 8.2. Chrome Extension Authentication
+
+- **Token Reception & Storage:**
+  - `background.ts` listens for messages from the server's `/auth/callback/success` page via `chrome.runtime.onMessageExternal` (if the success page is on a whitelisted domain) or more commonly, `chrome.runtime.onMessage` (if the success page uses `chrome.runtime.sendMessage` to the known extension ID). The current implementation uses `chrome.runtime.sendMessage` from the success page to the extension ID.
+  - The `onMessageExternal` (or general `onMessage` if using direct `sendMessage` from the success page) in `background.ts` receives the `{ type: "AUTH_TOKEN_FROM_SERVER", token, profile }` payload.
+  - `background.ts` then forwards this payload to the extension's UI components (e.g., `App.tsx`) using `chrome.runtime.sendMessage({ action: "UPDATE_AUTH_STATE", payload: { token, profile } })`.
+  - `App.tsx` listens for `UPDATE_AUTH_STATE` message, then dispatches actions to `authSlice` (Redux) to store the token and user profile information (`isAuthenticated`, `userProfile` which includes `subscription_status`, `daily_video_count`, `stripe_customer_id`).
+- **Authenticated API Calls (Extension):**
+  - For most API calls from the extension, authentication is handled by Supabase via secure cookies automatically when the user is logged into the main website and the extension makes requests to the same domain.
+  - The explicit token passing is primarily for the extension to _know_ the user's auth state and profile details immediately after the login popup flow.
+  - Server actions called from the extension (via `callServerAction` in `api.ts`) rely on the session cookie managed by the browser if the API domain is the same as the website's. If it's a different domain or specific token auth is desired for some actions, `callServerAction` would need to be modified to include the token in headers. (Current setup seems to rely on cookie-based auth for most actions).
+- **Logout:**
+  - Initiated from the extension UI.
+  - `authSlice` clears its state.
+  - `chrome.storage.local` is cleared of auth data.
+  - Server session is cleared by navigating to a logout endpoint on the server or by Supabase client logout calls.
+
+### 8.3. User Profiles
+
+- **Profile Creation:**
+  - Automatically created on first sign-in via a Supabase Auth trigger.
+- **Profile Fields (relevant to subscription & usage):**
+  ```sql
+  id: uuid (references auth.users)
+  email: string
+  stripe_customer_id: string | null       -- Stripe Customer ID
+  subscription_status: "free" | "premium" | null -- Managed by Stripe webhooks
+  subscription_id: string | null                -- Stripe Subscription ID
+  subscription_end_date: timestamp | null       -- Current period end for the subscription
+  daily_video_count: number | null            -- Tracks unique videos processed by free users daily (may be deprecated if counting from `daily_video_limits`)
+  last_ip_address: text | null
+  -- Removed premium_trials table and related fields/logic
+  ```
+- **`daily_video_limits` table:**
+  ```sql
+  id: uuid
+  user_id: uuid (references profiles.id)
+  video_id: text (stores the unique video URL or identifier like imdb:xxxx)
+  created_at: timestamp
+  ```
+  This table is used by the `checkVideoLimit` server action to count unique videos processed by a free user on a given day.
+
+## 9. Subscription Plans & Features
+
+### 9.1. Free Plan
+
+- **Limitations:**
+  - **4 unique videos/movies per day.** This limit is checked by the `checkVideoLimit` server action against the `daily_video_limits` table.
+  - Basic voice options only.
+  - No access to premium voices.
+- **Features:**
+  - Access to all basic dubbing features.
+  - Support for all languages.
+  - Basic voice quality.
+
+### 9.2. Premium Plan
+
+- **Benefits:**
+  - Unlimited videos/movies per day.
+  - Access to all premium voices.
+  - Early access to new features.
+- **Features:**
+  - All free plan features.
+  - Premium voice options.
+  - Advanced audio quality options.
+
+### 9.3. Subscription Management (Server)
+
+- **Subscription Status Tracking:**
+  - `subscription_status`, `subscription_id`, `stripe_customer_id`, and `subscription_end_date` in the `profiles` table.
+  - Updated via Stripe webhooks (`checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`) processed by `/api/stripe/webhook/route.ts` calling `handleStripeWebhook` server action.
+  - `handleStripeWebhook` uses an admin Supabase client (initialized directly with service role key from `@supabase/supabase-js`) for database updates.
+- **Usage Tracking (Free Tier):**
+  - `checkVideoLimit` server action (`subscription.ts`):
+    - If user is free:
+      - Counts unique `video_id` entries in `daily_video_limits` for the user for the current day (UTC).
+      - If `videoUrlToCheck` is provided and it's a new video for the day and user is within limit, records it in `daily_video_limits`.
+    - Returns `canProcess`, `dailyProcessedVideoCount`, `remainingVideos`, `isPremium`.
+  - No trial period functionality.
+
+### 9.4. Feature Access Control (Chrome Extension)
+
+- **Dubbing Initiation (`DubbingPage.tsx` - `handleDubbingToggle`):**
+  - **Authentication:** If not authenticated (checked via `authSlice.isAuthenticated`), opens server login page in a popup.
+  - **Usage Limit & Premium Voice (if authenticated):**
+    1. Calls `checkVideoLimit` server action (passing `videoUrlToCheck`).
+    2. Gets `canProcess`, `remainingVideos`, `isPremium` from response.
+    3. **Premium Voice Check:** If selected voice is premium and `!isPremium`, shows Sonner toast ("Premium voices are for Premium users.") with "Go Premium" link; stops.
+    4. **Limit Check:** If `!canProcess` and `!isPremium`, shows Sonner toast ("You've reached your daily limit...") with remaining count and "Go Premium" link; stops.
+    5. If checks pass, proceeds to `toggleDubbingProcess`.
+- **Settings Page (`SettingsPage.tsx` - `handleApplyChanges`):**
+  - If a premium voice is selected:
+    1. Calls `checkVideoLimit` to get current `isPremium` status.
+    2. If selected voice is premium and `!isPremium`, shows Sonner toast ("Premium voices are for Premium users. Applying a free voice instead.") with "Go Premium" link. Reverts to a suitable free voice.
+    3. Applies settings.
+- No trial-related UI or logic.
+
+## 2. Chrome Extension Architecture (`extension/`)
+
+### 2.2. Authentication Flow (Summary - refer to section 8.2 for details)
+
+- Login initiated from `DubbingPage` if unauthenticated, opening server's `/login` in popup.
+- Server's `/auth/callback/success` page messages `background.ts` with token and profile.
+- `background.ts` relays to UI (`App.tsx`), updating Redux (`authSlice`).
+
+### 2.3. Dubbing Process & Usage Limits (Summary - refer to section 9.4 for details)
+
+- `DubbingPage.tsx` (`handleDubbingToggle`):
+  - Checks auth. If not logged in, opens login popup.
+  - If logged in, calls `checkVideoLimit` server action.
+  - Checks if selected voice is premium and if user has premium access.
+  - Shows toasts for limits/premium voice restrictions with link to subscription page.
+  - If all clear, starts dubbing.
+- `SettingsPage.tsx`:
+  - Checks premium status if a premium voice is selected.
+  - Shows toast and applies free voice if free user selects premium voice.
+- No trial features.
