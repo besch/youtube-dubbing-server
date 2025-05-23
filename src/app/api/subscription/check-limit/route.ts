@@ -51,7 +51,7 @@ export async function GET() {
     }
 
     const { data: videos } = await supabase
-      .from("videos")
+      .from("daily_video_limits")
       .select("created_at")
       .eq("user_id", session.user.id)
       .gte("created_at", new Date().toISOString().split("T")[0])
