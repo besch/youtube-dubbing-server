@@ -59,8 +59,4 @@ export interface UserSettings {
 
 export type Tables = Database["public"]["Tables"];
 export type Profile = Tables["profiles"]["Row"];
-export type Video = Tables["videos"]["Row"];
-export type History = Tables["history"]["Row"];
-export type Favorite = Tables["favorites"]["Row"];
-export type AudioChunk = Tables["translated_audio_chunks"]["Row"];
-export type TranscriptionSegmentDb = Tables["transcription_segments"]["Row"];
+export type DailyVideoLimit = Tables["daily_video_limits"]["Row"];

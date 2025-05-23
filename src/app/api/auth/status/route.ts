@@ -1,11 +1,15 @@
 import { createClient } from "@/lib/supabase/server";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
+
+// Force this route to be dynamic since it uses cookies
+export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
     const cookieStore = cookies();
-    const supabase = createClient(cookieStore);
+    const supabase: SupabaseClient = createClient(cookieStore);
 
     const {
       data: { session },
