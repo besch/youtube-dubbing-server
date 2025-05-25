@@ -6,8 +6,19 @@ import { fetchYouTubeSubtitles } from "@/app/actions/subtitle/fetch-youtube";
 import { AppError, AppErrorCode } from "@/app/actions/actions";
 import { generateAudioChunk } from "@/app/actions/audio/generation";
 import { checkVideoLimit } from "@/app/actions/subscription";
+import { validateExtensionRequest, setCorsHeaders } from "@/lib/extension-auth";
 
 type ActionFunction = (input: any) => Promise<any>;
+
+// Helper function to create responses with CORS headers
+function createCorsResponse(data: any, status: number = 200): NextResponse {
+  const response = NextResponse.json(data, { status });
+  const extensionId = process.env.NEXT_PUBLIC_EXTENSION_ID;
+  if (extensionId) {
+    return setCorsHeaders(response, extensionId) as NextResponse;
+  }
+  return response;
+}
 
 const actionRegistry: Record<string, ActionFunction> = {
   generateAudio: generateAudioChunk,
@@ -18,8 +29,36 @@ const actionRegistry: Record<string, ActionFunction> = {
   "subscription/checkVideoLimit": checkVideoLimit,
 };
 
+// Handle CORS preflight requests
+export async function OPTIONS(request: NextRequest) {
+  const allowedExtensionId = process.env.NEXT_PUBLIC_EXTENSION_ID;
+
+  if (!allowedExtensionId) {
+    return NextResponse.json(
+      { error: "Extension authentication not configured" },
+      { status: 500 }
+    );
+  }
+
+  const response = new NextResponse(null, { status: 200 });
+  return setCorsHeaders(response, allowedExtensionId);
+}
+
 export async function POST(request: NextRequest) {
   try {
+    // Validate Chrome extension request
+    const authResult = validateExtensionRequest(request);
+    if (!authResult.isValid) {
+      console.warn("Unauthorized request blocked:", authResult.error?.message);
+      return createCorsResponse(
+        {
+          success: false,
+          error: authResult.error?.toJSON(),
+        },
+        401
+      );
+    }
+
     // Extract action name from URL path
     const url = new URL(request.url);
     const pathSegments = url.pathname.split("/");
@@ -27,7 +66,7 @@ export async function POST(request: NextRequest) {
     // Find the segments after /api/actions/
     const actionsIndex = pathSegments.indexOf("actions");
     if (actionsIndex === -1 || actionsIndex + 1 >= pathSegments.length) {
-      return NextResponse.json(
+      return createCorsResponse(
         {
           success: false,
           error: new AppError(
@@ -35,14 +74,14 @@ export async function POST(request: NextRequest) {
             "Invalid action path format"
           ),
         },
-        { status: 400 }
+        400
       );
     }
     const actionSegments = pathSegments.slice(actionsIndex + 1);
     const actionPath = actionSegments.join("/");
 
     if (!actionPath) {
-      return NextResponse.json(
+      return createCorsResponse(
         {
           success: false,
           error: new AppError(
@@ -50,7 +89,7 @@ export async function POST(request: NextRequest) {
             "Invalid action path"
           ),
         },
-        { status: 400 }
+        400
       );
     }
 
@@ -58,12 +97,12 @@ export async function POST(request: NextRequest) {
 
     if (!action) {
       console.error(`Action not found: ${actionPath}`);
-      return NextResponse.json(
+      return createCorsResponse(
         {
           success: false,
           error: new AppError(AppErrorCode.INVALID_INPUT, "Action not found"),
         },
-        { status: 404 }
+        404
       );
     }
 
@@ -80,7 +119,7 @@ export async function POST(request: NextRequest) {
       console.error(
         `API Route: Action ${actionPath} returned undefined result.`
       );
-      return NextResponse.json(
+      return createCorsResponse(
         {
           success: false,
           error: new AppError(
@@ -88,7 +127,7 @@ export async function POST(request: NextRequest) {
             "Action returned undefined"
           ).toJSON(),
         },
-        { status: 500 }
+        500
       );
     }
 
@@ -98,7 +137,7 @@ export async function POST(request: NextRequest) {
         `API Route: Action ${actionPath} resulted in server error:`,
         result.serverError
       );
-      return NextResponse.json(
+      return createCorsResponse(
         {
           success: false,
           error: new AppError(
@@ -106,7 +145,7 @@ export async function POST(request: NextRequest) {
             result.serverError
           ).toJSON(),
         },
-        { status: 500 }
+        500
       );
     }
 
@@ -116,7 +155,7 @@ export async function POST(request: NextRequest) {
         `API Route: Action ${actionPath} resulted in validation error:`,
         result.validationError
       );
-      return NextResponse.json(
+      return createCorsResponse(
         {
           success: false,
           error: {
@@ -125,18 +164,18 @@ export async function POST(request: NextRequest) {
             issues: result.validationError,
           },
         },
-        { status: 400 }
+        400
       );
     }
 
     // If no errors, assume success and return data
     if (result.data) {
-      return NextResponse.json(result.data);
+      return createCorsResponse(result.data);
     } else {
       console.error(
         `API Route: Action ${actionPath} succeeded but returned no data.`
       );
-      return NextResponse.json(
+      return createCorsResponse(
         {
           success: false,
           error: new AppError(
@@ -144,7 +183,7 @@ export async function POST(request: NextRequest) {
             "Action succeeded but returned no data"
           ).toJSON(),
         },
-        { status: 500 }
+        500
       );
     }
   } catch (error) {
@@ -152,7 +191,7 @@ export async function POST(request: NextRequest) {
       `API Route: Unexpected error in POST handler for ${request.url}:`,
       error
     );
-    return NextResponse.json(
+    return createCorsResponse(
       {
         success: false,
         error: new AppError(
@@ -160,7 +199,7 @@ export async function POST(request: NextRequest) {
           "Internal server error in API handler"
         ).toJSON(),
       },
-      { status: 500 }
+      500
     );
   }
 }
