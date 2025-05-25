@@ -26,7 +26,6 @@ export async function translateSubtitles(
   sourceLanguage: string,
   targetLanguage: string
 ): Promise<string> {
-  return "test";
   const lines = srtContent.split("\n");
   const batches = [];
   const batchSize = 100;
