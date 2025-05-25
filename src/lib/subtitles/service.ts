@@ -7,6 +7,7 @@ import { translateSubtitles } from "@/lib/subtitles";
 
 import { SubdlApiClient } from "./api-client";
 import { downloadAndExtractSubtitle } from "./downloader";
+import { subtitleQualityValidator } from "./quality-validator";
 import {
   insertNewLineIfWrongFormattedSRT,
   isTargetLanguage,
@@ -109,7 +110,7 @@ export class SubtitleService {
       candidateCount: targetLanguageSubtitles.length,
     });
 
-    // Try each subtitle until one works
+    // Try each subtitle until one works and passes quality validation
     for (const subtitle of targetLanguageSubtitles) {
       try {
         let content = await downloadAndExtractSubtitle(
@@ -120,10 +121,40 @@ export class SubtitleService {
 
         content = insertNewLineIfWrongFormattedSRT(content);
 
+        // Validate subtitle quality using Google Gemini
+        const qualityResult =
+          await subtitleQualityValidator.validateSubtitleQuality({
+            content,
+            expectedLanguage: targetLanguage,
+          });
+
+        logSubtitleOperation("DirectMatch_QualityCheck", {
+          targetLanguage,
+          url: subtitle.url,
+          isValid: qualityResult.isValid,
+          detectedLanguage: qualityResult.detectedLanguage,
+          confidence: qualityResult.confidence,
+          issueCount: qualityResult.issues.length,
+        });
+
+        if (!qualityResult.isValid) {
+          logSubtitleOperation("DirectMatch_QualityFailed", {
+            targetLanguage,
+            url: subtitle.url,
+            detectedLanguage: qualityResult.detectedLanguage,
+            issues: qualityResult.issues,
+            reason: qualityResult.reason,
+          });
+          // Continue to next subtitle
+          continue;
+        }
+
         logSubtitleOperation("DirectMatch_Success", {
           targetLanguage,
           url: subtitle.url,
           contentLength: content.length,
+          detectedLanguage: qualityResult.detectedLanguage,
+          confidence: qualityResult.confidence,
         });
 
         return {
@@ -154,44 +185,126 @@ export class SubtitleService {
     seasonNumber?: number,
     episodeNumber?: number
   ): Promise<SubtitleDownloadResult> {
-    // Use the first available subtitle (API returns them in priority order)
-    const bestSubtitle = subtitles[0];
+    // Try subtitles in order until we find one with good quality
+    for (let i = 0; i < subtitles.length; i++) {
+      const subtitle = subtitles[i];
 
-    logSubtitleOperation("Translation_Start", {
-      targetLanguage,
-      sourceLanguage: bestSubtitle.language,
-      url: bestSubtitle.url,
-    });
+      logSubtitleOperation("Translation_Attempt", {
+        targetLanguage,
+        sourceLanguage: subtitle.language,
+        url: subtitle.url,
+        attemptNumber: i + 1,
+        totalCandidates: subtitles.length,
+      });
 
-    let content = await downloadAndExtractSubtitle(
-      bestSubtitle.url,
-      seasonNumber,
-      episodeNumber
-    );
+      try {
+        let content = await downloadAndExtractSubtitle(
+          subtitle.url,
+          seasonNumber,
+          episodeNumber
+        );
 
-    content = insertNewLineIfWrongFormattedSRT(content);
+        content = insertNewLineIfWrongFormattedSRT(content);
 
-    // If source is already target language, return as-is
-    if (isTargetLanguage(bestSubtitle.language, targetLanguage)) {
-      return {
-        content,
-        generated: false,
-        sourceLanguage: bestSubtitle.language,
-      };
+        // Validate source subtitle quality
+        const qualityResult =
+          await subtitleQualityValidator.validateSubtitleQuality({
+            content,
+            expectedLanguage: subtitle.language,
+          });
+
+        logSubtitleOperation("Translation_QualityCheck", {
+          targetLanguage,
+          sourceLanguage: subtitle.language,
+          url: subtitle.url,
+          isValid: qualityResult.isValid,
+          detectedLanguage: qualityResult.detectedLanguage,
+          confidence: qualityResult.confidence,
+          issueCount: qualityResult.issues.length,
+        });
+
+        if (!qualityResult.isValid) {
+          logSubtitleOperation("Translation_QualityFailed", {
+            targetLanguage,
+            sourceLanguage: subtitle.language,
+            url: subtitle.url,
+            detectedLanguage: qualityResult.detectedLanguage,
+            issues: qualityResult.issues,
+            reason: qualityResult.reason,
+          });
+          // Try next subtitle if available
+          if (i < subtitles.length - 1) {
+            continue;
+          } else {
+            // This is the last subtitle, proceed anyway with a warning
+            logSubtitleOperation("Translation_LastResort", {
+              targetLanguage,
+              sourceLanguage: subtitle.language,
+              url: subtitle.url,
+              message:
+                "Using subtitle despite quality issues as it's the last available option",
+            });
+          }
+        }
+
+        // If source is already target language, return as-is
+        if (isTargetLanguage(subtitle.language, targetLanguage)) {
+          logSubtitleOperation("Translation_DirectMatch", {
+            targetLanguage,
+            sourceLanguage: subtitle.language,
+            detectedLanguage: qualityResult.detectedLanguage,
+            confidence: qualityResult.confidence,
+          });
+
+          return {
+            content,
+            generated: false,
+            sourceLanguage: subtitle.language,
+          };
+        }
+
+        // Translate the content
+        const translatedContent = await translateSubtitles(
+          content,
+          subtitle.language,
+          targetLanguage
+        );
+
+        logSubtitleOperation("Translation_Success", {
+          targetLanguage,
+          sourceLanguage: subtitle.language,
+          detectedLanguage: qualityResult.detectedLanguage,
+          confidence: qualityResult.confidence,
+          originalLength: content.length,
+          translatedLength: translatedContent.length,
+        });
+
+        return {
+          content: translatedContent,
+          generated: true,
+          sourceLanguage: subtitle.language,
+        };
+      } catch (error) {
+        logSubtitleError("Translation_Failed", error, {
+          targetLanguage,
+          sourceLanguage: subtitle.language,
+          url: subtitle.url,
+          attemptNumber: i + 1,
+        });
+
+        // If this is the last subtitle, throw the error
+        if (i === subtitles.length - 1) {
+          throw error;
+        }
+        // Otherwise, continue to next subtitle
+      }
     }
 
-    // Translate the content
-    const translatedContent = await translateSubtitles(
-      content,
-      bestSubtitle.language,
-      targetLanguage
+    // This should never be reached, but just in case
+    throw new AppError(
+      AppErrorCode.RECORD_NOT_FOUND,
+      "No suitable subtitles found after quality validation"
     );
-
-    return {
-      content: translatedContent,
-      generated: true,
-      sourceLanguage: bestSubtitle.language,
-    };
   }
 }
 

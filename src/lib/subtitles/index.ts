@@ -4,6 +4,16 @@ export { subtitleService, SubtitleService } from "./service";
 // API client
 export { SubdlApiClient } from "./api-client";
 
+// Quality validator
+export {
+  subtitleQualityValidator,
+  SubtitleQualityValidator,
+} from "./quality-validator";
+export type {
+  SubtitleQualityResult,
+  SubtitleValidationOptions,
+} from "./quality-validator";
+
 // Utilities
 export {
   buildLanguageQueryString,

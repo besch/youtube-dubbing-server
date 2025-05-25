@@ -29,6 +29,8 @@ Main orchestration service that coordinates fetching, downloading, and translati
 
 - Attempts direct language matches first
 - Falls back to translation from best available subtitle
+- **Quality validation using Google Gemini AI** to detect wrong language or corrupted subtitles
+- Automatically tries next best subtitle if quality validation fails
 - Comprehensive error handling and logging
 - Type-safe interfaces
 
@@ -42,6 +44,18 @@ Handles all API communication with Subdl service.
 - Intelligent language priority querying
 - Comprehensive error handling
 - Request/response logging
+
+#### `SubtitleQualityValidator` (`quality-validator.ts`)
+
+AI-powered language detection for subtitles using Google Gemini.
+
+**Key Features:**
+
+- Primary focus on language detection and verification
+- Rejects only critically corrupted or wrong-language subtitles
+- Accepts subtitles with minor quality issues (repetition, stuttering, informal speech)
+- Confidence scoring for language detection
+- Fallback validation for API errors
 
 #### Downloader (`downloader.ts`)
 
@@ -61,11 +75,17 @@ Handles downloading and extracting subtitle files from zip archives.
 ```typescript
 import { subtitleService } from "@/lib/subtitles";
 
-// Fetch movie subtitles
+// Fetch movie subtitles with automatic quality validation
 const result = await subtitleService.getOrGenerateSubtitles({
   imdbID: "tt0111161",
   targetLanguage: "es",
 });
+
+// The service will automatically:
+// 1. Try to find subtitles in the target language
+// 2. Validate language using Google Gemini AI (lenient on quality issues)
+// 3. If wrong language or critically corrupted, try the next best subtitle
+// 4. Fall back to translation if needed
 
 // Fetch TV show episode subtitles
 const result = await subtitleService.getOrGenerateSubtitles({
@@ -74,6 +94,26 @@ const result = await subtitleService.getOrGenerateSubtitles({
   seasonNumber: 1,
   episodeNumber: 1,
 });
+```
+
+### Language Validation
+
+```typescript
+import { subtitleQualityValidator } from "@/lib/subtitles";
+
+// Manually validate subtitle language (focuses on language detection, not quality)
+const validationResult = await subtitleQualityValidator.validateSubtitleQuality(
+  {
+    content: srtContent,
+    expectedLanguage: "en",
+    maxSampleLength: 2000, // Optional: limit sample size
+  }
+);
+
+console.log("Is valid:", validationResult.isValid);
+console.log("Detected language:", validationResult.detectedLanguage);
+console.log("Confidence:", validationResult.confidence);
+console.log("Issues found:", validationResult.issues); // Only critical issues
 ```
 
 ### Response Format
@@ -92,6 +132,7 @@ interface SubtitleDownloadResult {
 
 ```bash
 SUBDL_API_KEY=your_subdl_api_key_here
+GOOGLE_API_KEY=your_google_gemini_api_key_here  # Required for quality validation
 ```
 
 ### Supported Languages
@@ -111,8 +152,10 @@ SUBDL_API_KEY=your_subdl_api_key_here
 ### 🎯 Smart Language Matching
 
 1. **Direct Match**: Attempts to find subtitles in target language
-2. **Translation Fallback**: Translates from best available language
-3. **Priority Querying**: Optimizes API calls based on target language
+2. **Language Validation**: Uses Google Gemini AI to verify correct language and detect critical corruption
+3. **Automatic Retry**: Tries next best subtitle if language validation fails
+4. **Translation Fallback**: Translates from best available language
+5. **Priority Querying**: Optimizes API calls based on target language
 
 ### 🔄 Robust Error Handling
 
