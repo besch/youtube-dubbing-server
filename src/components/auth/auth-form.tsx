@@ -48,14 +48,55 @@ export function AuthForm() {
     setIsLoading(true);
     try {
       if (authMode === "signIn") {
-        const { error } = await supabase.auth.signInWithPassword({
+        const { data, error } = await supabase.auth.signInWithPassword({
           email,
           password,
         });
 
         if (error) throw error;
-        router.push("/");
-        router.refresh();
+
+        if (data.session) {
+          // Get user's subscription status and daily video count
+          const { data: profile, error: profileError } = await supabase
+            .from("profiles")
+            .select(
+              "subscription_status, daily_video_count, stripe_customer_id"
+            )
+            .eq("id", data.session.user.id)
+            .single();
+
+          // Redirect to success page with token and profile data (same as OAuth flow)
+          const redirectUrl = new URL(
+            `${window.location.origin}/auth/callback/success`
+          );
+          redirectUrl.searchParams.append("token", data.session.access_token);
+
+          if (profileError) {
+            redirectUrl.searchParams.append("profile_error", "true");
+          } else {
+            redirectUrl.searchParams.append(
+              "subscription_status",
+              profile?.subscription_status || "free"
+            );
+            redirectUrl.searchParams.append(
+              "daily_video_count",
+              (profile?.daily_video_count || 0).toString()
+            );
+            redirectUrl.searchParams.append(
+              "stripe_customer_id",
+              profile?.stripe_customer_id || ""
+            );
+          }
+
+          if (process.env.NEXT_PUBLIC_EXTENSION_ID) {
+            redirectUrl.searchParams.append(
+              "extension_id",
+              process.env.NEXT_PUBLIC_EXTENSION_ID
+            );
+          }
+
+          window.location.href = redirectUrl.toString();
+        }
       } else {
         const { error } = await supabase.auth.signUp({
           email,
