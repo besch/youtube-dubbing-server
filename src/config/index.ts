@@ -32,7 +32,7 @@ const OPENAI_TTS_VOICES: string[] = [
 ];
 
 // Google TTS Configuration
-const DEFAULT_GOOGLE_SPEAKING_RATE = 1.2;
+const DEFAULT_GOOGLE_SPEAKING_RATE = 1.3;
 // BCP-47 language codes mapped to English names and standard voices
 // Ref: https://cloud.google.com/text-to-speech/docs/voices
 // Using only Standard voices for cost-effectiveness
