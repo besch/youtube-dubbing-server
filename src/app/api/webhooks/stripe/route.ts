@@ -187,11 +187,29 @@ export async function POST(req: Request) {
           .from("profiles")
           .select("id")
           .eq("stripe_customer_id", customerId)
-          .single();
+          .maybeSingle();
 
-        if (profileError || !profileData) {
+        if (profileError) {
           console.error(
-            `${event.type}: Profile not found for stripe_customer_id: ${customerId}. Error: ${profileError?.message}`
+            `${event.type}: Database error when looking up profile by stripe_customer_id: ${customerId}. Error: ${profileError?.message}`
+          );
+          return new NextResponse(`Database error for ${event.type}`, {
+            status: 500,
+          });
+        }
+
+        if (!profileData) {
+          if (
+            event.type === "customer.subscription.created" &&
+            subscription.status === "incomplete"
+          ) {
+            console.warn(
+              `${event.type}: Profile not found for stripe_customer_id: ${customerId} (subscription status: ${subscription.status}). This might be a new subscription pending completion. Skipping update for now.`
+            );
+            return new NextResponse(null, { status: 200 });
+          }
+          console.error(
+            `${event.type}: Profile not found for stripe_customer_id: ${customerId}. Cannot update.`
           );
           return new NextResponse(
             `Profile not found for customer ID ${customerId} for ${event.type}`,
@@ -300,11 +318,21 @@ export async function POST(req: Request) {
           .from("profiles")
           .select("id")
           .eq("stripe_customer_id", customerId)
-          .single();
+          .maybeSingle();
 
-        if (profileError || !profileData) {
+        if (profileError) {
           console.error(
-            `customer.subscription.deleted: Profile not found for stripe_customer_id: ${customerId}. Error: ${profileError?.message}`
+            `customer.subscription.deleted: Database error when looking up profile by stripe_customer_id: ${customerId}. Error: ${profileError?.message}`
+          );
+          return new NextResponse(
+            `Database error for customer.subscription.deleted`,
+            { status: 500 }
+          );
+        }
+
+        if (!profileData) {
+          console.error(
+            `customer.subscription.deleted: Profile not found for stripe_customer_id: ${customerId}. Cannot update.`
           );
           return new NextResponse(
             `Profile not found for customer ID ${customerId} for customer.subscription.deleted`,
