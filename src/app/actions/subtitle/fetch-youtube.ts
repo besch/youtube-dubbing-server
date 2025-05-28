@@ -3,6 +3,7 @@
 import { z } from "zod";
 import fetch from "node-fetch";
 import { createSafeActionClient } from "next-safe-action";
+import AbortController from "abort-controller";
 import { ActionResponse, AppError, AppErrorCode } from "../actions";
 
 // Define the schema for input validation using Zod
@@ -45,6 +46,12 @@ export const fetchYouTubeSubtitles = createSafeActionClient()(
       `Fetching YouTube subtitles from ${endpoint} for URL: ${youtubeUrl}, Lang: ${languageCode}`
     );
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      console.log(`Aborting fetch to ${endpoint} due to 60s timeout.`);
+      controller.abort();
+    }, 60000); // 60 seconds timeout
+
     try {
       const response = await fetch(endpoint, {
         method: "POST",
@@ -55,7 +62,10 @@ export const fetchYouTubeSubtitles = createSafeActionClient()(
           youtube_url: youtubeUrl,
           language_code: languageCode,
         }),
+        signal: controller.signal as any,
       });
+
+      clearTimeout(timeoutId); // Clear the timeout if fetch completes or fails before timeout
 
       if (!response.ok) {
         const errorBody = await response.text();
@@ -107,8 +117,14 @@ export const fetchYouTubeSubtitles = createSafeActionClient()(
       let errCode = AppErrorCode.UNEXPECTED_ERROR;
       let errMsg =
         "Failed to fetch YouTube subtitles due to an unexpected error.";
+
+      // Check for AbortError (timeout)
+      if (error instanceof Error && error.name === "AbortError") {
+        errCode = AppErrorCode.SERVICE_ERROR;
+        errMsg = `Request to subtitle download service timed out after 60 seconds. Endpoint: ${endpoint}`;
+      }
       // Check for network-type errors
-      if (
+      else if (
         error instanceof Error &&
         (error.name === "FetchError" ||
           error.message.includes("ECONNREFUSED") ||
