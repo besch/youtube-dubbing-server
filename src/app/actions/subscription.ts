@@ -221,11 +221,11 @@ export const createCustomerPortal = action(
 
       const { data: profile } = await supabase
         .from("profiles")
-        .select("subscription_id")
+        .select("stripe_customer_id")
         .eq("id", user.id)
         .single();
 
-      if (!profile?.subscription_id) {
+      if (!profile?.stripe_customer_id) {
         return {
           success: false,
           error: {
@@ -236,7 +236,7 @@ export const createCustomerPortal = action(
       }
 
       const portalSession = await stripe.billingPortal.sessions.create({
-        customer: profile.subscription_id,
+        customer: profile.stripe_customer_id,
         return_url: `${process.env.NEXT_PUBLIC_APP_URL}/subscription`,
       });
 

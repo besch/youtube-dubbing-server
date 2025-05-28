@@ -47,12 +47,13 @@ export async function POST(req: Request) {
       const session = event.data.object as Stripe.Checkout.Session;
       const userId = session.metadata?.userId;
       const subscriptionId = session.subscription;
+      const customerId = session.customer;
 
       console.log("Processing checkout.session.completed:", {
         sessionId: session.id,
         userId,
         subscriptionId,
-        customerId: session.customer,
+        customerId,
       });
 
       if (!userId) {
@@ -68,6 +69,15 @@ export async function POST(req: Request) {
           session
         );
         return new NextResponse("No valid subscription ID in session", {
+          status: 400,
+        });
+      }
+      if (!customerId || typeof customerId !== "string") {
+        console.error(
+          "checkout.session.completed: No valid customer ID in session",
+          session
+        );
+        return new NextResponse("No valid customer ID in session", {
           status: 400,
         });
       }
@@ -109,6 +119,7 @@ export async function POST(req: Request) {
           subscription_status: "premium",
           subscription_id: subscriptionId,
           subscription_end_date: subscriptionEndDate,
+          stripe_customer_id: customerId,
         })
         .eq("id", userId);
 
@@ -154,24 +165,61 @@ export async function POST(req: Request) {
       break;
     }
 
+    case "customer.subscription.created":
     case "customer.subscription.updated": {
       const subscription = event.data.object as Stripe.Subscription;
-      const userId = subscription.metadata?.userId;
+      const customerId = subscription.customer as string;
+      let userId = subscription.metadata?.userId;
 
-      console.log("Processing customer.subscription.updated:", {
+      console.log(`Processing ${event.type}:`, {
         subscriptionId: subscription.id,
         userId,
+        customerId,
         status: subscription.status,
         current_period_end: subscription.current_period_end,
       });
 
-      if (!userId) {
+      if (!userId && customerId) {
+        console.warn(
+          `${event.type}: No userId in subscription metadata, attempting to find profile by stripe_customer_id: ${customerId}`
+        );
+        const { data: profileData, error: profileError } = await supabase
+          .from("profiles")
+          .select("id")
+          .eq("stripe_customer_id", customerId)
+          .single();
+
+        if (profileError || !profileData) {
+          console.error(
+            `${event.type}: Profile not found for stripe_customer_id: ${customerId}. Error: ${profileError?.message}`
+          );
+          return new NextResponse(
+            `Profile not found for customer ID ${customerId} for ${event.type}`,
+            { status: 400 }
+          );
+        }
+        userId = profileData.id;
+        console.log(
+          `${event.type}: Found userId ${userId} using stripe_customer_id ${customerId}`
+        );
+      } else if (!userId && !customerId) {
         console.error(
-          "customer.subscription.updated: No userId in subscription metadata",
+          `${event.type}: No userId in subscription metadata and no customerId. Cannot update profile.`,
           subscription.metadata
         );
         return new NextResponse(
-          "No user ID in metadata for subscription update",
+          `No user ID or customer ID in metadata for ${event.type}`,
+          { status: 400 }
+        );
+      }
+
+      if (!userId) {
+        console.error(
+          `${event.type}: Could not determine userId. Profile will not be updated.`,
+          subscription.metadata
+        );
+        return new NextResponse(
+          `Could not determine User ID for ${event.type}`,
           { status: 400 }
         );
       }
@@ -190,6 +238,7 @@ export async function POST(req: Request) {
           subscription_status: newStatus,
           subscription_id: subscription.id,
           subscription_end_date: subscriptionEndDate,
+          stripe_customer_id: customerId,
         })
         .eq("id", userId);
 
@@ -234,7 +283,8 @@ export async function POST(req: Request) {
 
     case "customer.subscription.deleted": {
       const subscription = event.data.object as Stripe.Subscription;
-      const userId = subscription.metadata?.userId;
+      const customerId = subscription.customer as string;
+      let userId = subscription.metadata?.userId;
 
       console.log("Processing customer.subscription.deleted:", {
         subscriptionId: subscription.id,
@@ -242,13 +292,47 @@ export async function POST(req: Request) {
         customerId: subscription.customer,
       });
 
-      if (!userId) {
+      if (!userId && customerId) {
+        console.warn(
+          `customer.subscription.deleted: No userId in subscription metadata, attempting to find profile by stripe_customer_id: ${customerId}`
+        );
+        const { data: profileData, error: profileError } = await supabase
+          .from("profiles")
+          .select("id")
+          .eq("stripe_customer_id", customerId)
+          .single();
+
+        if (profileError || !profileData) {
+          console.error(
+            `customer.subscription.deleted: Profile not found for stripe_customer_id: ${customerId}. Error: ${profileError?.message}`
+          );
+          return new NextResponse(
+            `Profile not found for customer ID ${customerId} for customer.subscription.deleted`,
+            { status: 400 }
+          );
+        }
+        userId = profileData.id;
+        console.log(
+          `customer.subscription.deleted: Found userId ${userId} using stripe_customer_id ${customerId}`
+        );
+      } else if (!userId && !customerId) {
         console.error(
-          "customer.subscription.deleted: No userId in subscription metadata. Profile will not be updated.",
+          `customer.subscription.deleted: No userId in subscription metadata and no customerId. Cannot update profile.`,
           subscription.metadata
         );
         return new NextResponse(
-          "No user ID in metadata for subscription deletion.",
+          `No user ID or customer ID in metadata for customer.subscription.deleted`,
+          { status: 400 }
+        );
+      }
+
+      if (!userId) {
+        console.error(
+          "customer.subscription.deleted: Could not determine userId. Profile will not be updated.",
+          subscription.metadata
+        );
+        return new NextResponse(
+          "Could not determine User ID for customer.subscription.deleted.",
           { status: 400 }
         );
       }
