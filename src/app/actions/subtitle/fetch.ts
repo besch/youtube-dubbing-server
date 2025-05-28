@@ -6,7 +6,6 @@ import { createSafeActionClient } from "next-safe-action";
 import { ActionResponse, AppError, AppErrorCode } from "../actions";
 import { subtitleService } from "@/lib/subtitles/service";
 
-// Define the schema for input validation using Zod
 const fetchSubtitlesSchema = z.object({
   imdbID: z.string().min(1, { message: "IMDb ID cannot be empty" }),
   languageCode: z
