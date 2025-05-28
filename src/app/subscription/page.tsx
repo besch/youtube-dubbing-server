@@ -20,26 +20,26 @@ export default function SubscriptionPage() {
     async function loadProfile() {
       try {
         const {
-          data: { session },
-        } = await supabase.auth.getSession();
+          data: { user },
+        } = await supabase.auth.getUser();
 
-        if (!session?.user) {
+        if (!user) {
           router.push("/login");
           return;
         }
 
-        const { data: profile } = await supabase
+        const { data: profileData } = await supabase
           .from("profiles")
           .select("*")
-          .eq("id", session.user.id)
+          .eq("id", user.id)
           .single();
 
-        if (!profile) {
+        if (!profileData) {
           router.push("/login");
           return;
         }
 
-        setProfile(profile);
+        setProfile(profileData);
       } catch (error) {
         console.error("Error loading profile:", error);
       } finally {

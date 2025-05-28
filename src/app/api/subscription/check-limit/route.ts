@@ -12,10 +12,10 @@ export async function GET() {
     const supabase: SupabaseClient = createClient(cookieStore);
 
     const {
-      data: { session },
-    } = await supabase.auth.getSession();
+      data: { user },
+    } = await supabase.auth.getUser();
 
-    if (!session?.user) {
+    if (!user) {
       return NextResponse.json(
         {
           success: false,
@@ -28,7 +28,7 @@ export async function GET() {
     const { data: profile } = await supabase
       .from("profiles")
       .select("*")
-      .eq("id", session.user.id)
+      .eq("id", user.id)
       .single();
 
     if (!profile) {
@@ -57,7 +57,7 @@ export async function GET() {
     const { data: videos } = await supabase
       .from("daily_video_limits")
       .select("created_at")
-      .eq("user_id", session.user.id)
+      .eq("user_id", user.id)
       .gte("created_at", new Date().toISOString().split("T")[0])
       .order("created_at", { ascending: false });
 

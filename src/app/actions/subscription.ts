@@ -60,18 +60,18 @@ export const createSubscription = action(
       const supabase = createServerContextClient(cookieStore);
 
       const {
-        data: { session },
-        error: sessionError,
-      } = await supabase.auth.getSession();
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
 
-      console.log("Session check:", {
-        hasSession: !!session,
-        error: sessionError,
-        userId: session?.user?.id,
+      console.log("User check:", {
+        hasUser: !!user,
+        error: userError,
+        userId: user?.id,
       });
 
-      if (sessionError) {
-        console.error("Session error:", sessionError);
+      if (userError) {
+        console.error("User auth error:", userError);
         return {
           success: false,
           error: {
@@ -81,8 +81,8 @@ export const createSubscription = action(
         };
       }
 
-      if (!session?.user) {
-        console.error("No user in session");
+      if (!user) {
+        console.error("No authenticated user found");
         return {
           success: false,
           error: {
@@ -95,17 +95,17 @@ export const createSubscription = action(
       const { data: profile, error: profileError } = await supabase
         .from("profiles")
         .select("*")
-        .eq("id", session.user.id)
+        .eq("id", user.id)
         .single();
 
       console.log("Profile fetch:", {
         profile: !!profile,
         error: profileError,
-        userId: session.user.id,
+        userId: user.id,
       });
 
       if (!profile) {
-        console.error("Profile not found for user:", session.user.id);
+        console.error("Profile not found for user:", user.id);
         return {
           success: false,
           error: {
@@ -115,11 +115,11 @@ export const createSubscription = action(
         };
       }
 
-      console.log("Creating new Stripe customer for user:", session.user.id);
+      console.log("Creating new Stripe customer for user:", user.id);
       const customer = await stripe.customers.create({
-        email: session.user.email,
+        email: user.email,
         metadata: {
-          userId: session.user.id,
+          userId: user.id,
         },
       });
 
@@ -128,7 +128,7 @@ export const createSubscription = action(
       const { error: eventError } = await supabase
         .from("subscription_events")
         .insert({
-          user_id: session.user.id,
+          user_id: user.id,
           event_type: "subscription_created",
           event_data: {
             customer_id: customer.id,
@@ -160,7 +160,7 @@ export const createSubscription = action(
         success_url: `${process.env.NEXT_PUBLIC_APP_URL}/subscription?success=true`,
         cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/subscription?canceled=true`,
         metadata: {
-          userId: session.user.id,
+          userId: user.id,
         },
       });
 

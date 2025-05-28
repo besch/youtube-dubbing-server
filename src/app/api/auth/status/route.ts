@@ -12,13 +12,13 @@ export async function GET() {
     const supabase: SupabaseClient = createClient(cookieStore);
 
     const {
-      data: { session },
-    } = await supabase.auth.getSession();
+      data: { user },
+    } = await supabase.auth.getUser();
 
     return NextResponse.json({
       success: true,
       data: {
-        isAuthenticated: !!session?.user,
+        isAuthenticated: !!user,
       },
     });
   } catch (error) {

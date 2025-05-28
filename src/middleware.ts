@@ -30,11 +30,11 @@ export async function middleware(req: NextRequest) {
   );
 
   const {
-    data: { session },
-  } = await supabase.auth.getSession();
+    data: { user },
+  } = await supabase.auth.getUser();
 
   // If user is not signed in and the current path is /profile
-  if (!session && req.nextUrl.pathname === "/profile") {
+  if (!user && req.nextUrl.pathname === "/profile") {
     const redirectUrl = req.nextUrl.clone();
     redirectUrl.pathname = "/login";
     redirectUrl.searchParams.set("redirectTo", req.nextUrl.pathname);
@@ -42,9 +42,9 @@ export async function middleware(req: NextRequest) {
   }
 
   // Update IP address for authenticated users
-  if (session) {
+  if (user) {
     const ip = req.headers.get("x-forwarded-for") || req.ip || "unknown";
-    await updateIpAddress({ userId: session.user.id, ipAddress: ip });
+    await updateIpAddress({ userId: user.id, ipAddress: ip });
   }
 
   // Special handling for auth callback - let it pass through
