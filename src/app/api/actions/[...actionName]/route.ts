@@ -11,13 +11,13 @@ import { validateExtensionRequest, setCorsHeaders } from "@/lib/extension-auth";
 type ActionFunction = (input: any) => Promise<any>;
 
 // Helper function to create responses with CORS headers
-function createCorsResponse(data: any, status: number = 200): NextResponse {
+function createCorsResponse(
+  data: any,
+  status: number = 200,
+  requestOrigin: string | null = null
+): NextResponse {
   const response = NextResponse.json(data, { status });
-  const extensionId = process.env.NEXT_PUBLIC_EXTENSION_ID;
-  if (extensionId) {
-    return setCorsHeaders(response, extensionId) as NextResponse;
-  }
-  return response;
+  return setCorsHeaders(response, requestOrigin) as NextResponse;
 }
 
 const actionRegistry: Record<string, ActionFunction> = {
@@ -31,20 +31,35 @@ const actionRegistry: Record<string, ActionFunction> = {
 
 // Handle CORS preflight requests
 export async function OPTIONS(request: NextRequest) {
+  const origin = request.headers.get("origin");
   const allowedExtensionId = process.env.NEXT_PUBLIC_EXTENSION_ID;
+  const devAllowedExtensionId = process.env.NEXT_PUBLIC_DEV_EXTENSION_ID;
 
-  if (!allowedExtensionId) {
-    return NextResponse.json(
-      { error: "Extension authentication not configured" },
-      { status: 500 }
-    );
+  let isValidOriginForOptions = false;
+  if (origin) {
+    if (
+      allowedExtensionId &&
+      origin === `chrome-extension://${allowedExtensionId}`
+    ) {
+      isValidOriginForOptions = true;
+    } else if (
+      devAllowedExtensionId &&
+      origin === `chrome-extension://${devAllowedExtensionId}`
+    ) {
+      isValidOriginForOptions = true;
+    }
+  }
+
+  if (!isValidOriginForOptions) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const response = new NextResponse(null, { status: 200 });
-  return setCorsHeaders(response, allowedExtensionId);
+  return setCorsHeaders(response, origin);
 }
 
 export async function POST(request: NextRequest) {
+  const requestOrigin = request.headers.get("origin");
   try {
     // Validate Chrome extension request
     const authResult = validateExtensionRequest(request);
@@ -55,7 +70,8 @@ export async function POST(request: NextRequest) {
           success: false,
           error: authResult.error?.toJSON(),
         },
-        401
+        401,
+        requestOrigin
       );
     }
 
@@ -74,7 +90,8 @@ export async function POST(request: NextRequest) {
             "Invalid action path format"
           ),
         },
-        400
+        400,
+        requestOrigin
       );
     }
     const actionSegments = pathSegments.slice(actionsIndex + 1);
@@ -89,7 +106,8 @@ export async function POST(request: NextRequest) {
             "Invalid action path"
           ),
         },
-        400
+        400,
+        requestOrigin
       );
     }
 
@@ -102,7 +120,8 @@ export async function POST(request: NextRequest) {
           success: false,
           error: new AppError(AppErrorCode.INVALID_INPUT, "Action not found"),
         },
-        404
+        404,
+        requestOrigin
       );
     }
 
@@ -127,7 +146,8 @@ export async function POST(request: NextRequest) {
             "Action returned undefined"
           ).toJSON(),
         },
-        500
+        500,
+        requestOrigin
       );
     }
 
@@ -145,7 +165,8 @@ export async function POST(request: NextRequest) {
             result.serverError
           ).toJSON(),
         },
-        500
+        500,
+        requestOrigin
       );
     }
 
@@ -164,13 +185,14 @@ export async function POST(request: NextRequest) {
             issues: result.validationError,
           },
         },
-        400
+        400,
+        requestOrigin
       );
     }
 
     // If no errors, assume success and return data
     if (result.data) {
-      return createCorsResponse(result.data);
+      return createCorsResponse(result.data, 200, requestOrigin);
     } else {
       console.error(
         `API Route: Action ${actionPath} succeeded but returned no data.`
@@ -183,7 +205,8 @@ export async function POST(request: NextRequest) {
             "Action succeeded but returned no data"
           ).toJSON(),
         },
-        500
+        500,
+        requestOrigin
       );
     }
   } catch (error) {
@@ -199,7 +222,8 @@ export async function POST(request: NextRequest) {
           "Internal server error in API handler"
         ).toJSON(),
       },
-      500
+      500,
+      requestOrigin
     );
   }
 }

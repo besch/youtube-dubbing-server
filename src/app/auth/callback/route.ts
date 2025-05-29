@@ -64,6 +64,12 @@ export async function GET(request: Request) {
           process.env.NEXT_PUBLIC_EXTENSION_ID
         );
       }
+      if (process.env.NEXT_PUBLIC_DEV_EXTENSION_ID) {
+        redirectUrl.searchParams.append(
+          "dev_extension_id",
+          process.env.NEXT_PUBLIC_DEV_EXTENSION_ID
+        );
+      }
       return NextResponse.redirect(redirectUrl.toString());
     }
 
@@ -85,6 +91,12 @@ export async function GET(request: Request) {
       redirectUrl.searchParams.append(
         "extension_id",
         process.env.NEXT_PUBLIC_EXTENSION_ID
+      );
+    }
+    if (process.env.NEXT_PUBLIC_DEV_EXTENSION_ID) {
+      redirectUrl.searchParams.append(
+        "dev_extension_id",
+        process.env.NEXT_PUBLIC_DEV_EXTENSION_ID
       );
     }
 

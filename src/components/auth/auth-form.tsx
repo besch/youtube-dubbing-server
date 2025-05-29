@@ -94,6 +94,12 @@ export function AuthForm() {
               process.env.NEXT_PUBLIC_EXTENSION_ID
             );
           }
+          if (process.env.NEXT_PUBLIC_DEV_EXTENSION_ID) {
+            redirectUrl.searchParams.append(
+              "dev_extension_id",
+              process.env.NEXT_PUBLIC_DEV_EXTENSION_ID
+            );
+          }
 
           window.location.href = redirectUrl.toString();
         }

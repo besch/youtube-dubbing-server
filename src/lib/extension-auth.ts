@@ -13,9 +13,12 @@ export function validateExtensionRequest(
   request: NextRequest
 ): ExtensionAuthResult {
   const allowedExtensionId = process.env.NEXT_PUBLIC_EXTENSION_ID;
+  const devAllowedExtensionId = process.env.NEXT_PUBLIC_DEV_EXTENSION_ID;
 
-  if (!allowedExtensionId) {
-    console.error("NEXT_PUBLIC_EXTENSION_ID environment variable is not set");
+  if (!allowedExtensionId && !devAllowedExtensionId) {
+    console.error(
+      "Neither NEXT_PUBLIC_EXTENSION_ID nor NEXT_PUBLIC_DEV_EXTENSION_ID environment variable is set"
+    );
     return {
       isValid: false,
       error: new AppError(
@@ -25,10 +28,7 @@ export function validateExtensionRequest(
     };
   }
 
-  // Check Origin header for Chrome extension
   const origin = request.headers.get("origin");
-  const expectedOrigin = `chrome-extension://${allowedExtensionId}`;
-
   if (!origin) {
     return {
       isValid: false,
@@ -36,9 +36,25 @@ export function validateExtensionRequest(
     };
   }
 
-  if (origin !== expectedOrigin) {
+  const expectedOrigin = allowedExtensionId
+    ? `chrome-extension://${allowedExtensionId}`
+    : null;
+  const devExpectedOrigin = devAllowedExtensionId
+    ? `chrome-extension://${devAllowedExtensionId}`
+    : null;
+
+  let isValidOrigin = false;
+  if (expectedOrigin && origin === expectedOrigin) {
+    isValidOrigin = true;
+  } else if (devExpectedOrigin && origin === devExpectedOrigin) {
+    isValidOrigin = true;
+  }
+
+  if (!isValidOrigin) {
     console.warn(
-      `Unauthorized request from origin: ${origin}, expected: ${expectedOrigin}`
+      `Unauthorized request from origin: ${origin}, expected: ${
+        expectedOrigin || "N/A"
+      } or ${devExpectedOrigin || "N/A"}`
     );
     return {
       isValid: false,
@@ -64,17 +80,48 @@ export function validateExtensionRequest(
  */
 export function setCorsHeaders(
   response: Response,
-  extensionId: string
+  requestOrigin: string | null
 ): Response {
   const headers = new Headers(response.headers);
+  const allowedExtensionId = process.env.NEXT_PUBLIC_EXTENSION_ID;
+  const devAllowedExtensionId = process.env.NEXT_PUBLIC_DEV_EXTENSION_ID;
 
-  headers.set(
-    "Access-Control-Allow-Origin",
-    `chrome-extension://${extensionId}`
-  );
-  headers.set("Access-Control-Allow-Methods", "POST, OPTIONS");
-  headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  headers.set("Access-Control-Max-Age", "86400"); // 24 hours
+  let matchedAllowedOrigin = null;
+
+  if (requestOrigin) {
+    if (
+      allowedExtensionId &&
+      requestOrigin === `chrome-extension://${allowedExtensionId}`
+    ) {
+      matchedAllowedOrigin = requestOrigin;
+    } else if (
+      devAllowedExtensionId &&
+      requestOrigin === `chrome-extension://${devAllowedExtensionId}`
+    ) {
+      matchedAllowedOrigin = requestOrigin;
+    }
+  }
+
+  if (matchedAllowedOrigin) {
+    headers.set("Access-Control-Allow-Origin", matchedAllowedOrigin);
+    headers.set("Access-Control-Allow-Methods", "POST, OPTIONS, GET");
+    headers.set(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, X-Extension-Id"
+    );
+    headers.set("Access-Control-Max-Age", "86400"); // 24 hours
+  } else {
+    // This case should ideally not be reached if validateExtensionRequest is called first.
+    // If it is reached, it means an unvalidated origin is trying to get CORS headers.
+    // We can choose to not set any CORS headers or set a restrictive one.
+    // For now, let's log a warning and not set the Allow-Origin header.
+    console.warn(
+      "setCorsHeaders called with an origin that does not match allowed extension IDs:",
+      requestOrigin
+    );
+    // Optionally, to be more restrictive, you could remove any existing ACAO header if present:
+    // headers.delete("Access-Control-Allow-Origin");
+  }
 
   return new Response(response.body, {
     status: response.status,
