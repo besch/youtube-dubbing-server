@@ -9,6 +9,74 @@ export type Json =
 export type Database = {
   public: {
     Tables: {
+      app_logs: {
+        Row: {
+          action_name: string
+          created_at: string
+          duration_ms: number | null
+          error_code: string | null
+          error_message: string | null
+          id: string
+          ip_address: unknown | null
+          log_level: Database["public"]["Enums"]["log_level"]
+          metadata: Json | null
+          request_payload: Json | null
+          response_payload: Json | null
+          response_status_code: number | null
+          service_name: string
+          session_id: string | null
+          stack_trace: string | null
+          tags: Json | null
+          user_id: string | null
+        }
+        Insert: {
+          action_name: string
+          created_at?: string
+          duration_ms?: number | null
+          error_code?: string | null
+          error_message?: string | null
+          id?: string
+          ip_address?: unknown | null
+          log_level: Database["public"]["Enums"]["log_level"]
+          metadata?: Json | null
+          request_payload?: Json | null
+          response_payload?: Json | null
+          response_status_code?: number | null
+          service_name: string
+          session_id?: string | null
+          stack_trace?: string | null
+          tags?: Json | null
+          user_id?: string | null
+        }
+        Update: {
+          action_name?: string
+          created_at?: string
+          duration_ms?: number | null
+          error_code?: string | null
+          error_message?: string | null
+          id?: string
+          ip_address?: unknown | null
+          log_level?: Database["public"]["Enums"]["log_level"]
+          metadata?: Json | null
+          request_payload?: Json | null
+          response_payload?: Json | null
+          response_status_code?: number | null
+          service_name?: string
+          session_id?: string | null
+          stack_trace?: string | null
+          tags?: Json | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "app_logs_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       daily_video_limits: {
         Row: {
           created_at: string
@@ -37,45 +105,6 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
-      }
-      onedub_api_logs: {
-        Row: {
-          endpoint: string
-          error_code: string | null
-          error_message: string | null
-          id: number
-          ip_address: string
-          parameters: Json
-          steps: Json | null
-          success: boolean
-          timestamp: string
-          url: string
-        }
-        Insert: {
-          endpoint: string
-          error_code?: string | null
-          error_message?: string | null
-          id?: never
-          ip_address: string
-          parameters: Json
-          steps?: Json | null
-          success: boolean
-          timestamp?: string
-          url: string
-        }
-        Update: {
-          endpoint?: string
-          error_code?: string | null
-          error_message?: string | null
-          id?: never
-          ip_address?: string
-          parameters?: Json
-          steps?: Json | null
-          success?: boolean
-          timestamp?: string
-          url?: string
-        }
-        Relationships: []
       }
       profiles: {
         Row: {
@@ -173,6 +202,17 @@ export type Database = {
         Args: { ts: string }
         Returns: string
       }
+      get_log_stats: {
+        Args: {
+          p_start_date?: string
+          p_end_date?: string
+          p_group_by?: string
+        }
+        Returns: {
+          group_key: string
+          item_count: number
+        }[]
+      }
       reset_daily_video_count: {
         Args: Record<PropertyKey, never>
         Returns: undefined
@@ -184,6 +224,7 @@ export type Database = {
     }
     Enums: {
       job_status: "pending" | "processing" | "completed" | "failed"
+      log_level: "DEBUG" | "INFO" | "WARN" | "ERROR" | "FATAL"
       video_processing_status:
         | "pending"
         | "downloading"
@@ -308,6 +349,7 @@ export const Constants = {
   public: {
     Enums: {
       job_status: ["pending", "processing", "completed", "failed"],
+      log_level: ["DEBUG", "INFO", "WARN", "ERROR", "FATAL"],
       video_processing_status: [
         "pending",
         "downloading",

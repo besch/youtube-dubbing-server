@@ -833,21 +833,6 @@ CREATE TABLE IF NOT EXISTS public.subscription_events (
     CONSTRAINT subscription_events_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.profiles(id) ON DELETE CASCADE
 );
 
--- Add onedub_api_logs table
-CREATE TABLE IF NOT EXISTS public.onedub_api_logs (
-    id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
-    endpoint text NOT NULL,
-    url text NOT NULL,
-    ip_address text NOT NULL,
-    parameters jsonb NOT NULL,
-    success boolean NOT NULL,
-    error_code text,
-    error_message text,
-    steps jsonb,
-    timestamp timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT onedub_api_logs_pkey PRIMARY KEY (id)
-);
-
 -- Update transcription_segments table
 ALTER TABLE public.transcription_segments
   ADD COLUMN IF NOT EXISTS segment_storage_path text;
@@ -855,7 +840,6 @@ ALTER TABLE public.transcription_segments
 -- Add RLS policies for new tables
 ALTER TABLE public.daily_video_limits ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.subscription_events ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.onedub_api_logs ENABLE ROW LEVEL SECURITY;
 
 -- Policies for daily_video_limits
 CREATE POLICY "Users can view their own daily video limits" 
@@ -875,12 +859,6 @@ CREATE POLICY "Users can insert their own subscription events"
 ON public.subscription_events FOR INSERT 
 WITH CHECK (auth.uid() = user_id);
 
--- Policies for onedub_api_logs
-CREATE POLICY "Service role can manage API logs" 
-ON public.onedub_api_logs FOR ALL 
-TO service_role 
-USING (true);
-
 -- Add to realtime publication
 ALTER PUBLICATION supabase_realtime ADD TABLE public.daily_video_limits;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.subscription_events;
@@ -888,7 +866,6 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.subscription_events;
 -- Grant permissions
 GRANT ALL ON TABLE public.daily_video_limits TO anon, authenticated, service_role;
 GRANT ALL ON TABLE public.subscription_events TO anon, authenticated, service_role;
-GRANT ALL ON TABLE public.onedub_api_logs TO anon, authenticated, service_role;
 
 -- Add function to reset daily video count
 CREATE OR REPLACE FUNCTION public.reset_daily_video_count()
@@ -912,3 +889,106 @@ SELECT cron.schedule(
   '0 0 * * *', -- Run at midnight every day
   $$SELECT public.reset_daily_video_count()$$
 );
+
+-- START: New Logging Infrastructure
+
+-- Enum for log levels
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'log_level') THEN
+        CREATE TYPE public.log_level AS ENUM (
+            'DEBUG',
+            'INFO',
+            'WARN',
+            'ERROR',
+            'FATAL'
+        );
+    END IF;
+END$$;
+
+ALTER TYPE public.log_level OWNER TO postgres;
+GRANT USAGE ON TYPE public.log_level TO anon, authenticated, service_role;
+
+-- Application Logs Table
+CREATE TABLE IF NOT EXISTS public.app_logs (
+    id UUID PRIMARY KEY DEFAULT extensions.uuid_generate_v4(),
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    log_level public.log_level NOT NULL,
+    service_name TEXT NOT NULL, -- e.g., 'auth', 'subtitles', 'audio', 'payments', 'search'
+    action_name TEXT NOT NULL,  -- e.g., 'login_google', 'fetch_youtube_srt', 'generate_tts_openai'
+    user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
+    session_id TEXT, -- Optional, for tracing
+    ip_address INET, 
+    request_payload JSONB,
+    response_status_code INTEGER,
+    response_payload JSONB,
+    duration_ms BIGINT,
+    error_code TEXT,
+    error_message TEXT,
+    stack_trace TEXT,
+    tags JSONB, -- e.g., ["critical", "external_api_dependency"]
+    metadata JSONB   -- Any other structured data
+);
+
+ALTER TABLE public.app_logs OWNER TO postgres;
+
+-- Indexes for faster querying
+CREATE INDEX IF NOT EXISTS idx_app_logs_created_at ON public.app_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_app_logs_log_level ON public.app_logs(log_level);
+CREATE INDEX IF NOT EXISTS idx_app_logs_service_action ON public.app_logs(service_name, action_name);
+CREATE INDEX IF NOT EXISTS idx_app_logs_user_id ON public.app_logs(user_id);
+
+-- RLS for app_logs
+ALTER TABLE public.app_logs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Service role can insert logs"
+ON public.app_logs
+FOR INSERT
+TO service_role
+WITH CHECK (true);
+
+CREATE POLICY "Authenticated users can select logs" -- Further admin check will be done in API layer
+ON public.app_logs
+FOR SELECT
+TO authenticated
+USING (true);
+
+-- Grant permissions
+GRANT ALL ON TABLE public.app_logs TO service_role;
+GRANT SELECT ON TABLE public.app_logs TO authenticated; -- Dashboard API will gate access for admins
+
+
+-- RPC function for fetching log statistics
+CREATE OR REPLACE FUNCTION public.get_log_stats(
+    p_start_date timestamptz DEFAULT NULL,
+    p_end_date timestamptz DEFAULT NULL,
+    p_group_by text DEFAULT 'log_level'
+)
+RETURNS TABLE(group_key text, item_count bigint) -- Renamed count to item_count to avoid conflict with SQL COUNT keyword
+LANGUAGE plpgsql
+SECURITY DEFINER -- Define as SECURITY DEFINER if it needs to bypass RLS for aggregation, ensure proper controls
+SET search_path = public
+AS $$
+BEGIN
+    RETURN QUERY EXECUTE format(
+        'SELECT %I::text as group_key, COUNT(*) as item_count
+         FROM public.app_logs
+         WHERE (%L IS NULL OR created_at >= %L)
+           AND (%L IS NULL OR created_at <= %L)
+         GROUP BY %I
+         ORDER BY item_count DESC',
+        p_group_by,
+        p_start_date, p_start_date,
+        p_end_date, p_end_date,
+        p_group_by
+    );
+END;
+$$;
+
+ALTER FUNCTION public.get_log_stats(timestamptz, timestamptz, text) OWNER TO postgres;
+GRANT EXECUTE ON FUNCTION public.get_log_stats(timestamptz, timestamptz, text) TO authenticated; -- Allow authenticated users (dashboard API) to call it
+
+-- Optional: Add app_logs to realtime if needed, though it might be very high volume
+-- ALTER PUBLICATION supabase_realtime ADD TABLE public.app_logs;
+
+-- END: New Logging Infrastructure

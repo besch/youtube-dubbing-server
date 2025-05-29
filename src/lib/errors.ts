@@ -15,6 +15,12 @@ export const appErrors = {
   NOT_FOUND: new AppError("Not found", "NOT_FOUND", 404),
   INVALID_INPUT: new AppError("Invalid input", "INVALID_INPUT", 400),
   STRIPE_ERROR: new AppError("Stripe error", "STRIPE_ERROR", 400),
+  DATABASE_ERROR: new AppError("Database error", "DATABASE_ERROR", 500),
+  CONFIGURATION_ERROR: new AppError(
+    "Configuration error",
+    "CONFIGURATION_ERROR",
+    500
+  ),
   UNEXPECTED_ERROR: new AppError(
     "An unexpected error occurred",
     "UNEXPECTED_ERROR",
