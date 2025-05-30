@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { createBrowserClient } from "@supabase/ssr";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,7 +18,6 @@ export function AuthForm() {
   const [password, setPassword] = useState("");
   const [authMode, setAuthMode] = useState<AuthMode>("signIn");
   const [showConfirmationMessage, setShowConfirmationMessage] = useState(false);
-  const router = useRouter();
   const searchParams = useSearchParams();
   const [initiatorId, setInitiatorId] = useState<string | null>(null);
 
