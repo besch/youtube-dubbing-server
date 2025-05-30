@@ -11,6 +11,14 @@ import { AppError, appErrors } from "@/lib/errors";
 import type { LogEntry, LogLevel } from "@/lib/logger";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js"; // Specific import for admin client
 import { ADMIN_EMAIL } from "@/config/constants"; // Import ADMIN_EMAIL
+import {
+  getLogsSchema,
+  getLogStatsSchema,
+  getLogByIdSchema,
+  type LogStat,
+} from "./schemas";
+
+export type { LogStat }; // Re-export LogStat
 
 // Helper function to get Supabase admin client (remains unchanged if used for direct DB ops)
 function getSupabaseAdminClient() {
@@ -110,29 +118,6 @@ const action = createSafeActionClient({
   },
 });
 
-const logLevelsTuple: readonly [LogLevel, ...LogLevel[]] = [
-  "DEBUG",
-  "INFO",
-  "WARN",
-  "ERROR",
-  "FATAL",
-];
-
-export const getLogsSchema = z.object({
-  page: z.number().int().min(1).default(1),
-  limit: z.number().int().min(1).max(100).default(25),
-  startDate: z.string().datetime({ offset: true }).optional(),
-  endDate: z.string().datetime({ offset: true }).optional(),
-  logLevel: z.enum(logLevelsTuple).optional(),
-  serviceName: z.string().optional(),
-  actionName: z.string().optional(),
-  userId: z.string().uuid().optional(),
-  sortBy: z
-    .enum(["created_at", "log_level", "service_name"])
-    .default("created_at"),
-  sortOrder: z.enum(["asc", "desc"]).default("desc"),
-});
-
 export interface PaginatedLogsResponse {
   logs: LogEntry[];
   totalCount: number;
@@ -186,19 +171,6 @@ export const getLogsAction = action(getLogsSchema, async (parsedInput) => {
   };
 });
 
-export const getLogStatsSchema = z.object({
-  startDate: z.string().datetime({ offset: true }).optional(),
-  endDate: z.string().datetime({ offset: true }).optional(),
-  groupBy: z
-    .enum(["log_level", "service_name", "action_name", "error_code"])
-    .default("log_level"),
-});
-
-export interface LogStat {
-  group_key: string;
-  item_count: number; // Changed from count to item_count to match RPC output
-}
-
 export const getLogStatsAction = action(
   getLogStatsSchema,
   async (parsedInput) => {
@@ -225,10 +197,6 @@ export const getLogStatsAction = action(
 );
 
 // You might also want an action to get a single log entry by ID
-export const getLogByIdSchema = z.object({
-  id: z.string().uuid(),
-});
-
 export const getLogByIdAction = action(
   getLogByIdSchema,
   async (parsedInput) => {

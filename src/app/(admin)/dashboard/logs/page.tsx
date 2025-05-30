@@ -111,9 +111,9 @@ export default function AdminLogsPage() {
     "limit",
     parseAsInteger.withDefault(10)
   );
-  const [logLevelFilter, setLogLevelFilter] = useQueryState<LogLevel | null>(
+  const [logLevelFilter, setLogLevelFilter] = useQueryState(
     "logLevel",
-    parseAsString.withDefault("").withOptions({ shallow: false }) as any
+    parseAsString.withOptions({ shallow: false }).withDefault("")
   );
   const [serviceNameFilter, setServiceNameFilter] = useQueryState(
     "service",
@@ -144,10 +144,14 @@ export default function AdminLogsPage() {
 
   const fetchLogs = useCallback(async () => {
     setIsLoadingLogs(true);
+
+    const currentLogLevelFilter =
+      logLevelFilter === "" ? undefined : (logLevelFilter as LogLevel);
+
     const result = await getLogsAction({
       page,
       limit,
-      logLevel: logLevelFilter || undefined,
+      logLevel: currentLogLevelFilter,
       serviceName: serviceNameFilter || undefined,
       actionName: actionNameFilter || undefined,
       userId: userIdFilter || undefined,
@@ -506,15 +510,19 @@ export default function AdminLogsPage() {
               />
               <Select
                 value={logLevelFilter || ""}
-                onValueChange={(val) =>
-                  setLogLevelFilter(val as LogLevel | null)
-                }
+                onValueChange={(val) => {
+                  if (val === "__ALL_LEVELS__") {
+                    setLogLevelFilter(null);
+                  } else {
+                    setLogLevelFilter(val as LogLevel);
+                  }
+                }}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Log Level" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">All Levels</SelectItem>
+                  <SelectItem value="__ALL_LEVELS__">All Levels</SelectItem>
                   {LOG_LEVELS.map((level) => (
                     <SelectItem key={level} value={level}>
                       {level}
