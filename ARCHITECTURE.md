@@ -404,19 +404,45 @@ The core backend processing for _movies and shows that might still use the job s
 ### 8.1. Authentication Flow (Server)
 
 - **Provider:** Supabase Auth with Google OAuth and Email/Password.
-- **Authentication Flow (Website initiated for Extension):**
-  1. Extension's "Sign in" action (e.g., on `DubbingPage` if unauthenticated) opens a popup window to the server's `/login` page (e.g., `${process.env.REACT_APP_BASE_API_URL}/login`).
-  2. User authenticates on the server (Google, Email/Password).
-  3. After successful authentication, server's `/auth/callback` route:
-     - Exchanges authorization code for a session.
-     - Fetches user's profile data (including `subscription_status`, `daily_video_count`, `stripe_customer_id`).
-     - Redirects to a dedicated success page: `/auth/callback/success`.
-     - Passes the session access token, profile data, and `NEXT_PUBLIC_EXTENSION_ID` as URL query parameters to the success page.
-  4. The `/auth/callback/success` page (client-side Next.js page):
-     - Reads the token, profile data, and extension ID from URL query parameters.
-     - Uses `chrome.runtime.sendMessage(extensionId, payload)` to send this information to the extension's background script (`background.ts`). The payload includes `{ type: "AUTH_TOKEN_FROM_SERVER", token, profile }`.
-     - Attempts to close itself (`window.close()`).
-- Session is maintained on the server via cookies for website interactions.
+- **Identifying the Initiator:** To differentiate between authentication flows started by the Chrome Extension versus the website, an `initiator_id` parameter is used.
+  - When the extension opens the login page, it does so with `GET /login?initiator_id=CHROME_EXTENSION_RUNTIME_ID`.
+- **Authentication Flow (Website-initiated for Extension, or direct Website login):**
+
+  1. **Login Page (`/login`) - `AuthForm.tsx` Component:**
+
+     - The `AuthForm` component on the `/login` page reads the `initiator_id` from its URL's query parameters.
+     - **For Google OAuth or Email Sign-Up:**
+       - If an `initiator_id` is present (indicating an extension-initiated flow), `AuthForm.tsx` sets a temporary cookie (e.g., `oauth_initiator_id`) containing this `initiator_id`. This cookie is short-lived (e.g., 5 minutes for OAuth, 15 minutes for email confirmation).
+       - The `redirectTo` option for `supabase.auth.signInWithOAuth` (for Google) or `options.emailRedirectTo` for `supabase.auth.signUp` (for email confirmation) is set to the server's generic callback URL (e.g., `${process.env.REACT_APP_BASE_API_URL}/auth/callback`) _without_ the `initiator_id` in its query string.
+     - **For Email Sign-In:**
+       - `AuthForm.tsx` clears any `oauth_initiator_id` cookie.
+       - After successful email/password sign-in, it constructs the redirect URL for `/auth/callback/success`.
+       - If the `initiator_id` (read from the `/login` page's URL) matches a known extension ID, it appends the corresponding `extension_id` or `dev_extension_id` query parameter to the `/auth/callback/success` URL. Otherwise, these parameters are omitted.
+       - It then redirects the browser directly to this constructed `/auth/callback/success` URL.
+
+  2. **Server-Side Callback (`/auth/callback/route.ts` - GET handler):**
+
+     - This route is hit after a successful Google OAuth authentication (Google redirects here) or when a user clicks an email confirmation link.
+     - It first attempts to read the `initiator_id` from the `oauth_initiator_id` cookie. If found, the cookie's value is used as the `initiator_id`, and the cookie is immediately deleted.
+     - If the cookie is not found, it attempts to read `initiator_id` from the request URL's query parameters (as a fallback, though less common for these flows now).
+     - After exchanging the authorization code for a session with Supabase and fetching the user's profile:
+       - It constructs the redirect URL for the frontend `/auth/callback/success` page.
+       - It appends the session token and profile data (or profile error status) as query parameters.
+       - **Conditionally appends extension identifiers**:
+         - If the "effective `initiator_id`" (from cookie or query parameter) matches `process.env.NEXT_PUBLIC_EXTENSION_ID`, it adds `&extension_id=...` to the URL.
+         - If it matches `process.env.NEXT_PUBLIC_DEV_EXTENSION_ID`, it adds `&dev_extension_id=...` to the URL.
+         - If `initiator_id` is null or doesn't match, neither of these is added (indicating a website flow).
+       - It then redirects the user to this fully constructed `/auth/callback/success` URL.
+
+  3. **Frontend Success Page (`/auth/callback/success` - `AuthCallbackHandler.tsx`):**
+     - Reads URL query parameters: `token`, profile data, `extension_id`, `dev_extension_id`.
+     - **If `extension_id` or `dev_extension_id` is present (Extension Flow):**
+       - It uses `chrome.runtime.sendMessage(targetExtensionId, payload)` to send the auth token and profile data to the extension's background script.
+       - Displays a message: "Authentication successful! Securely sending data to the extension. This window will close automatically."
+       - Attempts to close itself (`window.close()`).
+     - **If neither `extension_id` nor `dev_extension_id` is present (Website Flow):**
+       - Displays a message: "Authentication successful! Redirecting to the homepage..."
+       - Redirects the user to the website's homepage (e.g., `/`) after a short delay.
 
 ### 8.2. Chrome Extension Authentication
 
