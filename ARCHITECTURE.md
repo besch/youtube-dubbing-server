@@ -229,6 +229,7 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
     - **Daily Log Activity (Planned):** Line chart to show log counts per day for the selected period. Requires a new/modified RPC (`get_logs_by_time_granularity`) and server action (`getTimeBasedLogStatsAction`).
     - **Monthly Log Overview (Planned):** Bar chart to show log counts per month for the selected period. Also relies on the new RPC and server action.
 - **Technology:**
+
   - Next.js App Router, React Server Components (layout) and Client Components (page).
   - `next-safe-action` for server actions (`getLogsAction`, `getLogStatsAction`, planned `getTimeBasedLogStatsAction`).
   - Zod for schema validation in actions.
@@ -237,6 +238,11 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
   - Recharts for rendering charts.
   - `date-fns` for date manipulations.
   - `sonner` for toast notifications.
+
+  src/lib/logger.ts
+  src/app/actions/admin/logs.ts
+  src/app/(admin)/dashboard/logs/page.tsx
+  src/app/actions/admin/schemas.ts
 
 ## 4. Downloader Service (`youtube-download/`)
 
