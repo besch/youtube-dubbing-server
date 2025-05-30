@@ -7,6 +7,18 @@ export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get("code");
   const initiatorId = requestUrl.searchParams.get("initiator_id");
+  console.log(
+    "[/auth/callback Server Route] Received initiator_id:",
+    initiatorId
+  );
+  console.log(
+    "[/auth/callback Server Route] NEXT_PUBLIC_EXTENSION_ID:",
+    process.env.NEXT_PUBLIC_EXTENSION_ID
+  );
+  console.log(
+    "[/auth/callback Server Route] NEXT_PUBLIC_DEV_EXTENSION_ID:",
+    process.env.NEXT_PUBLIC_DEV_EXTENSION_ID
+  );
 
   if (code) {
     const cookieStore = cookies();
@@ -40,6 +52,15 @@ export async function GET(request: Request) {
       if (initiatorId) {
         errorRedirectUrl += `&initiator_id=${encodeURIComponent(initiatorId)}`;
       }
+      console.error(
+        "[/auth/callback Server Route] Code exchange error:",
+        error.message
+      );
+      console.log(
+        "[/auth/callback Server Route] Redirecting to (error):".concat(
+          errorRedirectUrl
+        )
+      );
       return NextResponse.redirect(errorRedirectUrl);
     }
 
@@ -50,6 +71,14 @@ export async function GET(request: Request) {
           initiatorId
         )}`;
       }
+      console.error(
+        "[/auth/callback Server Route] No session created after code exchange."
+      );
+      console.log(
+        "[/auth/callback Server Route] Redirecting to (no session):".concat(
+          noSessionRedirectUrl
+        )
+      );
       return NextResponse.redirect(noSessionRedirectUrl);
     }
 
@@ -63,7 +92,10 @@ export async function GET(request: Request) {
     redirectUrl.searchParams.append("token", session.access_token);
 
     if (profileError) {
-      console.error("Error fetching profile:", profileError);
+      console.error(
+        "[/auth/callback Server Route] Error fetching profile:",
+        profileError
+      );
       redirectUrl.searchParams.append("profile_error", "true");
     } else {
       redirectUrl.searchParams.append(
@@ -84,6 +116,9 @@ export async function GET(request: Request) {
       initiatorId === process.env.NEXT_PUBLIC_EXTENSION_ID &&
       process.env.NEXT_PUBLIC_EXTENSION_ID
     ) {
+      console.log(
+        "[/auth/callback Server Route] Matched EXTENSION_ID, adding extension_id param."
+      );
       redirectUrl.searchParams.append(
         "extension_id",
         process.env.NEXT_PUBLIC_EXTENSION_ID
@@ -92,12 +127,23 @@ export async function GET(request: Request) {
       initiatorId === process.env.NEXT_PUBLIC_DEV_EXTENSION_ID &&
       process.env.NEXT_PUBLIC_DEV_EXTENSION_ID
     ) {
+      console.log(
+        "[/auth/callback Server Route] Matched DEV_EXTENSION_ID, adding dev_extension_id param."
+      );
       redirectUrl.searchParams.append(
         "dev_extension_id",
         process.env.NEXT_PUBLIC_DEV_EXTENSION_ID
       );
+    } else {
+      console.log(
+        "[/auth/callback Server Route] No extension ID match for initiator_id:",
+        initiatorId
+      );
     }
-
+    console.log(
+      "[/auth/callback Server Route] Final redirectUrl to /success:",
+      redirectUrl.toString()
+    );
     return NextResponse.redirect(redirectUrl.toString());
   }
 
@@ -105,5 +151,10 @@ export async function GET(request: Request) {
   if (initiatorId) {
     noCodeRedirectUrl += `&initiator_id=${encodeURIComponent(initiatorId)}`;
   }
+  console.log(
+    "[/auth/callback Server Route] No code provided, redirecting to:".concat(
+      noCodeRedirectUrl
+    )
+  );
   return NextResponse.redirect(noCodeRedirectUrl);
 }

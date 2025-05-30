@@ -21,12 +21,23 @@ export function AuthCallbackHandler() {
   const [message, setMessage] = useState("Processing your authentication...");
 
   useEffect(() => {
+    console.log(
+      "[AuthCallbackHandler] Mounted. Full searchParams:",
+      searchParams.toString()
+    );
     const token = searchParams.get("token");
     const profileError = searchParams.get("profile_error");
 
     const extensionId = searchParams.get("extension_id");
     const devExtensionId = searchParams.get("dev_extension_id");
+    console.log("[AuthCallbackHandler] Parsed extension_id:", extensionId);
+    console.log(
+      "[AuthCallbackHandler] Parsed dev_extension_id:",
+      devExtensionId
+    );
+
     const isExtensionFlow = !!(extensionId || devExtensionId);
+    console.log("[AuthCallbackHandler] isExtensionFlow:", isExtensionFlow);
 
     if (!token) {
       setMessage(
@@ -67,6 +78,10 @@ export function AuthCallbackHandler() {
       );
 
       const targetExtensionId = extensionId || devExtensionId;
+      console.log(
+        "[AuthCallbackHandler] Target extension ID for message:",
+        targetExtensionId
+      );
 
       if (targetExtensionId) {
         const payload = {
@@ -82,6 +97,10 @@ export function AuthCallbackHandler() {
           browserWindow.chrome.runtime &&
           browserWindow.chrome.runtime.sendMessage
         ) {
+          console.log(
+            "[AuthCallbackHandler] Attempting to send message to extension:",
+            payload
+          );
           browserWindow.chrome.runtime.sendMessage(
             targetExtensionId,
             payload,
@@ -92,13 +111,17 @@ export function AuthCallbackHandler() {
                 browserWindow.chrome.runtime.lastError
               ) {
                 console.warn(
-                  "Error sending message to extension:",
+                  "[AuthCallbackHandler] Error sending message to extension:",
                   browserWindow.chrome.runtime.lastError.message
                 );
                 setMessage(
                   "Data processed. If this window doesn't close automatically, please close it manually."
                 );
               } else {
+                console.log(
+                  "[AuthCallbackHandler] Message sent to extension successfully. Response:",
+                  response
+                );
                 setMessage(
                   "Data successfully sent to the extension. This window will now close."
                 );
@@ -106,21 +129,33 @@ export function AuthCallbackHandler() {
               try {
                 window.close();
               } catch (e) {
-                // console.warn("Could not close window automatically:", e);
+                console.warn(
+                  "[AuthCallbackHandler] Could not close window automatically:",
+                  e
+                );
               }
             }
           );
         } else {
+          console.warn(
+            "[AuthCallbackHandler] chrome.runtime.sendMessage not available."
+          );
           setMessage(
             "Cannot send data to extension (Chrome API not available or not in extension context). Please close this window manually."
           );
           try {
             window.close();
           } catch (e) {
-            // If it fails, the message above guides the user.
+            console.warn(
+              "[AuthCallbackHandler] Could not close window automatically (after API not avail msg):",
+              e
+            );
           }
         }
       } else {
+        console.warn(
+          "[AuthCallbackHandler] isExtensionFlow was true, but no targetExtensionId found."
+        );
         setMessage(
           "Configuration error: Extension ID is missing. Please close this window manually."
         );
@@ -129,6 +164,9 @@ export function AuthCallbackHandler() {
         } catch (e) {}
       }
     } else {
+      console.log(
+        "[AuthCallbackHandler] Website flow detected. Redirecting to homepage."
+      );
       setMessage("Authentication successful! Redirecting to the homepage...");
       setTimeout(() => {
         router.push("/");

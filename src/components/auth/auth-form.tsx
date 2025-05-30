@@ -29,6 +29,7 @@ export function AuthForm() {
   const handleGoogleLogin = async () => {
     setIsLoading(true);
     const currentInitiatorId = searchParams.get("initiator_id");
+    console.log("[AuthForm - Google] initiator_id:", currentInitiatorId);
     try {
       let googleRedirectTo = `${window.location.origin}/auth/callback`;
       if (currentInitiatorId) {
@@ -36,6 +37,7 @@ export function AuthForm() {
           currentInitiatorId
         )}`;
       }
+      console.log("[AuthForm - Google] redirectTo:", googleRedirectTo);
 
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
@@ -47,7 +49,7 @@ export function AuthForm() {
       if (error) throw error;
     } catch (error) {
       toast.error("Failed to sign in with Google");
-      console.error(error);
+      console.error("[AuthForm - Google] Error:", error);
     } finally {
       setIsLoading(false);
     }
@@ -57,6 +59,16 @@ export function AuthForm() {
     e.preventDefault();
     setIsLoading(true);
     const currentInitiatorId = searchParams.get("initiator_id");
+    console.log("[AuthForm - Email] initiator_id:", currentInitiatorId);
+    console.log(
+      "[AuthForm - Email] NEXT_PUBLIC_EXTENSION_ID:",
+      process.env.NEXT_PUBLIC_EXTENSION_ID
+    );
+    console.log(
+      "[AuthForm - Email] NEXT_PUBLIC_DEV_EXTENSION_ID:",
+      process.env.NEXT_PUBLIC_DEV_EXTENSION_ID
+    );
+
     try {
       if (authMode === "signIn") {
         const { data, error } = await supabase.auth.signInWithPassword({
@@ -101,6 +113,9 @@ export function AuthForm() {
             currentInitiatorId === process.env.NEXT_PUBLIC_EXTENSION_ID &&
             process.env.NEXT_PUBLIC_EXTENSION_ID
           ) {
+            console.log(
+              "[AuthForm - Email] Matched EXTENSION_ID, adding extension_id param."
+            );
             redirectUrl.searchParams.append(
               "extension_id",
               process.env.NEXT_PUBLIC_EXTENSION_ID
@@ -109,12 +124,23 @@ export function AuthForm() {
             currentInitiatorId === process.env.NEXT_PUBLIC_DEV_EXTENSION_ID &&
             process.env.NEXT_PUBLIC_DEV_EXTENSION_ID
           ) {
+            console.log(
+              "[AuthForm - Email] Matched DEV_EXTENSION_ID, adding dev_extension_id param."
+            );
             redirectUrl.searchParams.append(
               "dev_extension_id",
               process.env.NEXT_PUBLIC_DEV_EXTENSION_ID
             );
+          } else {
+            console.log(
+              "[AuthForm - Email] No extension ID match for initiator_id:",
+              currentInitiatorId
+            );
           }
-
+          console.log(
+            "[AuthForm - Email] Final redirectUrl for signIn:",
+            redirectUrl.toString()
+          );
           window.location.href = redirectUrl.toString();
         }
       } else {
@@ -124,6 +150,10 @@ export function AuthForm() {
             currentInitiatorId
           )}`;
         }
+        console.log(
+          "[AuthForm - Email] emailRedirectTo for signUp:",
+          emailRedirectTo
+        );
 
         const { error } = await supabase.auth.signUp({
           email,
@@ -147,7 +177,7 @@ export function AuthForm() {
           ? "Failed to sign in with email"
           : "Failed to sign up with email"
       );
-      console.error(error);
+      console.error("[AuthForm - Email] Error:", error);
     } finally {
       setIsLoading(false);
     }
