@@ -7,6 +7,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Suspense } from "react";
 
 export const metadata: Metadata = {
   title: "Login",
@@ -25,7 +26,9 @@ export default function LoginPage() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <AuthForm />
+            <Suspense fallback={<div>Loading form...</div>}>
+              <AuthForm />
+            </Suspense>
           </CardContent>
         </Card>
       </div>
