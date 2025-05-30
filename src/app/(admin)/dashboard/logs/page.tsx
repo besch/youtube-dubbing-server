@@ -830,7 +830,9 @@ export default function AdminLogsPage() {
                     {logsData.logs.map((log: LogEntry) => (
                       <TableRow key={log.id}>
                         <TableCell className="font-medium">
-                          {new Date(log.created_at).toLocaleString()}
+                          {log.created_at
+                            ? new Date(log.created_at).toLocaleString()
+                            : "N/A"}
                         </TableCell>
                         <TableCell>
                           <span
