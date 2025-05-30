@@ -19,7 +19,7 @@ export default function HomePage() {
             </span>
           </div>
 
-          <h1 className="text-4xl sm:text-5xl md:text-6xl font-extrabold tracking-tight mb-4 bg-clip-text text-transparent bg-gradient-to-r from-violet-400 via-purple-500 to-orange-500 line-height-[75px]">
+          <h1 className="text-4xl sm:text-5xl md:text-6xl font-extrabold tracking-tight leading-snug mb-4 bg-clip-text text-transparent bg-gradient-to-r from-violet-400 via-purple-500 to-orange-500">
             AI Dubbing for YouTube
           </h1>
           <p className="text-lg sm:text-xl text-neutral-300/80 max-w-2xl mx-auto mb-10">
