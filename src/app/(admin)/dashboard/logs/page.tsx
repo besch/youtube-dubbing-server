@@ -860,14 +860,28 @@ export default function AdminLogsPage() {
                           title={
                             log.custom_message ||
                             log.error_message ||
-                            (log.metadata
+                            (typeof log.metadata === "object" &&
+                            log.metadata !== null &&
+                            !Array.isArray(log.metadata) &&
+                            "custom_message" in log.metadata &&
+                            typeof log.metadata.custom_message === "string"
+                              ? log.metadata.custom_message
+                              : typeof log.metadata === "object" &&
+                                log.metadata !== null &&
+                                !Array.isArray(log.metadata) &&
+                                "error_message" in log.metadata &&
+                                typeof log.metadata.error_message === "string"
+                              ? log.metadata.error_message
+                              : log.metadata
                               ? JSON.stringify(log.metadata, null, 2)
                               : "No additional details")
                           }
                         >
                           {log.custom_message ||
                             log.error_message ||
-                            (log.metadata
+                            (log.metadata &&
+                            typeof log.metadata === "object" &&
+                            Object.keys(log.metadata).length > 0
                               ? `Metadata: ${Object.keys(log.metadata).join(
                                   ", "
                                 )}`
