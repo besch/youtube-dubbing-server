@@ -6,8 +6,79 @@ import { createSafeActionClient } from "next-safe-action";
 import AbortController from "abort-controller";
 import { ActionResponse, AppError, AppErrorCode } from "../actions";
 import { createLogger } from "@/lib/logger";
+import { createServerClient } from "@supabase/ssr";
+import { cookies, headers as nextHeaders } from "next/headers";
+import type { Database } from "@/types/supabase";
 
 const youtubeSubtitleLogger = createLogger("youtube-subtitle-service");
+
+// Context interface for middleware
+interface ActionContext {
+  userId?: string;
+  ipAddress?: string;
+}
+
+// Function to map AppErrorCode to HTTP status codes
+function getStatusCodeFromAppError(code: AppErrorCode): number {
+  switch (code) {
+    case AppErrorCode.INVALID_INPUT:
+      return 400;
+    case AppErrorCode.CONFIGURATION_ERROR:
+      return 500;
+    case AppErrorCode.SERVICE_ERROR:
+      return 503; // Or specific error from service
+    // Add other specific mappings as needed
+    default:
+      return 500;
+  }
+}
+
+// Create a new action client with middleware
+const youtubeSubtitleAction = createSafeActionClient({
+  async middleware(): Promise<ActionContext> {
+    const cookieStore = cookies();
+    const supabase = createServerClient<Database>(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          get(name: string) {
+            return cookieStore.get(name)?.value;
+          },
+        },
+      }
+    );
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const ip =
+      nextHeaders().get("x-forwarded-for") ?? nextHeaders().get("remote_addr");
+    return { userId: user?.id, ipAddress: ip ?? undefined };
+  },
+  handleReturnedServerError(e: Error) {
+    let loggedErrorCodeStr: string =
+      AppErrorCode[AppErrorCode.UNEXPECTED_ERROR];
+    let responseStatusCode: number = 500;
+    let originalErrorCode: AppErrorCode = AppErrorCode.UNEXPECTED_ERROR;
+
+    if (e instanceof AppError) {
+      loggedErrorCodeStr = AppErrorCode[e.code];
+      originalErrorCode = e.code;
+      responseStatusCode = getStatusCodeFromAppError(e.code);
+    }
+
+    youtubeSubtitleLogger.error("server-error-handler", {
+      error_code: loggedErrorCodeStr,
+      error_message: e.message,
+      stack_trace: e.stack,
+      response_status_code: responseStatusCode,
+    });
+    return {
+      serverError: e.message,
+      code: originalErrorCode,
+    };
+  },
+});
 
 // Define the schema for input validation using Zod
 const fetchYouTubeSubtitlesSchema = z.object({
@@ -23,18 +94,24 @@ export interface FetchYouTubeSubtitlesOutput {
   srtContent: string;
 }
 
-// Create the safe action
-export const fetchYouTubeSubtitles = createSafeActionClient()(
+export const fetchYouTubeSubtitles = youtubeSubtitleAction(
   fetchYouTubeSubtitlesSchema,
   async (
-    input: FetchYouTubeSubtitlesInput
+    input: FetchYouTubeSubtitlesInput,
+    { userId, ipAddress }: ActionContext
   ): Promise<ActionResponse<FetchYouTubeSubtitlesOutput>> => {
+    const actionStartTime = Date.now();
     const { youtubeUrl, languageCode } = input;
     const actionName = "fetch-youtube-subtitles";
 
     youtubeSubtitleLogger.info(actionName, {
-      request_payload: { youtubeUrl, languageCode },
-      metadata: { custom_message: "Attempting to fetch YouTube subtitles." },
+      user_id: userId,
+      ip_address: ipAddress,
+      metadata: {
+        custom_message: "Attempting to fetch YouTube subtitles.",
+        youtubeUrl,
+        languageCode,
+      },
     });
 
     const downloaderServiceUrl = process.env.AUDIO_SEGMENTER_URL;
@@ -43,31 +120,30 @@ export const fetchYouTubeSubtitles = createSafeActionClient()(
         AppErrorCode.CONFIGURATION_ERROR,
         "Subtitle downloader service URL is not configured."
       );
+      const durationMs = Date.now() - actionStartTime;
       youtubeSubtitleLogger.error(actionName, {
+        user_id: userId,
+        ip_address: ipAddress,
         error_code: AppErrorCode[configError.code],
         error_message: configError.message,
-        request_payload: { youtubeUrl, languageCode },
+        duration_ms: durationMs,
+        response_status_code: getStatusCodeFromAppError(configError.code),
       });
-      return {
-        success: false,
-        error: configError,
-      };
+      return { success: false, error: configError };
     }
 
     const endpoint = `${downloaderServiceUrl}/download-srt`;
-
     youtubeSubtitleLogger.debug(actionName, {
-      metadata: {
-        custom_message: "Calling subtitle downloader service.",
-        endpoint,
-        youtubeUrl,
-        languageCode,
-      },
+      user_id: userId,
+      ip_address: ipAddress,
+      metadata: { endpoint, youtubeUrl, languageCode },
     });
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
       youtubeSubtitleLogger.warn(actionName, {
+        user_id: userId,
+        ip_address: ipAddress,
         metadata: {
           custom_message:
             "Subtitle downloader service request timed out (60s).",
@@ -77,7 +153,7 @@ export const fetchYouTubeSubtitles = createSafeActionClient()(
         },
       });
       controller.abort();
-    }, 60000); // 60 seconds timeout
+    }, 60000);
 
     try {
       const response = await fetch(endpoint, {
@@ -92,7 +168,7 @@ export const fetchYouTubeSubtitles = createSafeActionClient()(
         signal: controller.signal as any,
       });
 
-      clearTimeout(timeoutId); // Clear the timeout if fetch completes or fails before timeout
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         const errorBody = await response.text();
@@ -107,16 +183,16 @@ export const fetchYouTubeSubtitles = createSafeActionClient()(
             "Subtitle download endpoint not found or video has no subtitles.";
         }
         const serviceError = new AppError(AppErrorCode.SERVICE_ERROR, message);
+        const durationMs = Date.now() - actionStartTime;
         youtubeSubtitleLogger.error(actionName, {
+          user_id: userId,
+          ip_address: ipAddress,
           error_code: AppErrorCode[serviceError.code],
           error_message: serviceError.message,
           response_status_code: response.status,
           metadata: { errorBody, endpoint, youtubeUrl, languageCode },
         });
-        return {
-          success: false,
-          error: serviceError,
-        };
+        return { success: false, error: serviceError };
       }
 
       const srtContent = await response.text();
@@ -126,22 +202,14 @@ export const fetchYouTubeSubtitles = createSafeActionClient()(
           AppErrorCode.SERVICE_ERROR,
           "Received invalid or empty subtitle content from service."
         );
-        youtubeSubtitleLogger.error(actionName, {
-          error_code: AppErrorCode[contentError.code],
-          error_message: contentError.message,
-          metadata: {
-            youtubeUrl,
-            languageCode,
-            receivedSrtSnippet: srtContent.substring(0, 100),
-          },
-        });
-        return {
-          success: false,
-          error: contentError,
-        };
+        throw contentError;
       }
-
+      const durationMs = Date.now() - actionStartTime;
       youtubeSubtitleLogger.info(actionName, {
+        user_id: userId,
+        ip_address: ipAddress,
+        duration_ms: durationMs,
+        response_status_code: 200,
         metadata: {
           custom_message: "Successfully fetched YouTube subtitles.",
           youtubeUrl,
@@ -152,7 +220,7 @@ export const fetchYouTubeSubtitles = createSafeActionClient()(
       return { success: true, data: { srtContent } };
     } catch (error: unknown) {
       clearTimeout(timeoutId);
-
+      const durationMs = Date.now() - actionStartTime;
       let appErr: AppError;
       if (error instanceof AppError) {
         appErr = error;
@@ -184,10 +252,13 @@ export const fetchYouTubeSubtitles = createSafeActionClient()(
       }
 
       youtubeSubtitleLogger.error(actionName, {
+        user_id: userId,
+        ip_address: ipAddress,
         error_code: AppErrorCode[appErr.code],
         error_message: appErr.message,
-        request_payload: { youtubeUrl, languageCode },
         stack_trace: appErr.stack,
+        duration_ms: durationMs,
+        response_status_code: getStatusCodeFromAppError(appErr.code),
         metadata: { rawError: String(error), endpoint },
       });
 

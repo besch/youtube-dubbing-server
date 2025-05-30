@@ -7,8 +7,83 @@ import { config } from "@/config";
 import { generateOpenAiTts } from "@/lib/openai-tts";
 import { generateGoogleTts } from "@/lib/google-tts";
 import { createLogger } from "@/lib/logger";
+import { createServerClient } from "@supabase/ssr";
+import { cookies, headers as nextHeaders } from "next/headers";
+import type { Database } from "@/types/supabase";
 
 const audioLogger = createLogger("audio-generation-service");
+
+// Context interface for middleware
+interface ActionContext {
+  userId?: string;
+  ipAddress?: string;
+}
+
+// Function to map AppErrorCode to HTTP status codes (can be shared or redefined)
+function getStatusCodeFromAppError(code: AppErrorCode): number {
+  switch (code) {
+    case AppErrorCode.INVALID_INPUT:
+    case AppErrorCode.VALIDATION_ERROR:
+      return 400;
+    case AppErrorCode.UNAUTHENTICATED:
+      return 401;
+    case AppErrorCode.UNAUTHORIZED:
+    case AppErrorCode.FORBIDDEN:
+      return 403;
+    case AppErrorCode.RECORD_NOT_FOUND: // Add if relevant
+      return 404;
+    // Add other specific mappings as needed
+    default:
+      return 500;
+  }
+}
+
+// Create a new action client with middleware
+const audioAction = createSafeActionClient({
+  async middleware(): Promise<ActionContext> {
+    const cookieStore = cookies();
+    const supabase = createServerClient<Database>(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          get(name: string) {
+            return cookieStore.get(name)?.value;
+          },
+        },
+      }
+    );
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const ip =
+      nextHeaders().get("x-forwarded-for") ?? nextHeaders().get("remote_addr");
+    return { userId: user?.id, ipAddress: ip ?? undefined };
+  },
+  handleReturnedServerError(e: Error) {
+    let loggedErrorCodeStr: string =
+      AppErrorCode[AppErrorCode.UNEXPECTED_ERROR];
+    let responseStatusCode: number = 500;
+    let originalErrorCode: AppErrorCode = AppErrorCode.UNEXPECTED_ERROR;
+
+    if (e instanceof AppError) {
+      loggedErrorCodeStr = AppErrorCode[e.code];
+      originalErrorCode = e.code;
+      responseStatusCode = getStatusCodeFromAppError(e.code);
+    }
+
+    audioLogger.error("server-error-handler", {
+      error_code: loggedErrorCodeStr,
+      error_message: e.message,
+      stack_trace: e.stack,
+      response_status_code: responseStatusCode,
+    });
+    return {
+      serverError: e.message,
+      code: originalErrorCode,
+    };
+  },
+});
 
 // --- Action: Generate Audio Chunk (Revised for Multi-TTS and On-the-Fly) ---
 const generateAudioSchema = z
@@ -27,19 +102,18 @@ const generateAudioSchema = z
 // Define input type from schema
 type GenerateAudioChunkInput = z.infer<typeof generateAudioSchema>;
 
-export const generateAudioChunk = createSafeActionClient()(
+export const generateAudioChunk = audioAction(
   generateAudioSchema,
-  async ({
-    language,
-    voice,
-    startTime,
-    endTime,
-    text,
-  }: GenerateAudioChunkInput): Promise<
-    ActionResponse<{ audioBase64: string; mimeType: string }>
-  > => {
+  async (
+    { language, voice, startTime, endTime, text }: GenerateAudioChunkInput,
+    { userId, ipAddress }: ActionContext
+  ): Promise<ActionResponse<{ audioBase64: string; mimeType: string }>> => {
+    const actionStartTime = Date.now();
     const actionName = "generate-audio-chunk";
+
     audioLogger.info(actionName, {
+      user_id: userId,
+      ip_address: ipAddress,
       metadata: { custom_message: "Attempting to generate audio chunk." },
       request_payload: {
         language,
@@ -90,10 +164,16 @@ export const generateAudioChunk = createSafeActionClient()(
           AppErrorCode.INVALID_INPUT,
           errorMessage
         );
+        const durationMs = Date.now() - actionStartTime;
         audioLogger.error(actionName, {
+          user_id: userId,
+          ip_address: ipAddress,
           error_code: AppErrorCode[invalidInputError.code],
           error_message: invalidInputError.message,
-          request_payload: { language, voice },
+          duration_ms: durationMs,
+          response_status_code: getStatusCodeFromAppError(
+            invalidInputError.code
+          ),
         });
         return {
           success: false,
@@ -106,10 +186,14 @@ export const generateAudioChunk = createSafeActionClient()(
         AppErrorCode.UNEXPECTED_ERROR,
         `Failed to determine TTS provider for language '${language}' and voice '${voice}'.`
       );
+      const durationMs = Date.now() - actionStartTime;
       audioLogger.error(actionName, {
+        user_id: userId,
+        ip_address: ipAddress,
         error_code: AppErrorCode[providerError.code],
         error_message: providerError.message,
-        request_payload: { language, voice },
+        duration_ms: durationMs,
+        response_status_code: getStatusCodeFromAppError(providerError.code),
       });
       return {
         success: false,
@@ -119,6 +203,8 @@ export const generateAudioChunk = createSafeActionClient()(
 
     try {
       audioLogger.debug(actionName, {
+        user_id: userId,
+        ip_address: ipAddress,
         metadata: {
           custom_message: "Starting direct TTS generation.",
           language,
@@ -133,15 +219,16 @@ export const generateAudioChunk = createSafeActionClient()(
           AppErrorCode.INVALID_INPUT,
           `No text provided for TTS.`
         );
+        const durationMs = Date.now() - actionStartTime;
         audioLogger.error(actionName, {
+          user_id: userId,
+          ip_address: ipAddress,
           error_code: AppErrorCode[noTextError.code],
           error_message: noTextError.message,
-          request_payload: { language, voice, startTime, endTime },
+          duration_ms: durationMs,
+          response_status_code: getStatusCodeFromAppError(noTextError.code),
         });
-        return {
-          success: false,
-          error: noTextError,
-        };
+        return { success: false, error: noTextError };
       }
 
       let ttsResult: { audioBuffer: Buffer };
@@ -167,8 +254,13 @@ export const generateAudioChunk = createSafeActionClient()(
       const { audioBuffer } = ttsResult;
       const audioBase64 = audioBuffer.toString("base64");
       const mimeType = "audio/mpeg";
+      const durationMs = Date.now() - actionStartTime;
 
       audioLogger.info(actionName, {
+        user_id: userId,
+        ip_address: ipAddress,
+        duration_ms: durationMs,
+        response_status_code: 200,
         metadata: {
           custom_message: "TTS generation successful.",
           language,
@@ -179,6 +271,7 @@ export const generateAudioChunk = createSafeActionClient()(
       });
       return { success: true, data: { audioBase64, mimeType } };
     } catch (error: unknown) {
+      const durationMs = Date.now() - actionStartTime;
       const appErr =
         error instanceof AppError
           ? error
@@ -189,16 +282,13 @@ export const generateAudioChunk = createSafeActionClient()(
                 : "Unknown error in generateAudioChunk"
             );
       audioLogger.error(actionName, {
+        user_id: userId,
+        ip_address: ipAddress,
         error_code: AppErrorCode[appErr.code],
         error_message: appErr.message,
-        request_payload: {
-          language,
-          voice,
-          startTime,
-          endTime,
-          textLength: text.length,
-        },
         stack_trace: appErr.stack,
+        duration_ms: durationMs,
+        response_status_code: getStatusCodeFromAppError(appErr.code),
         metadata: { rawError: String(error) },
       });
       return { success: false, error: appErr };
