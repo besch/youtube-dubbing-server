@@ -1,5 +1,4 @@
-import Image from "next/image";
-import { Github, Youtube, Tv2 } from "lucide-react";
+import { Tv2 } from "lucide-react";
 import Link from "next/link";
 
 export default function HomePage() {
@@ -9,10 +8,18 @@ export default function HomePage() {
         <div className="max-w-4xl mx-auto">
           <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-violet-500/30 bg-violet-950/40 px-3 py-1 text-xs font-medium text-violet-300">
             <Tv2 size={14} className="text-violet-400" />
-            <span>Chrome Extension Experience</span>
+            <span>
+              <a
+                href="https://chromewebstore.google.com/detail/onedub/gnkcmnoobhckipojdkemkelghfjcpmdc"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Chrome Extension Experience
+              </a>
+            </span>
           </div>
 
-          <h1 className="text-4xl sm:text-5xl md:text-6xl font-extrabold tracking-tight mb-4 bg-clip-text text-transparent bg-gradient-to-r from-violet-400 via-purple-500 to-orange-500">
+          <h1 className="text-4xl sm:text-5xl md:text-6xl font-extrabold tracking-tight mb-4 bg-clip-text text-transparent bg-gradient-to-r from-violet-400 via-purple-500 to-orange-500 line-height-[75px]">
             AI Dubbing for YouTube
           </h1>
           <p className="text-lg sm:text-xl text-neutral-300/80 max-w-2xl mx-auto mb-10">
