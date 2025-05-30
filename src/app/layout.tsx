@@ -2,6 +2,7 @@ import { Inter } from "next/font/google";
 import { Toaster } from "sonner";
 import { Nav } from "@/components/layout/nav";
 import { ThemeProvider } from "@/components/theme-provider";
+import { NuqsAdapter } from "nuqs/adapters/next/app";
 import "./globals.css";
 
 const inter = Inter({ subsets: ["latin"] });
@@ -25,11 +26,13 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          <div className="relative flex min-h-screen flex-col">
-            <Nav />
-            <main className="flex-1">{children}</main>
-          </div>
-          <Toaster />
+          <NuqsAdapter>
+            <div className="relative flex min-h-screen flex-col">
+              <Nav />
+              <main className="flex-1">{children}</main>
+            </div>
+            <Toaster />
+          </NuqsAdapter>
         </ThemeProvider>
       </body>
     </html>
