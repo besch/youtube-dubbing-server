@@ -3,7 +3,7 @@ import Link from "next/link";
 
 export default function HomePage() {
   return (
-    <div className="flex flex-col min-h-screen bg-gradient-to-b from-neutral-900 to-black text-white font-[family-name:var(--font-geist-sans)]">
+    <div className="flex flex-col min-h-screen bg-gradient-to-b from-neutral-900 to-black text-white">
       <main className="flex flex-col items-center justify-center flex-grow px-4 sm:px-8 py-16 sm:py-24 text-center">
         <div className="max-w-4xl mx-auto">
           <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-violet-500/30 bg-violet-950/40 px-3 py-1 text-xs font-medium text-violet-300">
@@ -19,7 +19,7 @@ export default function HomePage() {
             </span>
           </div>
 
-          <h1 className="text-4xl sm:text-5xl md:text-6xl font-extrabold tracking-tight leading-snug mb-4 bg-clip-text text-transparent bg-gradient-to-r from-violet-400 via-purple-500 to-orange-500">
+          <h1 className="text-4xl leading-loose sm:text-5xl sm:leading-loose md:text-6xl md:leading-loose font-extrabold tracking-tight mb-4 bg-clip-text text-transparent bg-gradient-to-r from-violet-400 via-purple-500 to-orange-500">
             AI Dubbing for YouTube
           </h1>
           <p className="text-lg sm:text-xl text-neutral-300/80 max-w-2xl mx-auto mb-10">
