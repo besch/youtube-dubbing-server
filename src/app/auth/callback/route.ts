@@ -1,4 +1,4 @@
-import { createServerClient } from "@supabase/ssr";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import type { Database } from "@/types/supabase";
@@ -6,9 +6,30 @@ import type { Database } from "@/types/supabase";
 export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get("code");
-  const initiatorId = requestUrl.searchParams.get("initiator_id");
+  const cookieStore = cookies();
+
+  // Try to get initiator_id from the cookie first
+  let initiatorId = cookieStore.get("oauth_initiator_id")?.value || null;
+  if (initiatorId) {
+    initiatorId = decodeURIComponent(initiatorId);
+    console.log(
+      "[/auth/callback Server Route] Received initiator_id from cookie:",
+      initiatorId
+    );
+    // Delete the cookie immediately after reading
+    cookieStore.set("oauth_initiator_id", "", { path: "/", maxAge: 0 });
+  } else {
+    // Fallback to query parameter if cookie is not found (e.g., for direct email sign-in redirect to /success)
+    // This path might not be strictly necessary if all OAuth/email-confirm flows use the cookie.
+    initiatorId = requestUrl.searchParams.get("initiator_id");
+    console.log(
+      "[/auth/callback Server Route] initiator_id from cookie NOT FOUND, received from query param (if any):",
+      initiatorId
+    );
+  }
+
   console.log(
-    "[/auth/callback Server Route] Received initiator_id:",
+    "[/auth/callback Server Route] Effective initiator_id for this request:",
     initiatorId
   );
   console.log(
@@ -21,7 +42,6 @@ export async function GET(request: Request) {
   );
 
   if (code) {
-    const cookieStore = cookies();
     const supabase = createServerClient<Database>(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -30,10 +50,10 @@ export async function GET(request: Request) {
           get(name: string) {
             return cookieStore.get(name)?.value;
           },
-          set(name: string, value: string, options: any) {
+          set(name: string, value: string, options: CookieOptions) {
             cookieStore.set({ name, value, ...options });
           },
-          remove(name: string, options: any) {
+          remove(name: string, options: CookieOptions) {
             cookieStore.set({ name, value: "", ...options });
           },
         },
@@ -49,35 +69,27 @@ export async function GET(request: Request) {
       let errorRedirectUrl = `${
         requestUrl.origin
       }/login?error=${encodeURIComponent(error.message)}`;
-      if (initiatorId) {
-        errorRedirectUrl += `&initiator_id=${encodeURIComponent(initiatorId)}`;
-      }
+      // No need to append initiator_id here anymore as login page will read from its own URL if set by extension
       console.error(
         "[/auth/callback Server Route] Code exchange error:",
         error.message
       );
       console.log(
-        "[/auth/callback Server Route] Redirecting to (error):".concat(
-          errorRedirectUrl
-        )
+        "[/auth/callback Server Route] Redirecting to (error):",
+        errorRedirectUrl
       );
       return NextResponse.redirect(errorRedirectUrl);
     }
 
     if (!session) {
       let noSessionRedirectUrl = `${requestUrl.origin}/login?error=No session created`;
-      if (initiatorId) {
-        noSessionRedirectUrl += `&initiator_id=${encodeURIComponent(
-          initiatorId
-        )}`;
-      }
+      // No need to append initiator_id here
       console.error(
         "[/auth/callback Server Route] No session created after code exchange."
       );
       console.log(
-        "[/auth/callback Server Route] Redirecting to (no session):".concat(
-          noSessionRedirectUrl
-        )
+        "[/auth/callback Server Route] Redirecting to (no session):",
+        noSessionRedirectUrl
       );
       return NextResponse.redirect(noSessionRedirectUrl);
     }
@@ -112,6 +124,7 @@ export async function GET(request: Request) {
       );
     }
 
+    // Use the initiatorId obtained from cookie (or query as fallback)
     if (
       initiatorId === process.env.NEXT_PUBLIC_EXTENSION_ID &&
       process.env.NEXT_PUBLIC_EXTENSION_ID
@@ -136,7 +149,7 @@ export async function GET(request: Request) {
       );
     } else {
       console.log(
-        "[/auth/callback Server Route] No extension ID match for initiator_id:",
+        "[/auth/callback Server Route] No extension ID match for effective initiator_id:",
         initiatorId
       );
     }
@@ -148,13 +161,10 @@ export async function GET(request: Request) {
   }
 
   let noCodeRedirectUrl = `${requestUrl.origin}/login?error=No code provided`;
-  if (initiatorId) {
-    noCodeRedirectUrl += `&initiator_id=${encodeURIComponent(initiatorId)}`;
-  }
+  // No need to append initiator_id here for no-code error
   console.log(
-    "[/auth/callback Server Route] No code provided, redirecting to:".concat(
-      noCodeRedirectUrl
-    )
+    "[/auth/callback Server Route] No code provided, redirecting to:",
+    noCodeRedirectUrl
   );
   return NextResponse.redirect(noCodeRedirectUrl);
 }

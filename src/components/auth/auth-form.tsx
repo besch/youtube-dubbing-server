@@ -29,15 +29,33 @@ export function AuthForm() {
   const handleGoogleLogin = async () => {
     setIsLoading(true);
     const currentInitiatorId = searchParams.get("initiator_id");
-    console.log("[AuthForm - Google] initiator_id:", currentInitiatorId);
+    console.log(
+      "[AuthForm - Google] initiator_id from URL:",
+      currentInitiatorId
+    );
     try {
-      let googleRedirectTo = `${window.location.origin}/auth/callback`;
       if (currentInitiatorId) {
-        googleRedirectTo += `?initiator_id=${encodeURIComponent(
-          currentInitiatorId
-        )}`;
+        // Set a cookie for initiator_id before redirecting to Google
+        const cookieName = "oauth_initiator_id";
+        const cookieValue = encodeURIComponent(currentInitiatorId);
+        const cookieMaxAge = 60 * 5; // 5 minutes
+        document.cookie = `${cookieName}=${cookieValue}; path=/; max-age=${cookieMaxAge}; SameSite=Lax`;
+        console.log(
+          `[AuthForm - Google] Set cookie: ${cookieName}=${cookieValue}`
+        );
+      } else {
+        // Ensure old cookie is cleared if no initiator_id is present
+        document.cookie =
+          "oauth_initiator_id=; path=/; max-age=0; SameSite=Lax";
       }
-      console.log("[AuthForm - Google] redirectTo:", googleRedirectTo);
+
+      // The redirectTo for Supabase should be your server-side /auth/callback
+      // It will later read the initiator_id from the cookie.
+      const googleRedirectTo = `${window.location.origin}/auth/callback`;
+      console.log(
+        "[AuthForm - Google] redirectTo for Supabase:",
+        googleRedirectTo
+      );
 
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
@@ -59,7 +77,13 @@ export function AuthForm() {
     e.preventDefault();
     setIsLoading(true);
     const currentInitiatorId = searchParams.get("initiator_id");
-    console.log("[AuthForm - Email] initiator_id:", currentInitiatorId);
+    // For email auth, query param method should still work, but we ensure cookie is not set/misused
+    document.cookie = "oauth_initiator_id=; path=/; max-age=0; SameSite=Lax"; // Clear oauth cookie
+
+    console.log(
+      "[AuthForm - Email] initiator_id from URL:",
+      currentInitiatorId
+    );
     console.log(
       "[AuthForm - Email] NEXT_PUBLIC_EXTENSION_ID:",
       process.env.NEXT_PUBLIC_EXTENSION_ID
@@ -133,7 +157,7 @@ export function AuthForm() {
             );
           } else {
             console.log(
-              "[AuthForm - Email] No extension ID match for initiator_id:",
+              "[AuthForm - Email] No extension ID match for initiator_id from URL:",
               currentInitiatorId
             );
           }
@@ -144,22 +168,32 @@ export function AuthForm() {
           window.location.href = redirectUrl.toString();
         }
       } else {
-        let emailRedirectTo = `${window.location.origin}/auth/callback`;
+        // Sign Up flow
+        // For email sign-up, the confirmation link will go to /auth/callback.
+        // We need initiator_id there too, so we use the cookie method like Google OAuth.
+        let emailRedirectToServerCallback = `${window.location.origin}/auth/callback`;
         if (currentInitiatorId) {
-          emailRedirectTo += `?initiator_id=${encodeURIComponent(
+          document.cookie = `oauth_initiator_id=${encodeURIComponent(
             currentInitiatorId
-          )}`;
+          )}; path=/; max-age=${60 * 15}; SameSite=Lax`; // 15 min for email confirmation
+          console.log(
+            `[AuthForm - SignUp] Set cookie for email confirmation: oauth_initiator_id=${currentInitiatorId}`
+          );
+        } else {
+          document.cookie =
+            "oauth_initiator_id=; path=/; max-age=0; SameSite=Lax";
         }
         console.log(
-          "[AuthForm - Email] emailRedirectTo for signUp:",
-          emailRedirectTo
+          "[AuthForm - SignUp] emailRedirectTo for Supabase (points to server /auth/callback):".concat(
+            emailRedirectToServerCallback
+          )
         );
 
         const { error } = await supabase.auth.signUp({
           email,
           password,
           options: {
-            emailRedirectTo: emailRedirectTo,
+            emailRedirectTo: emailRedirectToServerCallback, // Supabase will append code etc. to this
           },
         });
 
@@ -177,7 +211,7 @@ export function AuthForm() {
           ? "Failed to sign in with email"
           : "Failed to sign up with email"
       );
-      console.error("[AuthForm - Email] Error:", error);
+      console.error("[AuthForm - Email/SignUp] Error:", error);
     } finally {
       setIsLoading(false);
     }
