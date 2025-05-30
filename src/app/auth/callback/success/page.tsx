@@ -6,11 +6,8 @@ import { AuthCallbackHandler } from "./auth-callback-handler";
 export default function AuthCallbackSuccessPage() {
   return (
     <div style={{ padding: "20px", textAlign: "center" }}>
-      <h1>Authentication Successful!</h1>
-      <p>Processing... this window will attempt to close automatically.</p>
-      <p>If it doesn't, please close it manually after a few seconds.</p>
-
-      <Suspense fallback={<div>Loading...</div>}>
+      <h1>Authentication Callback</h1>
+      <Suspense fallback={<div>Loading authentication details...</div>}>
         <AuthCallbackHandler />
       </Suspense>
     </div>
