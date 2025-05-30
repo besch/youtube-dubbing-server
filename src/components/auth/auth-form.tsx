@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createBrowserClient } from "@supabase/ssr";
 import { Button } from "@/components/ui/button";
@@ -20,24 +20,21 @@ export function AuthForm() {
   const [showConfirmationMessage, setShowConfirmationMessage] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [initiatorId, setInitiatorId] = useState<string | null>(null);
 
   const supabase = createBrowserClient<Database>(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
 
-  useEffect(() => {
-    setInitiatorId(searchParams.get("initiator_id"));
-  }, [searchParams]);
-
   const handleGoogleLogin = async () => {
+    setIsLoading(true);
+    const currentInitiatorId = searchParams.get("initiator_id");
     try {
-      setIsLoading(true);
-
       let googleRedirectTo = `${window.location.origin}/auth/callback`;
-      if (initiatorId) {
-        googleRedirectTo += `?initiator_id=${encodeURIComponent(initiatorId)}`;
+      if (currentInitiatorId) {
+        googleRedirectTo += `?initiator_id=${encodeURIComponent(
+          currentInitiatorId
+        )}`;
       }
 
       const { error } = await supabase.auth.signInWithOAuth({
@@ -59,6 +56,7 @@ export function AuthForm() {
   const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
+    const currentInitiatorId = searchParams.get("initiator_id");
     try {
       if (authMode === "signIn") {
         const { data, error } = await supabase.auth.signInWithPassword({
@@ -100,7 +98,7 @@ export function AuthForm() {
           }
 
           if (
-            initiatorId === process.env.NEXT_PUBLIC_EXTENSION_ID &&
+            currentInitiatorId === process.env.NEXT_PUBLIC_EXTENSION_ID &&
             process.env.NEXT_PUBLIC_EXTENSION_ID
           ) {
             redirectUrl.searchParams.append(
@@ -108,7 +106,7 @@ export function AuthForm() {
               process.env.NEXT_PUBLIC_EXTENSION_ID
             );
           } else if (
-            initiatorId === process.env.NEXT_PUBLIC_DEV_EXTENSION_ID &&
+            currentInitiatorId === process.env.NEXT_PUBLIC_DEV_EXTENSION_ID &&
             process.env.NEXT_PUBLIC_DEV_EXTENSION_ID
           ) {
             redirectUrl.searchParams.append(
@@ -121,8 +119,10 @@ export function AuthForm() {
         }
       } else {
         let emailRedirectTo = `${window.location.origin}/auth/callback`;
-        if (initiatorId) {
-          emailRedirectTo += `?initiator_id=${encodeURIComponent(initiatorId)}`;
+        if (currentInitiatorId) {
+          emailRedirectTo += `?initiator_id=${encodeURIComponent(
+            currentInitiatorId
+          )}`;
         }
 
         const { error } = await supabase.auth.signUp({
