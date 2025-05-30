@@ -87,12 +87,14 @@ export function Nav() {
           </Link>
           <nav className="flex items-center space-x-6 text-sm font-medium">
             <Link
-              href="/"
+              href="/subscription"
               className={`transition-colors hover:text-foreground/80 ${
-                pathname === "/" ? "text-foreground" : "text-foreground/60"
+                pathname === "/subscription" || pathname === "/pricing"
+                  ? "text-foreground"
+                  : "text-foreground/60"
               }`}
             >
-              Home
+              Pricing
             </Link>
             <Link
               href="/privacy"

@@ -29,13 +29,16 @@ export function AuthForm() {
   const handleGoogleLogin = async () => {
     setIsLoading(true);
     const currentInitiatorId = searchParams.get("initiator_id");
+    const redirectToPath = searchParams.get("redirect_to");
+
     console.log(
       "[AuthForm - Google] initiator_id from URL:",
       currentInitiatorId
     );
+    console.log("[AuthForm - Google] redirectToPath from URL:", redirectToPath);
+
     try {
       if (currentInitiatorId) {
-        // Set a cookie for initiator_id before redirecting to Google
         const cookieName = "oauth_initiator_id";
         const cookieValue = encodeURIComponent(currentInitiatorId);
         const cookieMaxAge = 60 * 5; // 5 minutes
@@ -44,14 +47,18 @@ export function AuthForm() {
           `[AuthForm - Google] Set cookie: ${cookieName}=${cookieValue}`
         );
       } else {
-        // Ensure old cookie is cleared if no initiator_id is present
         document.cookie =
           "oauth_initiator_id=; path=/; max-age=0; SameSite=Lax";
       }
 
-      // The redirectTo for Supabase should be your server-side /auth/callback
-      // It will later read the initiator_id from the cookie.
-      const googleRedirectTo = `${window.location.origin}/auth/callback`;
+      let googleRedirectTo = `${window.location.origin}/auth/callback`;
+
+      if (redirectToPath) {
+        googleRedirectTo += `?redirect_to=${encodeURIComponent(
+          redirectToPath
+        )}`;
+      }
+
       console.log(
         "[AuthForm - Google] redirectTo for Supabase:",
         googleRedirectTo

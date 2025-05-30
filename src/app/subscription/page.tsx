@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { SubscriptionStatus } from "@/components/subscription/subscription-status";
 import { SubscriptionPlans } from "@/components/subscription/subscription-plans";
-import { useRouter } from "next/navigation";
 import type { Database } from "@/types/supabase";
 import type { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 
@@ -13,33 +12,27 @@ type Profile = Database["public"]["Tables"]["profiles"]["Row"];
 export default function SubscriptionPage() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const router = useRouter();
   const supabase = createClient();
 
   useEffect(() => {
     async function loadProfile() {
+      setIsLoading(true);
       try {
         const {
           data: { user },
         } = await supabase.auth.getUser();
 
-        if (!user) {
-          router.push("/login");
-          return;
+        if (user) {
+          const { data: profileData } = await supabase
+            .from("profiles")
+            .select("*")
+            .eq("id", user.id)
+            .single();
+
+          if (profileData) {
+            setProfile(profileData);
+          }
         }
-
-        const { data: profileData } = await supabase
-          .from("profiles")
-          .select("*")
-          .eq("id", user.id)
-          .single();
-
-        if (!profileData) {
-          router.push("/login");
-          return;
-        }
-
-        setProfile(profileData);
       } catch (error) {
         console.error("Error loading profile:", error);
       } finally {
@@ -49,7 +42,6 @@ export default function SubscriptionPage() {
 
     loadProfile();
 
-    // Subscribe to profile changes
     const channel = supabase
       .channel("profile_changes")
       .on(
@@ -58,10 +50,15 @@ export default function SubscriptionPage() {
           event: "UPDATE",
           schema: "public",
           table: "profiles",
-          filter: `id=eq.${profile?.id}`,
+          filter: profile?.id ? `id=eq.${profile.id}` : undefined,
         },
         (payload: RealtimePostgresChangesPayload<Profile>) => {
-          if (payload.new && "id" in payload.new) {
+          if (
+            payload.new &&
+            "id" in payload.new &&
+            profile &&
+            payload.new.id === profile.id
+          ) {
             setProfile(payload.new as Profile);
           }
         }
@@ -71,7 +68,7 @@ export default function SubscriptionPage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [router, supabase, profile?.id]);
+  }, [supabase, profile?.id]);
 
   if (isLoading) {
     return (
@@ -83,15 +80,11 @@ export default function SubscriptionPage() {
     );
   }
 
-  if (!profile) {
-    return null;
-  }
-
   return (
     <div className="container mx-auto px-4 py-8">
-      <h1 className="text-3xl font-bold mb-8">Subscription</h1>
+      <h1 className="text-3xl font-bold mb-8">Subscription Plans</h1>
 
-      {profile.subscription_status === "premium" ? (
+      {profile && profile.subscription_status === "premium" ? (
         <SubscriptionStatus profile={profile} />
       ) : (
         <SubscriptionPlans profile={profile} />

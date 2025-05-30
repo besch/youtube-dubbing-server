@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { createSubscription } from "@/app/actions/subscription";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,7 +20,7 @@ import { Icons } from "@/components/icons";
 type Profile = Database["public"]["Tables"]["profiles"]["Row"];
 
 interface SubscriptionPlansProps {
-  profile: Profile;
+  profile: Profile | null;
 }
 
 const plans = [
@@ -43,8 +44,14 @@ const features = ["Unlimited video dubbing", "Cancel anytime"];
 
 export function SubscriptionPlans({ profile }: SubscriptionPlansProps) {
   const [isLoading, setIsLoading] = useState<string | null>(null);
+  const router = useRouter();
 
   const handleSubscribe = async (priceId: string) => {
+    if (!profile) {
+      router.push("/login?redirect_to=/subscription");
+      return;
+    }
+
     try {
       setIsLoading(priceId);
       const result = await createSubscription({ priceId });
