@@ -992,3 +992,34 @@ GRANT EXECUTE ON FUNCTION public.get_log_stats(timestamptz, timestamptz, text) T
 -- ALTER PUBLICATION supabase_realtime ADD TABLE public.app_logs;
 
 -- END: New Logging Infrastructure
+
+
+
+
+    CREATE OR REPLACE FUNCTION public.get_logs_by_time_granularity(
+        p_start_date timestamptz,
+        p_end_date timestamptz,
+        p_granularity text -- 'day', 'month', 'year'
+    )
+    RETURNS TABLE(time_bucket timestamptz, log_count bigint)
+    LANGUAGE plpgsql
+    AS $$
+    BEGIN
+        RETURN QUERY
+        SELECT
+            date_trunc(p_granularity, al.created_at) as time_bucket,
+            COUNT(*) as log_count
+        FROM
+            public.app_logs al
+        WHERE
+            (p_start_date IS NULL OR al.created_at >= p_start_date) AND
+            (p_end_date IS NULL OR al.created_at <= p_end_date)
+        GROUP BY
+            time_bucket
+        ORDER BY
+            time_bucket ASC;
+    END;
+    $$;
+
+    -- Grant execute to the authenticated role (or service_role if called by admin actions)
+    GRANT EXECUTE ON FUNCTION public.get_logs_by_time_granularity(timestamptz, timestamptz, text) TO service_role;

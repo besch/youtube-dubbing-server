@@ -213,6 +213,19 @@ export type Database = {
           item_count: number
         }[]
       }
+      get_logs_by_time_granularity: {
+        Args:
+          | {
+              p_granularity: string
+              p_start_date?: string
+              p_end_date?: string
+            }
+          | { p_start_date: string; p_end_date: string; p_granularity: string }
+        Returns: {
+          time_bucket: string
+          log_count: number
+        }[]
+      }
       reset_daily_video_count: {
         Args: Record<PropertyKey, never>
         Returns: undefined

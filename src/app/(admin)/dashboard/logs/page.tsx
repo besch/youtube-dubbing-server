@@ -7,21 +7,26 @@ import {
   parseAsString,
   parseAsIsoDateTime,
 } from "nuqs";
-import { getLogsAction, getLogStatsAction } from "@/app/actions/admin/logs";
+import {
+  getLogsAction,
+  getLogStatsAction,
+  getTimeBasedLogStatsAction,
+} from "@/app/actions/admin/logs";
 import type {
   PaginatedLogsResponse as AdminPaginatedLogsResponse,
   LogStat as AdminLogStat,
+  TimeSeriesStatData,
 } from "@/app/actions/admin/logs";
 import type { LogEntry, LogLevel } from "@/lib/logger";
-import { Button } from "@/components/ui/button"; // Assuming shadcn/ui Button
-import { Input } from "@/components/ui/input"; // Assuming shadcn/ui Input
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select"; // Assuming shadcn/ui Select
+} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -29,28 +34,28 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@/components/ui/table"; // Assuming shadcn/ui Table
+} from "@/components/ui/table";
 import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
   CardDescription,
-} from "@/components/ui/card"; // Assuming shadcn/ui Card
+} from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
   DialogClose,
-  DialogTrigger,
   DialogFooter,
-  DialogDescription,
-} from "@/components/ui/dialog"; // Assuming shadcn/ui Dialog
-import { toast } from "sonner"; // Assuming sonner for toasts
+} from "@/components/ui/dialog";
+import { toast } from "sonner";
 import {
   BarChart,
   Bar,
+  LineChart,
+  Line,
   PieChart,
   Pie,
   Cell,
@@ -61,15 +66,9 @@ import {
   Legend,
   ResponsiveContainer,
 } from "recharts";
+import { subDays, subMonths, startOfDay, endOfDay, format } from "date-fns";
 
 const LOG_LEVELS: LogLevel[] = ["DEBUG", "INFO", "WARN", "ERROR", "FATAL"];
-const GROUP_BY_OPTIONS = [
-  "log_level",
-  "service_name",
-  "action_name",
-  "error_code",
-] as const;
-type GroupByOption = (typeof GROUP_BY_OPTIONS)[number];
 
 const PIE_CHART_COLORS = [
   "#0088FE",
@@ -79,16 +78,17 @@ const PIE_CHART_COLORS = [
   "#8884D8",
 ];
 const BAR_CHART_FILL_COLOR = "hsl(var(--primary))";
+const LINE_CHART_STROKE_COLOR = "hsl(var(--primary))";
+
+interface TimeSeriesStat {
+  date: string;
+  count: number;
+}
 
 export default function AdminLogsPage() {
   const [logsData, setLogsData] = useState<AdminPaginatedLogsResponse | null>(
     null
   );
-  // Stats for the filterable table/section
-  const [generalStatsData, setGeneralStatsData] = useState<
-    AdminLogStat[] | null
-  >(null);
-  // Dedicated stats for charts
   const [logLevelChartData, setLogLevelChartData] = useState<
     AdminLogStat[] | null
   >(null);
@@ -98,14 +98,20 @@ export default function AdminLogsPage() {
   const [errorCodeChartData, setErrorCodeChartData] = useState<
     AdminLogStat[] | null
   >(null);
+  const [dailyLogCounts, setDailyLogCounts] = useState<TimeSeriesStat[] | null>(
+    null
+  );
+  const [monthlyLogCounts, setMonthlyLogCounts] = useState<
+    TimeSeriesStat[] | null
+  >(null);
 
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
-  const [isLoadingGeneralStats, setIsLoadingGeneralStats] = useState(false);
   const [isLoadingCharts, setIsLoadingCharts] = useState(false);
+  const [isLoadingTimeCharts, setIsLoadingTimeCharts] = useState(false);
   const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+  const [activeDateRange, setActiveDateRange] = useState<string | null>(null);
 
-  // Filters using nuqs
   const [page, setPage] = useQueryState("page", parseAsInteger.withDefault(1));
   const [limit, setLimit] = useQueryState(
     "limit",
@@ -117,15 +123,15 @@ export default function AdminLogsPage() {
   );
   const [serviceNameFilter, setServiceNameFilter] = useQueryState(
     "service",
-    parseAsString.withDefault("").withOptions({ shallow: false })
+    parseAsString.withOptions({ shallow: false }).withDefault("")
   );
   const [actionNameFilter, setActionNameFilter] = useQueryState(
     "action",
-    parseAsString.withDefault("").withOptions({ shallow: false })
+    parseAsString.withOptions({ shallow: false }).withDefault("")
   );
   const [userIdFilter, setUserIdFilter] = useQueryState(
     "userId",
-    parseAsString.withDefault("").withOptions({ shallow: false })
+    parseAsString.withOptions({ shallow: false }).withDefault("")
   );
   const [startDateFilter, setStartDateFilter] = useQueryState(
     "startDate",
@@ -135,23 +141,16 @@ export default function AdminLogsPage() {
     "endDate",
     parseAsIsoDateTime.withOptions({ shallow: false })
   );
-  const [statsGroupBy, setStatsGroupBy] = useQueryState<GroupByOption>(
-    "statsGroupBy",
-    parseAsString
-      .withDefault("log_level")
-      .withOptions({ shallow: false }) as any
-  );
+
+  const currentLogLevelFilterForAction =
+    logLevelFilter === "" ? undefined : (logLevelFilter as LogLevel);
 
   const fetchLogs = useCallback(async () => {
     setIsLoadingLogs(true);
-
-    const currentLogLevelFilter =
-      logLevelFilter === "" ? undefined : (logLevelFilter as LogLevel);
-
     const result = await getLogsAction({
       page,
       limit,
-      logLevel: currentLogLevelFilter,
+      logLevel: currentLogLevelFilterForAction,
       serviceName: serviceNameFilter || undefined,
       actionName: actionNameFilter || undefined,
       userId: userIdFilter || undefined,
@@ -179,41 +178,13 @@ export default function AdminLogsPage() {
   }, [
     page,
     limit,
-    logLevelFilter,
+    currentLogLevelFilterForAction,
     serviceNameFilter,
     actionNameFilter,
     userIdFilter,
     startDateFilter,
     endDateFilter,
   ]);
-
-  const fetchGeneralStats = useCallback(async () => {
-    setIsLoadingGeneralStats(true);
-    const result = await getLogStatsAction({
-      groupBy: statsGroupBy || "log_level",
-      startDate: startDateFilter?.toISOString(),
-      endDate: endDateFilter?.toISOString(),
-    });
-
-    if (result.data) {
-      setGeneralStatsData(result.data);
-    } else {
-      setGeneralStatsData(null);
-      if (result.serverError) {
-        toast.error(result.serverError || "Failed to fetch general stats");
-      } else if (result.validationError) {
-        const errorMessages = Object.values(result.validationError)
-          .flat()
-          .join(", ");
-        toast.error(`Validation Error (General Stats): ${errorMessages}`);
-      } else {
-        toast.error(
-          "An unexpected error occurred while fetching general stats."
-        );
-      }
-    }
-    setIsLoadingGeneralStats(false);
-  }, [statsGroupBy, startDateFilter, endDateFilter]);
 
   const fetchAllChartData = useCallback(async () => {
     setIsLoadingCharts(true);
@@ -246,7 +217,6 @@ export default function AdminLogsPage() {
 
       if (errors.data)
         setErrorCodeChartData(errors.data.filter((e) => e.group_key));
-      // Filter out null/empty error codes
       else if (errors.serverError)
         toast.error(`Chart Error (Error Codes): ${errors.serverError}`);
     } catch (error) {
@@ -256,22 +226,122 @@ export default function AdminLogsPage() {
     setIsLoadingCharts(false);
   }, [startDateFilter, endDateFilter]);
 
+  const fetchTimeBasedLogCounts = useCallback(async () => {
+    if (!startDateFilter || !endDateFilter) {
+      setDailyLogCounts(null);
+      setMonthlyLogCounts(null);
+      return;
+    }
+    setIsLoadingTimeCharts(true);
+    setDailyLogCounts(null);
+    setMonthlyLogCounts(null);
+
+    try {
+      const [dailyResult, monthlyResult] = await Promise.all([
+        getTimeBasedLogStatsAction({
+          granularity: "day",
+          startDate: startDateFilter.toISOString(),
+          endDate: endDateFilter.toISOString(),
+        }),
+        getTimeBasedLogStatsAction({
+          granularity: "month",
+          startDate: startDateFilter.toISOString(),
+          endDate: endDateFilter.toISOString(),
+        }),
+      ]);
+
+      if (dailyResult.data) {
+        setDailyLogCounts(
+          Array.isArray(dailyResult.data) ? [...dailyResult.data] : null
+        );
+      } else if (dailyResult.serverError) {
+        toast.error(`Chart Error (Daily Logs): ${dailyResult.serverError}`);
+        setDailyLogCounts(null);
+      } else if (dailyResult.validationError) {
+        toast.error(
+          `Validation Error (Daily Logs): ${Object.values(
+            dailyResult.validationError
+          )
+            .flat()
+            .join(", ")}`
+        );
+        setDailyLogCounts(null);
+      } else {
+        setDailyLogCounts(null);
+      }
+
+      if (monthlyResult.data) {
+        setMonthlyLogCounts(
+          Array.isArray(monthlyResult.data) ? [...monthlyResult.data] : null
+        );
+      } else if (monthlyResult.serverError) {
+        toast.error(`Chart Error (Monthly Logs): ${monthlyResult.serverError}`);
+        setMonthlyLogCounts(null);
+      } else if (monthlyResult.validationError) {
+        toast.error(
+          `Validation Error (Monthly Logs): ${Object.values(
+            monthlyResult.validationError
+          )
+            .flat()
+            .join(", ")}`
+        );
+        setMonthlyLogCounts(null);
+      } else {
+        setMonthlyLogCounts(null);
+      }
+    } catch (error) {
+      toast.error("Failed to load time-based log counts.");
+      console.error("Time-based log counts fetch error:", error);
+    }
+
+    setIsLoadingTimeCharts(false);
+  }, [startDateFilter, endDateFilter]);
+
   useEffect(() => {
     fetchLogs();
   }, [fetchLogs]);
 
   useEffect(() => {
-    fetchGeneralStats();
-  }, [fetchGeneralStats]);
-
-  useEffect(() => {
     fetchAllChartData();
   }, [fetchAllChartData]);
 
-  const handleApplyFilters = () => {
-    fetchLogs();
-    fetchGeneralStats();
-    fetchAllChartData();
+  useEffect(() => {
+    fetchTimeBasedLogCounts();
+  }, [fetchTimeBasedLogCounts]);
+
+  const handleSetDateRange = (
+    rangeKey: string,
+    days?: number,
+    months?: number
+  ) => {
+    const todayEnd = endOfDay(new Date());
+    let start;
+
+    if (rangeKey === "lastWeek") {
+      start = startOfDay(subDays(todayEnd, 6));
+    } else if (rangeKey === "lastMonth") {
+      start = startOfDay(subMonths(todayEnd, 1));
+    } else if (rangeKey === "last3Months") {
+      start = startOfDay(subMonths(todayEnd, 3));
+    } else if (rangeKey === "last6Months") {
+      start = startOfDay(subMonths(todayEnd, 6));
+    } else {
+      setStartDateFilter(null);
+      setEndDateFilter(null);
+      setActiveDateRange(null);
+      return;
+    }
+    setStartDateFilter(start);
+    setEndDateFilter(todayEnd);
+    setActiveDateRange(rangeKey);
+  };
+
+  const handleApplyAllFilters = () => {
+    setPage(1).then(() => {
+      fetchLogs();
+      fetchAllChartData();
+      fetchTimeBasedLogCounts();
+    });
   };
 
   const handleViewDetails = (log: LogEntry) => {
@@ -284,22 +354,294 @@ export default function AdminLogsPage() {
     setIsDetailModalOpen(false);
   };
 
-  return (
-    <div className="space-y-8 p-4 md:p-6 lg:p-8">
-      <h1 className="text-3xl font-bold tracking-tight">
-        Application Logs Dashboard
-      </h1>
+  const dateRangeButtons = [
+    { key: "lastWeek", label: "Last 7 Days" },
+    { key: "lastMonth", label: "Last Month" },
+    { key: "last3Months", label: "Last 3 Months" },
+    { key: "last6Months", label: "Last 6 Months" },
+  ];
 
-      {/* Charts Section */}
-      <section>
-        <h2 className="text-2xl font-semibold mb-6 tracking-tight">
+  return (
+    <div className="space-y-8 p-4 md:p-6 lg:p-8 bg-background text-foreground">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8">
+        <h1 className="text-3xl font-bold tracking-tight">
+          Application Logs Dashboard
+        </h1>
+        <div className="flex items-center gap-2 flex-wrap">
+          {dateRangeButtons.map((btn) => (
+            <Button
+              key={btn.key}
+              variant={activeDateRange === btn.key ? "default" : "outline"}
+              onClick={() => handleSetDateRange(btn.key)}
+              size="sm"
+            >
+              {btn.label}
+            </Button>
+          ))}
+        </div>
+      </div>
+
+      <Card className="mb-8">
+        <CardHeader>
+          <CardTitle>Filters</CardTitle>
+          <CardDescription>
+            Refine logs and statistics view. Select a quick range or set custom
+            dates.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 items-end">
+            <div className="space-y-1">
+              <label
+                htmlFor="startDate"
+                className="text-sm font-medium text-muted-foreground"
+              >
+                Start Date
+              </label>
+              <Input
+                id="startDate"
+                type="datetime-local"
+                value={
+                  startDateFilter
+                    ? format(startDateFilter, "yyyy-MM-dd'T'HH:mm")
+                    : ""
+                }
+                onChange={(e) => {
+                  setStartDateFilter(
+                    e.target.value ? new Date(e.target.value) : null
+                  );
+                  setActiveDateRange(null);
+                }}
+                className="bg-input border-border"
+              />
+            </div>
+            <div className="space-y-1">
+              <label
+                htmlFor="endDate"
+                className="text-sm font-medium text-muted-foreground"
+              >
+                End Date
+              </label>
+              <Input
+                id="endDate"
+                type="datetime-local"
+                value={
+                  endDateFilter
+                    ? format(endDateFilter, "yyyy-MM-dd'T'HH:mm")
+                    : ""
+                }
+                onChange={(e) => {
+                  setEndDateFilter(
+                    e.target.value ? new Date(e.target.value) : null
+                  );
+                  setActiveDateRange(null);
+                }}
+                className="bg-input border-border"
+              />
+            </div>
+            <div className="space-y-1">
+              <label
+                htmlFor="logLevel"
+                className="text-sm font-medium text-muted-foreground"
+              >
+                Log Level
+              </label>
+              <Select
+                value={logLevelFilter || ""}
+                onValueChange={(val) => {
+                  if (val === "__ALL_LEVELS__") {
+                    setLogLevelFilter(null);
+                  } else {
+                    setLogLevelFilter(val as LogLevel);
+                  }
+                }}
+              >
+                <SelectTrigger id="logLevel" className="bg-input border-border">
+                  <SelectValue placeholder="Log Level" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__ALL_LEVELS__">All Levels</SelectItem>
+                  {LOG_LEVELS.map((level) => (
+                    <SelectItem key={level} value={level}>
+                      {level}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <label
+                htmlFor="serviceName"
+                className="text-sm font-medium text-muted-foreground"
+              >
+                Service Name
+              </label>
+              <Input
+                id="serviceName"
+                placeholder="Service Name"
+                value={serviceNameFilter}
+                onChange={(e) => setServiceNameFilter(e.target.value)}
+                className="bg-input border-border"
+              />
+            </div>
+            <div className="space-y-1">
+              <label
+                htmlFor="actionName"
+                className="text-sm font-medium text-muted-foreground"
+              >
+                Action Name
+              </label>
+              <Input
+                id="actionName"
+                placeholder="Action Name"
+                value={actionNameFilter}
+                onChange={(e) => setActionNameFilter(e.target.value)}
+                className="bg-input border-border"
+              />
+            </div>
+            <div className="space-y-1">
+              <label
+                htmlFor="userId"
+                className="text-sm font-medium text-muted-foreground"
+              >
+                User ID
+              </label>
+              <Input
+                id="userId"
+                placeholder="User ID (UUID)"
+                value={userIdFilter}
+                onChange={(e) => setUserIdFilter(e.target.value)}
+                className="bg-input border-border"
+              />
+            </div>
+          </div>
+          <Button
+            onClick={handleApplyAllFilters}
+            size="lg"
+            className="w-full sm:w-auto"
+          >
+            Apply Filters
+          </Button>
+        </CardContent>
+      </Card>
+
+      <section className="space-y-6">
+        <h2 className="text-2xl font-semibold tracking-tight">
           Activity Overview
         </h2>
-        {isLoadingCharts && (
-          <p className="text-muted-foreground">Loading charts...</p>
+        {(isLoadingCharts || isLoadingTimeCharts) && (
+          <p className="text-center text-muted-foreground py-8">
+            Loading charts...
+          </p>
         )}
+
+        {!isLoadingTimeCharts &&
+          dailyLogCounts &&
+          dailyLogCounts.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Daily Log Activity</CardTitle>
+                <CardDescription>
+                  Total logs per day for the selected period.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={350}>
+                  <LineChart
+                    data={dailyLogCounts}
+                    margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+                  >
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      stroke="hsl(var(--border))"
+                    />
+                    <XAxis
+                      dataKey="date"
+                      tickFormatter={(tick) => format(new Date(tick), "MMM dd")}
+                      stroke="hsl(var(--muted-foreground))"
+                    />
+                    <YAxis stroke="hsl(var(--muted-foreground))" />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "hsl(var(--popover))",
+                        borderColor: "hsl(var(--border))",
+                      }}
+                      labelStyle={{ color: "hsl(var(--popover-foreground))" }}
+                    />
+                    <Legend />
+                    <Line
+                      type="monotone"
+                      dataKey="count"
+                      name="Daily Logs"
+                      stroke={LINE_CHART_STROKE_COLOR}
+                      strokeWidth={2}
+                      dot={{ r: 4 }}
+                      activeDot={{ r: 6 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          )}
+        {!isLoadingTimeCharts &&
+          (!dailyLogCounts || dailyLogCounts.length === 0) && (
+            <Card className="flex items-center justify-center h-48">
+              <p className="text-muted-foreground">
+                No daily log data for selected period.
+              </p>
+            </Card>
+          )}
+
+        {!isLoadingTimeCharts &&
+          monthlyLogCounts &&
+          monthlyLogCounts.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Monthly Log Overview</CardTitle>
+                <CardDescription>
+                  Total logs per month for the selected period.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={350}>
+                  <BarChart
+                    data={monthlyLogCounts}
+                    margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+                  >
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      stroke="hsl(var(--border))"
+                    />
+                    <XAxis
+                      dataKey="date"
+                      tickFormatter={(tick) =>
+                        format(new Date(tick + "-01"), "MMM yyyy")
+                      }
+                      stroke="hsl(var(--muted-foreground))"
+                    />
+                    <YAxis stroke="hsl(var(--muted-foreground))" />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "hsl(var(--popover))",
+                        borderColor: "hsl(var(--border))",
+                      }}
+                      labelStyle={{ color: "hsl(var(--popover-foreground))" }}
+                    />
+                    <Legend />
+                    <Bar
+                      dataKey="count"
+                      name="Monthly Logs"
+                      fill={BAR_CHART_FILL_COLOR}
+                      radius={[4, 4, 0, 0]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          )}
+
         {!isLoadingCharts && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <Card className="col-span-1 lg:col-span-1">
               <CardHeader>
                 <CardTitle>Logs by Level</CardTitle>
@@ -333,12 +675,18 @@ export default function AdminLogsPage() {
                           />
                         ))}
                       </Pie>
-                      <Tooltip />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: "hsl(var(--popover))",
+                          borderColor: "hsl(var(--border))",
+                        }}
+                        labelStyle={{ color: "hsl(var(--popover-foreground))" }}
+                      />
                       <Legend />
                     </PieChart>
                   </ResponsiveContainer>
                 ) : (
-                  <p className="text-muted-foreground text-sm">
+                  <p className="text-muted-foreground text-sm text-center py-10">
                     No data for log levels.
                   </p>
                 )}
@@ -356,28 +704,42 @@ export default function AdminLogsPage() {
                     <BarChart
                       data={serviceNameChartData}
                       layout="vertical"
-                      margin={{ left: 30, right: 30 }}
+                      margin={{ left: 30, right: 30, top: 5, bottom: 5 }}
                     >
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis type="number" />
+                      <CartesianGrid
+                        strokeDasharray="3 3"
+                        stroke="hsl(var(--border))"
+                      />
+                      <XAxis
+                        type="number"
+                        stroke="hsl(var(--muted-foreground))"
+                      />
                       <YAxis
                         dataKey="group_key"
                         type="category"
                         width={120}
                         interval={0}
+                        stroke="hsl(var(--muted-foreground))"
                       />
-                      <Tooltip />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: "hsl(var(--popover))",
+                          borderColor: "hsl(var(--border))",
+                        }}
+                        labelStyle={{ color: "hsl(var(--popover-foreground))" }}
+                      />
                       <Legend />
                       <Bar
                         dataKey="item_count"
                         name="Log Count"
                         fill={BAR_CHART_FILL_COLOR}
+                        radius={[0, 4, 4, 0]}
                         barSize={20}
                       />
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (
-                  <p className="text-muted-foreground text-sm">
+                  <p className="text-muted-foreground text-sm text-center py-10">
                     No data for service names.
                   </p>
                 )}
@@ -401,15 +763,28 @@ export default function AdminLogsPage() {
                     data={errorCodeChartData.slice(0, 10)}
                     margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
                   >
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="group_key" />
-                    <YAxis />
-                    <Tooltip />
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      stroke="hsl(var(--border))"
+                    />
+                    <XAxis
+                      dataKey="group_key"
+                      stroke="hsl(var(--muted-foreground))"
+                    />
+                    <YAxis stroke="hsl(var(--muted-foreground))" />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "hsl(var(--popover))",
+                        borderColor: "hsl(var(--border))",
+                      }}
+                      labelStyle={{ color: "hsl(var(--popover-foreground))" }}
+                    />
                     <Legend />
                     <Bar
                       dataKey="item_count"
                       name="Error Count"
                       fill="hsl(var(--destructive))"
+                      radius={[4, 4, 0, 0]}
                     />
                   </BarChart>
                 </ResponsiveContainer>
@@ -418,199 +793,92 @@ export default function AdminLogsPage() {
           )}
       </section>
 
-      {/* General Stats & Filters Section */}
-      <section className="space-y-6">
-        <Card>
-          <CardHeader>
-            <CardTitle>Filterable Log Statistics</CardTitle>
-            <CardDescription>
-              Dynamic statistics based on the filters below.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex items-center gap-4">
-              <span className="text-sm text-muted-foreground">Group by:</span>
-              <Select
-                value={statsGroupBy}
-                onValueChange={(val) => setStatsGroupBy(val as GroupByOption)}
-              >
-                <SelectTrigger className="w-[200px]">
-                  <SelectValue placeholder="Group by..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {GROUP_BY_OPTIONS.map((opt) => (
-                    <SelectItem key={opt} value={opt}>
-                      {opt.replace("_", " ").toUpperCase()}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            {isLoadingGeneralStats && (
-              <p className="text-muted-foreground">Loading statistics...</p>
-            )}
-            {!isLoadingGeneralStats && generalStatsData && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 pt-4">
-                {generalStatsData.map((stat) => (
-                  <Card key={stat.group_key} className="text-center">
-                    <CardHeader className="p-4">
-                      <CardTitle className="text-base font-medium">
-                        {stat.group_key || "N/A"}
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="p-4 pt-0">
-                      <div className="text-3xl font-bold">
-                        {stat.item_count}
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            )}
-            {!isLoadingGeneralStats && !generalStatsData && (
-              <p className="text-muted-foreground text-sm">
-                No statistics for current filter and grouping.
-              </p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Filters</CardTitle>
-            <CardDescription>Refine logs and statistics view.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 items-end">
-              <Input
-                type="datetime-local"
-                placeholder="Start Date"
-                value={
-                  startDateFilter
-                    ? startDateFilter.toISOString().slice(0, 16)
-                    : ""
-                }
-                onChange={(e) =>
-                  setStartDateFilter(
-                    e.target.value ? new Date(e.target.value) : null
-                  )
-                }
-              />
-              <Input
-                type="datetime-local"
-                placeholder="End Date"
-                value={
-                  endDateFilter ? endDateFilter.toISOString().slice(0, 16) : ""
-                }
-                onChange={(e) =>
-                  setEndDateFilter(
-                    e.target.value ? new Date(e.target.value) : null
-                  )
-                }
-              />
-              <Select
-                value={logLevelFilter || ""}
-                onValueChange={(val) => {
-                  if (val === "__ALL_LEVELS__") {
-                    setLogLevelFilter(null);
-                  } else {
-                    setLogLevelFilter(val as LogLevel);
-                  }
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Log Level" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__ALL_LEVELS__">All Levels</SelectItem>
-                  {LOG_LEVELS.map((level) => (
-                    <SelectItem key={level} value={level}>
-                      {level}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Input
-                placeholder="Service Name"
-                value={serviceNameFilter}
-                onChange={(e) => setServiceNameFilter(e.target.value)}
-              />
-              <Input
-                placeholder="Action Name"
-                value={actionNameFilter}
-                onChange={(e) => setActionNameFilter(e.target.value)}
-              />
-              <Input
-                placeholder="User ID (UUID)"
-                value={userIdFilter}
-                onChange={(e) => setUserIdFilter(e.target.value)}
-              />
-            </div>
-            <Button onClick={handleApplyFilters}>Apply Filters</Button>
-          </CardContent>
-        </Card>
-      </section>
-
-      {/* Logs Table Section */}
       <section>
         <Card>
           <CardHeader>
-            <CardTitle>Detailed Logs</CardTitle>
-            <CardDescription>
-              Paginated view of application logs. Current Page: {page}, Limit:{" "}
-              {limit}
-            </CardDescription>
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center">
+              <div>
+                <CardTitle>Detailed Logs</CardTitle>
+                <CardDescription>
+                  Paginated view of application logs. Page: {page}, Limit:{" "}
+                  {limit}
+                </CardDescription>
+              </div>
+            </div>
           </CardHeader>
           <CardContent>
             {isLoadingLogs && (
-              <p className="text-muted-foreground">Loading logs...</p>
+              <p className="text-center text-muted-foreground py-10">
+                Loading logs...
+              </p>
             )}
             {!isLoadingLogs && logsData && logsData.logs.length > 0 && (
               <>
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Timestamp</TableHead>
+                      <TableHead className="w-[150px]">Timestamp</TableHead>
                       <TableHead>Level</TableHead>
                       <TableHead>Service</TableHead>
                       <TableHead>Action</TableHead>
                       <TableHead className="w-[30%]">Message</TableHead>
                       <TableHead>User ID</TableHead>
-                      <TableHead>Actions</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {logsData.logs.map((log: LogEntry) => (
                       <TableRow key={log.id}>
-                        <TableCell>
+                        <TableCell className="font-medium">
                           {new Date(log.created_at).toLocaleString()}
                         </TableCell>
-                        <TableCell>{log.log_level}</TableCell>
-                        <TableCell>{log.service_name}</TableCell>
-                        <TableCell>{log.action_name}</TableCell>
+                        <TableCell>
+                          <span
+                            className={`px-2 py-1 text-xs font-semibold rounded-full ${
+                              log.log_level === "ERROR" ||
+                              log.log_level === "FATAL"
+                                ? "bg-red-500/20 text-red-400"
+                                : log.log_level === "WARN"
+                                ? "bg-yellow-500/20 text-yellow-400"
+                                : log.log_level === "INFO"
+                                ? "bg-blue-500/20 text-blue-400"
+                                : "bg-gray-500/20 text-gray-400"
+                            }`}
+                          >
+                            {log.log_level}
+                          </span>
+                        </TableCell>
+                        <TableCell>{log.service_name || "-"}</TableCell>
+                        <TableCell>{log.action_name || "-"}</TableCell>
                         <TableCell
-                          className="max-w-xs truncate"
+                          className="max-w-xs truncate text-muted-foreground"
                           title={
-                            log.error_message || JSON.stringify(log.metadata)
+                            log.error_message ||
+                            (log.metadata ? JSON.stringify(log.metadata) : "")
                           }
                         >
-                          {log.error_message || "-"}
+                          {log.error_message ||
+                            (log.metadata
+                              ? "View Details for full log"
+                              : "No error message")}
                         </TableCell>
-                        <TableCell>{log.user_id || "-"}</TableCell>
-                        <TableCell>
+                        <TableCell className="text-muted-foreground">
+                          {log.user_id || "-"}
+                        </TableCell>
+                        <TableCell className="text-right">
                           <Button
                             variant="outline"
                             size="sm"
                             onClick={() => handleViewDetails(log)}
                           >
-                            View Details
+                            Details
                           </Button>
                         </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
                 </Table>
-                <div className="flex items-center justify-between mt-4">
+                <div className="flex items-center justify-between mt-6 pt-4 border-t border-border">
                   <p className="text-sm text-muted-foreground">
                     Total Logs: {logsData.totalCount}
                   </p>
@@ -619,11 +887,11 @@ export default function AdminLogsPage() {
                       variant="outline"
                       size="sm"
                       onClick={() => setPage((p) => Math.max(1, p - 1))}
-                      disabled={page <= 1}
+                      disabled={page <= 1 || isLoadingLogs}
                     >
                       Previous
                     </Button>
-                    <span className="text-sm p-2">
+                    <span className="text-sm p-2 text-muted-foreground">
                       Page {logsData.currentPage} of {logsData.totalPages}
                     </span>
                     <Button
@@ -632,7 +900,7 @@ export default function AdminLogsPage() {
                       onClick={() =>
                         setPage((p) => Math.min(logsData.totalPages, p + 1))
                       }
-                      disabled={page >= logsData.totalPages}
+                      disabled={page >= logsData.totalPages || isLoadingLogs}
                     >
                       Next
                     </Button>
@@ -641,15 +909,20 @@ export default function AdminLogsPage() {
               </>
             )}
             {!isLoadingLogs && (!logsData || logsData.logs.length === 0) && (
-              <p className="text-muted-foreground text-sm">
-                No logs found for the selected filters.
-              </p>
+              <div className="text-center py-10">
+                <FileTextIcon className="mx-auto h-12 w-12 text-muted-foreground" />
+                <h3 className="mt-2 text-sm font-medium text-foreground">
+                  No logs found
+                </h3>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Try adjusting your filters or selected date range.
+                </p>
+              </div>
             )}
           </CardContent>
         </Card>
       </section>
 
-      {/* Selected Log Details Modal */}
       {selectedLog && (
         <Dialog
           open={isDetailModalOpen}
@@ -659,26 +932,26 @@ export default function AdminLogsPage() {
             }
           }}
         >
-          <DialogContent className="max-w-2xl max-h-[80vh]">
-            <DialogHeader>
-              <DialogTitle>Log Details</DialogTitle>
+          <DialogContent className="max-w-3xl max-h-[90vh] bg-card">
+            <DialogHeader className="border-b border-border pb-3">
+              <DialogTitle className="text-xl">Log Details</DialogTitle>
               <DialogClose asChild>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="absolute top-4 right-4 h-7 w-7"
+                  className="absolute top-3 right-3 h-7 w-7"
                   onClick={handleCloseDetailsModal}
                 >
                   <CrossIcon className="h-4 w-4" />
                 </Button>
               </DialogClose>
             </DialogHeader>
-            <div className="p-4 text-xs overflow-y-auto max-h-[calc(80vh-120px)]">
-              <pre className="whitespace-pre-wrap break-all">
+            <div className="p-6 text-sm overflow-y-auto max-h-[calc(90vh-140px)]">
+              <pre className="whitespace-pre-wrap break-all bg-muted/50 p-4 rounded-md">
                 {JSON.stringify(selectedLog, null, 2)}
               </pre>
             </div>
-            <DialogFooter className="sm:justify-start px-4 pb-4">
+            <DialogFooter className="sm:justify-end px-6 py-4 border-t border-border">
               <DialogClose asChild>
                 <Button
                   type="button"
@@ -696,7 +969,6 @@ export default function AdminLogsPage() {
   );
 }
 
-// Simple X icon for the modal close button
 function CrossIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
   return (
     <svg
@@ -713,6 +985,29 @@ function CrossIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
     >
       <path d="M18 6 6 18" />
       <path d="m6 6 12 12" />
+    </svg>
+  );
+}
+
+function FileTextIcon(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      {...props}
+      xmlns="http://www.w3.org/2000/svg"
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+      <polyline points="14 2 14 8 20 8" />
+      <line x1="16" x2="8" y1="13" y2="13" />
+      <line x1="16" x2="8" y1="17" y2="17" />
+      <line x1="10" x2="8" y1="9" y2="9" />
     </svg>
   );
 }

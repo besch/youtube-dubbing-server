@@ -16,9 +16,12 @@ import {
   getLogStatsSchema,
   getLogByIdSchema,
   type LogStat,
+  getTimeBasedLogStatsSchema,
+  type TimeSeriesStatData,
 } from "./schemas";
 
 export type { LogStat }; // Re-export LogStat
+export type { TimeSeriesStatData }; // Re-export TimeSeriesStatData
 
 // Helper function to get Supabase admin client (remains unchanged if used for direct DB ops)
 function getSupabaseAdminClient() {
@@ -193,6 +196,46 @@ export const getLogStatsAction = action(
     }
 
     return data as LogStat[];
+  }
+);
+
+export const getTimeBasedLogStatsAction = action(
+  getTimeBasedLogStatsSchema,
+  async (parsedInput) => {
+    const { startDate, endDate, granularity } = parsedInput;
+    const supabase = getSupabaseAdminClient();
+
+    const { data, error } = await supabase.rpc("get_logs_by_time_granularity", {
+      p_start_date: startDate,
+      p_end_date: endDate,
+      p_granularity: granularity,
+    });
+
+    if (error) {
+      console.error(
+        `Error fetching time-based log stats (granularity: ${granularity}):`,
+        error
+      );
+      throw new AppError(
+        error.message,
+        appErrors.DATABASE_ERROR.code,
+        appErrors.DATABASE_ERROR.statusCode
+      );
+    }
+
+    if (!data) {
+      console.warn(
+        `No data returned from get_logs_by_time_granularity for ${granularity} between ${startDate} and ${endDate}`
+      );
+      return [];
+    }
+
+    const transformedData: TimeSeriesStatData[] = data.map((item: any) => ({
+      date: item.time_bucket,
+      count: Number(item.log_count),
+    }));
+
+    return transformedData;
   }
 );
 

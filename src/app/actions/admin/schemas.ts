@@ -41,3 +41,16 @@ export interface LogStat {
   group_key: string;
   item_count: number;
 }
+
+// Schema for time-based log statistics action
+export const getTimeBasedLogStatsSchema = z.object({
+  startDate: z.string().datetime({ offset: true }).optional(),
+  endDate: z.string().datetime({ offset: true }).optional(),
+  granularity: z.enum(["day", "month", "year"]),
+});
+
+// Interface for data returned by getTimeBasedLogStatsAction
+export interface TimeSeriesStatData {
+  date: string; // ISO string from date_trunc, e.g., "2023-10-26T00:00:00.000Z"
+  count: number;
+}

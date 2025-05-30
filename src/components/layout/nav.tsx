@@ -8,8 +8,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Icons } from "@/components/icons";
@@ -17,6 +15,7 @@ import { toast } from "sonner";
 import type { Database } from "@/types/supabase";
 import { useEffect, useState } from "react";
 import { UserCircle } from "lucide-react";
+import { ADMIN_EMAIL } from "@/config/constants";
 
 export function Nav() {
   const pathname = usePathname();
@@ -25,20 +24,42 @@ export function Nav() {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
   const [user, setUser] = useState<any>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
-    const getUser = async () => {
+    const checkUser = async () => {
       const {
         data: { user: supabaseUser },
       } = await supabase.auth.getUser();
       setUser(supabaseUser);
+      if (supabaseUser) {
+        const isCorrectEmail = supabaseUser.email === ADMIN_EMAIL;
+        const isGoogleProvider =
+          supabaseUser.app_metadata?.provider === "google" ||
+          (supabaseUser.identities?.some((id) => id.provider === "google") ??
+            false);
+        setIsAdmin(isCorrectEmail && isGoogleProvider);
+      } else {
+        setIsAdmin(false);
+      }
     };
-    getUser();
+    checkUser();
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
+      const sessionUser = session?.user ?? null;
+      setUser(sessionUser);
+      if (sessionUser) {
+        const isCorrectEmail = sessionUser.email === ADMIN_EMAIL;
+        const isGoogleProvider =
+          sessionUser.app_metadata?.provider === "google" ||
+          (sessionUser.identities?.some((id) => id.provider === "google") ??
+            false);
+        setIsAdmin(isCorrectEmail && isGoogleProvider);
+      } else {
+        setIsAdmin(false);
+      }
     });
 
     return () => subscription.unsubscribe();
@@ -93,6 +114,18 @@ export function Nav() {
             >
               Support
             </Link>
+            {isAdmin && (
+              <Link
+                href="/dashboard/logs"
+                className={`transition-colors hover:text-foreground/80 ${
+                  pathname === "/dashboard/logs"
+                    ? "text-foreground"
+                    : "text-foreground/60"
+                }`}
+              >
+                Logs
+              </Link>
+            )}
           </nav>
         </div>
         <div className="flex flex-1 items-center justify-end space-x-4">

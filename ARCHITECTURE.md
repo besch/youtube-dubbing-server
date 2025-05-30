@@ -207,6 +207,37 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
     - If count of initial chunks matches total expected initial chunks, sets `processing_status` to `completed` **via RPC**.
     - Otherwise, updates `processing_status` progress percentage **via RPC**.
 
+### 3.6. Admin Logging Dashboard (`server/src/app/(admin)/dashboard/logs/`)
+
+- **Purpose:** Provides a comprehensive interface for viewing, filtering, and analyzing application logs stored in the `app_logs` table.
+- **Access:** Protected via server-side checks in the layout (`server/src/app/(admin)/layout.tsx`) and middleware in server actions, restricting access to a predefined admin email authenticated via Google. A "Logs" link appears in the main navigation for the admin user.
+- **Key Features:**
+  - **Log Table:** Displays paginated log entries (`id`, `created_at`, `log_level`, `service_name`, `action_name`, `error_message`, `user_id`). Log levels are color-coded for readability.
+  - **Log Details Modal:** Clicking a log entry opens a dialog showing the full JSON of the `LogEntry`.
+  - **Filtering:**
+    - **Predefined Date Ranges:** Buttons for "Last 7 Days", "Last Month", "Last 3 Months", "Last 6 Months".
+    - **Custom Date/Time Range:** Input fields for start and end date/time.
+    - **Log Level:** Select dropdown.
+    - **Service Name:** Text input (supports partial match).
+    - **Action Name:** Text input (supports partial match).
+    - **User ID:** Text input (exact match UUID).
+    - Filters update both the log table and the displayed charts.
+  - **Charts:**
+    - **Logs by Level:** Pie chart showing distribution of logs by `log_level`.
+    - **Logs by Service:** Vertical bar chart showing log counts per `service_name`.
+    - **Top Error Codes:** Horizontal bar chart showing frequency of `error_code`.
+    - **Daily Log Activity (Planned):** Line chart to show log counts per day for the selected period. Requires a new/modified RPC (`get_logs_by_time_granularity`) and server action (`getTimeBasedLogStatsAction`).
+    - **Monthly Log Overview (Planned):** Bar chart to show log counts per month for the selected period. Also relies on the new RPC and server action.
+- **Technology:**
+  - Next.js App Router, React Server Components (layout) and Client Components (page).
+  - `next-safe-action` for server actions (`getLogsAction`, `getLogStatsAction`, planned `getTimeBasedLogStatsAction`).
+  - Zod for schema validation in actions.
+  - `nuqs` for managing filter state in URL query parameters.
+  - Shadcn UI components (`Table`, `Card`, `Dialog`, `Button`, `Input`, `Select`).
+  - Recharts for rendering charts.
+  - `date-fns` for date manipulations.
+  - `sonner` for toast notifications.
+
 ## 4. Downloader Service (`youtube-download/`)
 
 - This service is responsible for downloading full audio from YouTube videos and also for downloading/processing SRT subtitles.
