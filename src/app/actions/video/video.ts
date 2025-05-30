@@ -4,6 +4,9 @@ import { z } from "zod";
 import { createSafeActionClient } from "next-safe-action";
 import { ActionResponse, AppError, appErrors, AppErrorCode } from "../actions";
 import { extractYoutubeVideoId } from "./utils";
+import { createLogger } from "@/lib/logger";
+
+const videoActionsLogger = createLogger("video-actions-service");
 
 const getVideoByUrlSchema = z.object({
   youtubeUrl: z.string().url("Invalid YouTube URL"),
@@ -23,33 +26,74 @@ export const getVideoByUrl = createSafeActionClient()(
     input: GetVideoByUrlInput
   ): Promise<ActionResponse<GetVideoByUrlOutput | null>> => {
     const { youtubeUrl } = input;
+    const actionName = "get-video-by-url";
     let youtubeId: string;
+
+    videoActionsLogger.info(actionName, {
+      request_payload: { youtubeUrl },
+      metadata: {
+        custom_message: "Attempting to get video by URL via oEmbed.",
+      },
+    });
 
     try {
       youtubeId = extractYoutubeVideoId(youtubeUrl);
     } catch (error) {
-      if (error instanceof AppError) {
-        return { success: false, error: error };
-      }
-      console.error("Unexpected error during YouTube ID extraction:", error);
-      return { success: false, error: appErrors.INVALID_INPUT };
+      const appErr =
+        error instanceof AppError
+          ? error
+          : new AppError(
+              AppErrorCode.INVALID_INPUT,
+              "Invalid YouTube URL provided for ID extraction"
+            );
+      videoActionsLogger.error(actionName, {
+        error_code: AppErrorCode[appErr.code],
+        error_message: appErr.message,
+        request_payload: { youtubeUrl },
+        stack_trace: appErr.stack,
+        metadata: { rawError: String(error) },
+      });
+      return { success: false, error: appErr };
     }
 
     try {
       const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(
         youtubeUrl
       )}&format=json`;
-      console.log(`Fetching oEmbed metadata from: ${oembedUrl}`);
+      videoActionsLogger.debug(actionName, {
+        metadata: {
+          custom_message: "Fetching oEmbed metadata",
+          oembedUrl,
+          youtubeId,
+        },
+      });
       const oembedResponse = await fetch(oembedUrl);
 
       if (!oembedResponse.ok) {
-        console.warn(
-          `oEmbed request for ${youtubeId} failed with status ${oembedResponse.status}.`
-        );
+        videoActionsLogger.warn(actionName, {
+          response_status_code: oembedResponse.status,
+          metadata: {
+            custom_message:
+              "oEmbed request failed, video metadata might not exist or URL is invalid.",
+            youtubeId,
+            oembedUrl,
+            status: oembedResponse.status,
+          },
+        });
         return { success: true, data: null };
       }
 
       const oembedData = await oembedResponse.json();
+      videoActionsLogger.info(actionName, {
+        metadata: {
+          custom_message: "Successfully fetched video metadata via oEmbed.",
+          youtubeId,
+        },
+        response_payload: {
+          title: oembedData.title,
+          thumbnail_url: oembedData.thumbnail_url,
+        },
+      });
       return {
         success: true,
         data: {
@@ -59,11 +103,21 @@ export const getVideoByUrl = createSafeActionClient()(
         },
       };
     } catch (error) {
-      console.error("Error in getVideoByUrl action:", error);
-      if (error instanceof AppError) {
-        return { success: false, error: error };
-      }
-      return { success: false, error: appErrors.UNEXPECTED_ERROR };
+      const appErr =
+        error instanceof AppError
+          ? error
+          : new AppError(
+              AppErrorCode.UNEXPECTED_ERROR,
+              "Error fetching oEmbed data"
+            );
+      videoActionsLogger.error(actionName, {
+        error_code: AppErrorCode[appErr.code],
+        error_message: appErr.message,
+        request_payload: { youtubeUrl, youtubeId_extracted: youtubeId },
+        stack_trace: appErr.stack,
+        metadata: { rawError: String(error) },
+      });
+      return { success: false, error: appErr };
     }
   }
 );

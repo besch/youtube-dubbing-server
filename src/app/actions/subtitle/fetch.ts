@@ -5,6 +5,9 @@ import { createSafeActionClient } from "next-safe-action";
 
 import { ActionResponse, AppError, AppErrorCode } from "../actions";
 import { subtitleService } from "@/lib/subtitles/service";
+import { createLogger } from "@/lib/logger";
+
+const subtitleFetchLogger = createLogger("subtitle-fetch-service");
 
 const fetchSubtitlesSchema = z.object({
   imdbID: z.string().min(1, { message: "IMDb ID cannot be empty" }),
@@ -29,10 +32,12 @@ export const fetchSubtitles = createSafeActionClient()(
     input: FetchSubtitlesInput
   ): Promise<ActionResponse<FetchSubtitlesOutput>> => {
     const { imdbID, languageCode, seasonNumber, episodeNumber } = input;
+    const actionName = "fetch-movie-subtitles";
 
-    console.log(
-      `[FetchSubtitles] Starting request - IMDb: ${imdbID}, Lang: ${languageCode}, S: ${seasonNumber}, E: ${episodeNumber}`
-    );
+    subtitleFetchLogger.info(actionName, {
+      request_payload: { imdbID, languageCode, seasonNumber, episodeNumber },
+      metadata: { custom_message: "Attempting to fetch movie/show subtitles." },
+    });
 
     try {
       const result = await subtitleService.getOrGenerateSubtitles({
@@ -43,21 +48,40 @@ export const fetchSubtitles = createSafeActionClient()(
       });
 
       if (!result || typeof result.content !== "string") {
-        console.error(`[FetchSubtitles] Invalid result for ${imdbID}:`, result);
+        const invalidDataError = new AppError(
+          AppErrorCode.UNEXPECTED_ERROR,
+          "Subtitle service returned invalid data."
+        );
+        subtitleFetchLogger.error(actionName, {
+          error_code: AppErrorCode[invalidDataError.code],
+          error_message: invalidDataError.message,
+          request_payload: {
+            imdbID,
+            languageCode,
+            seasonNumber,
+            episodeNumber,
+          },
+          metadata: { received_result: result as any },
+        });
         return {
           success: false,
-          error: new AppError(
-            AppErrorCode.UNEXPECTED_ERROR,
-            "Subtitle service returned invalid data."
-          ),
+          error: invalidDataError,
         };
       }
 
       const { content, generated } = result;
 
-      console.log(
-        `[FetchSubtitles] Success for ${imdbID} - Generated: ${generated}, Length: ${content.length} chars`
-      );
+      subtitleFetchLogger.info(actionName, {
+        metadata: {
+          custom_message: "Successfully fetched/generated subtitles.",
+          imdbID,
+          languageCode,
+          seasonNumber,
+          episodeNumber,
+          generated,
+          srtLength: content.length,
+        },
+      });
 
       return {
         success: true,
@@ -67,18 +91,27 @@ export const fetchSubtitles = createSafeActionClient()(
         },
       };
     } catch (error: unknown) {
-      console.error(`[FetchSubtitles] Error for ${imdbID}:`, error);
+      const appErr =
+        error instanceof AppError
+          ? error
+          : new AppError(
+              AppErrorCode.UNEXPECTED_ERROR,
+              error instanceof Error
+                ? error.message
+                : "Failed to fetch subtitles"
+            );
 
-      if (error instanceof AppError) {
-        return { success: false, error };
-      }
+      subtitleFetchLogger.error(actionName, {
+        error_code: AppErrorCode[appErr.code],
+        error_message: appErr.message,
+        request_payload: { imdbID, languageCode, seasonNumber, episodeNumber },
+        stack_trace: appErr.stack,
+        metadata: { rawError: String(error) },
+      });
 
       return {
         success: false,
-        error: new AppError(
-          AppErrorCode.UNEXPECTED_ERROR,
-          error instanceof Error ? error.message : "Failed to fetch subtitles"
-        ),
+        error: appErr,
       };
     }
   }

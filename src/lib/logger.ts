@@ -4,8 +4,8 @@ import type { Database, Json } from "@/types/supabase"; // Assuming you have sup
 export type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR" | "FATAL";
 
 export interface LogEntry {
-  id: string;
-  created_at: string;
+  id?: string;
+  created_at?: string;
   log_level: LogLevel;
   service_name: string; // e.g., 'auth', 'subtitles', 'audio', 'payments', 'search'
   action_name: string; // e.g., 'login_google', 'fetch_youtube_srt', 'generate_tts_openai'
