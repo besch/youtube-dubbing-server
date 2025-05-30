@@ -370,23 +370,32 @@ export const checkVideoLimit = action(
       }
 
       let finalProcessedCount = currentCount;
-      if (!videoAlreadyProcessedToday && canProcessThisVideo) {
-        if (videoUrlToCheck) {
-          const { error: insertError } = await supabase
-            .from("daily_video_limits")
-            .insert({
+      if (
+        videoUrlToCheck &&
+        !videoAlreadyProcessedToday &&
+        canProcessThisVideo
+      ) {
+        const { error: upsertError } = await supabase
+          .from("daily_video_limits")
+          .upsert(
+            {
               user_id: user.id,
               video_id: videoUrlToCheck,
-            });
-          if (insertError) {
-            console.error(
-              "Error inserting new video processing record:",
-              insertError
-            );
-            return { success: false, error: appErrors.UNEXPECTED_ERROR };
-          }
-          finalProcessedCount++;
+            },
+            {
+              onConflict: "user_id,video_id",
+              ignoreDuplicates: true,
+            }
+          );
+
+        if (upsertError) {
+          console.error(
+            "Error upserting video processing record:",
+            upsertError
+          );
+          return { success: false, error: appErrors.UNEXPECTED_ERROR };
         }
+        finalProcessedCount++;
       }
 
       const remainingVideos = Math.max(
