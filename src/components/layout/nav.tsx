@@ -87,16 +87,6 @@ export function Nav() {
           </Link>
           <nav className="flex items-center space-x-6 text-sm font-medium">
             <Link
-              href="/subscription"
-              className={`transition-colors hover:text-foreground/80 ${
-                pathname === "/subscription" || pathname === "/pricing"
-                  ? "text-foreground"
-                  : "text-foreground/60"
-              }`}
-            >
-              Pricing
-            </Link>
-            <Link
               href="/privacy"
               className={`transition-colors hover:text-foreground/80 ${
                 pathname === "/privacy"
@@ -115,6 +105,16 @@ export function Nav() {
               }`}
             >
               Support
+            </Link>
+            <Link
+              href="/subscription"
+              className={`transition-colors hover:text-foreground/80 ${
+                pathname === "/subscription" || pathname === "/pricing"
+                  ? "text-foreground"
+                  : "text-foreground/60"
+              }`}
+            >
+              Pricing
             </Link>
             {isAdmin && (
               <Link
