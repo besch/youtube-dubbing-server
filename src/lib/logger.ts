@@ -19,6 +19,7 @@ export interface LogEntry {
   duration_ms?: number;
   error_code?: string;
   error_message?: string;
+  custom_message?: string;
   stack_trace?: string;
   tags?: Json; // e.g., ["critical", "external_api_dependency"]
   metadata?: Json; // Any other structured data
@@ -55,22 +56,33 @@ async function logToSupabase(entry: LogEntry): Promise<void> {
     return;
   }
 
+  // Create a copy of the entry to avoid mutating the original object passed by the caller
+  const entryToSave = { ...entry };
+
+  // Remove request_payload before saving to the database
+  if ("request_payload" in entryToSave) {
+    delete entryToSave.request_payload;
+  }
+
   try {
-    const { error } = await supabaseAdmin.from("app_logs").insert([entry]);
+    // Use the modified entryToSave for insertion
+    const { error } = await supabaseAdmin
+      .from("app_logs")
+      .insert([entryToSave]);
     if (error) {
       console.error(
         "Failed to insert log into Supabase:",
         error,
-        "Original entry:",
-        entry
+        "Original entry (before removing payload):",
+        entry // Log original entry for debugging if needed
       );
     }
   } catch (e) {
     console.error(
       "Exception while inserting log into Supabase:",
       e,
-      "Original entry:",
-      entry
+      "Original entry (before removing payload):",
+      entry // Log original entry for debugging if needed
     );
   }
 }

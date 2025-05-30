@@ -858,18 +858,20 @@ export default function AdminLogsPage() {
                         <TableCell
                           className="max-w-xs truncate text-muted-foreground"
                           title={
+                            log.custom_message ||
                             log.error_message ||
                             (log.metadata
                               ? JSON.stringify(log.metadata, null, 2)
                               : "No additional details")
                           }
                         >
-                          {log.error_message ||
+                          {log.custom_message ||
+                            log.error_message ||
                             (log.metadata
                               ? `Metadata: ${Object.keys(log.metadata).join(
                                   ", "
                                 )}`
-                              : "No error message")}
+                              : "No message")}
                         </TableCell>
                         <TableCell className="text-muted-foreground">
                           {log.user_email || log.user_id || "-"}
