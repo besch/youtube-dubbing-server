@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createBrowserClient } from "@supabase/ssr";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,18 +19,31 @@ export function AuthForm() {
   const [authMode, setAuthMode] = useState<AuthMode>("signIn");
   const [showConfirmationMessage, setShowConfirmationMessage] = useState(false);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const [initiatorId, setInitiatorId] = useState<string | null>(null);
+
   const supabase = createBrowserClient<Database>(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
 
+  useEffect(() => {
+    setInitiatorId(searchParams.get("initiator_id"));
+  }, [searchParams]);
+
   const handleGoogleLogin = async () => {
     try {
       setIsLoading(true);
+
+      let googleRedirectTo = `${window.location.origin}/auth/callback`;
+      if (initiatorId) {
+        googleRedirectTo += `?initiator_id=${encodeURIComponent(initiatorId)}`;
+      }
+
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
+          redirectTo: googleRedirectTo,
         },
       });
 
@@ -56,7 +69,6 @@ export function AuthForm() {
         if (error) throw error;
 
         if (data.session) {
-          // Get user's subscription status and daily video count
           const { data: profile, error: profileError } = await supabase
             .from("profiles")
             .select(
@@ -65,7 +77,6 @@ export function AuthForm() {
             .eq("id", data.session.user.id)
             .single();
 
-          // Redirect to success page with token and profile data (same as OAuth flow)
           const redirectUrl = new URL(
             `${window.location.origin}/auth/callback/success`
           );
@@ -88,13 +99,18 @@ export function AuthForm() {
             );
           }
 
-          if (process.env.NEXT_PUBLIC_EXTENSION_ID) {
+          if (
+            initiatorId === process.env.NEXT_PUBLIC_EXTENSION_ID &&
+            process.env.NEXT_PUBLIC_EXTENSION_ID
+          ) {
             redirectUrl.searchParams.append(
               "extension_id",
               process.env.NEXT_PUBLIC_EXTENSION_ID
             );
-          }
-          if (process.env.NEXT_PUBLIC_DEV_EXTENSION_ID) {
+          } else if (
+            initiatorId === process.env.NEXT_PUBLIC_DEV_EXTENSION_ID &&
+            process.env.NEXT_PUBLIC_DEV_EXTENSION_ID
+          ) {
             redirectUrl.searchParams.append(
               "dev_extension_id",
               process.env.NEXT_PUBLIC_DEV_EXTENSION_ID
@@ -104,11 +120,16 @@ export function AuthForm() {
           window.location.href = redirectUrl.toString();
         }
       } else {
+        let emailRedirectTo = `${window.location.origin}/auth/callback`;
+        if (initiatorId) {
+          emailRedirectTo += `?initiator_id=${encodeURIComponent(initiatorId)}`;
+        }
+
         const { error } = await supabase.auth.signUp({
           email,
           password,
           options: {
-            emailRedirectTo: `${window.location.origin}/auth/callback`,
+            emailRedirectTo: emailRedirectTo,
           },
         });
 
