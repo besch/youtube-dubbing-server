@@ -143,7 +143,9 @@ export const getLogsAction = action(getLogsSchema, async (parsedInput) => {
   } = parsedInput;
   const supabase = getSupabaseAdminClient();
 
-  let query = supabase.from("app_logs").select("*", { count: "exact" });
+  let query = supabase
+    .from("app_logs")
+    .select("*, profiles ( email )", { count: "exact" });
 
   if (startDate) query = query.gte("created_at", startDate);
   if (endDate) query = query.lte("created_at", endDate);
@@ -166,8 +168,15 @@ export const getLogsAction = action(getLogsSchema, async (parsedInput) => {
     );
   }
 
+  const logsWithEmail =
+    data?.map((log: any) => ({
+      ...log,
+      user_email: log.profiles?.email,
+      profiles: undefined, // Remove the nested profiles object to match LogEntry type
+    })) || [];
+
   return {
-    logs: data as LogEntry[],
+    logs: logsWithEmail as LogEntry[],
     totalCount: count || 0,
     totalPages: Math.ceil((count || 0) / limit),
     currentPage: page,

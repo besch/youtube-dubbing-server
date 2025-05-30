@@ -679,7 +679,9 @@ export default function AdminLogsPage() {
                         contentStyle={{
                           backgroundColor: "hsl(var(--popover))",
                           borderColor: "hsl(var(--border))",
+                          color: "hsl(var(--popover-foreground))",
                         }}
+                        itemStyle={{ color: "hsl(var(--popover-foreground))" }}
                         labelStyle={{ color: "hsl(var(--popover-foreground))" }}
                       />
                       <Legend />
@@ -717,7 +719,7 @@ export default function AdminLogsPage() {
                       <YAxis
                         dataKey="group_key"
                         type="category"
-                        width={120}
+                        width={150}
                         interval={0}
                         stroke="hsl(var(--muted-foreground))"
                       />
@@ -726,6 +728,7 @@ export default function AdminLogsPage() {
                           backgroundColor: "hsl(var(--popover))",
                           borderColor: "hsl(var(--border))",
                         }}
+                        itemStyle={{ color: "hsl(var(--popover-foreground))" }}
                         labelStyle={{ color: "hsl(var(--popover-foreground))" }}
                       />
                       <Legend />
@@ -856,16 +859,20 @@ export default function AdminLogsPage() {
                           className="max-w-xs truncate text-muted-foreground"
                           title={
                             log.error_message ||
-                            (log.metadata ? JSON.stringify(log.metadata) : "")
+                            (log.metadata
+                              ? JSON.stringify(log.metadata, null, 2)
+                              : "No additional details")
                           }
                         >
                           {log.error_message ||
                             (log.metadata
-                              ? "View Details for full log"
+                              ? `Metadata: ${Object.keys(log.metadata).join(
+                                  ", "
+                                )}`
                               : "No error message")}
                         </TableCell>
                         <TableCell className="text-muted-foreground">
-                          {log.user_id || "-"}
+                          {log.user_email || log.user_id || "-"}
                         </TableCell>
                         <TableCell className="text-right">
                           <Button
@@ -942,9 +949,8 @@ export default function AdminLogsPage() {
                   variant="ghost"
                   size="icon"
                   className="absolute top-3 right-3 h-7 w-7"
-                  onClick={handleCloseDetailsModal}
                 >
-                  <CrossIcon className="h-4 w-4" />
+                  {/* <CrossIcon className="h-4 w-4" /> */}
                 </Button>
               </DialogClose>
             </DialogHeader>
@@ -968,26 +974,6 @@ export default function AdminLogsPage() {
         </Dialog>
       )}
     </div>
-  );
-}
-
-function CrossIcon(props: React.SVGProps<SVGSVGElement>): JSX.Element {
-  return (
-    <svg
-      {...props}
-      xmlns="http://www.w3.org/2000/svg"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M18 6 6 18" />
-      <path d="m6 6 12 12" />
-    </svg>
   );
 }
 

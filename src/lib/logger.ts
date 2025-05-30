@@ -10,6 +10,7 @@ export interface LogEntry {
   service_name: string; // e.g., 'auth', 'subtitles', 'audio', 'payments', 'search'
   action_name: string; // e.g., 'login_google', 'fetch_youtube_srt', 'generate_tts_openai'
   user_id?: string;
+  user_email?: string;
   session_id?: string;
   ip_address?: string;
   request_payload?: Json;
