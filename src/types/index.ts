@@ -15,24 +15,6 @@ export interface YoutubeVideoInfo {
   duration: number;
 }
 
-export interface TranscriptionSegment {
-  end: number;
-  text: string;
-  start: number;
-  words: TranscriptionWord[];
-  speaker: string;
-  duration: number;
-  avg_logprob: number;
-}
-
-export interface TranscriptionWord {
-  end: number;
-  word: string;
-  start: number;
-  speaker: string;
-  probability: number;
-}
-
 export interface AudioChunkMetadata {
   videoId: string;
   language: string;
