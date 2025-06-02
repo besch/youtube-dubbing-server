@@ -1,103 +1,25 @@
 # YouTube Dubbing Project Architecture
 
-This document outlines the architecture of the YouTube Dubbing application, covering both the mobile client (React Native with Expo) and the server (Next.js), with a focus on their interaction.
+This document outlines the architecture of the YouTube Dubbing application, covering the Chrome Extension client and the server (Next.js), with a focus on their interaction.
 
 ## 1. Overall Architecture
 
 The project allows users to watch YouTube videos with dubbed audio tracks generated via a **backend-driven processing pipeline**.
 
 - **Project Structure:**
-  - `mobile/`: Expo/React Native application (Client).
+  - `extension/`: Chrome Extension application (Client).
   - `server/`: Next.js backend (API, DB Interaction, Orchestration Trigger, Job Status Management).
   - `youtube-download/`: Python FastAPI service (YouTube full audio download, SRT subtitle download/processing & upload).
   - `server/supabase/functions/`: Deno Edge Functions for orchestrating backend processing steps (e.g., `on-download-complete`, `on-transcription-complete`, `on-translation-complete`).
 - **Technology Stack:**
-  - **Mobile:** React Native, Expo, TypeScript, Jotai, Supabase Client, Expo Router, `react-native-webview`, `expo-av`.
+  - **Chrome Extension:** React, TypeScript, Redux Toolkit, Shadcn UI, Tailwind CSS, `react-router-dom`, Manifest V3.
   - **Server:** Next.js (App Router), TypeScript, Supabase (Auth, DB, Functions), `next-safe-action`, Zod, Replicate Client (Transcription), OpenAI Client (TTS), Google Cloud Text-to-Speech Client, Anthropic Client (Translation).
   - **Downloader:** Python, FastAPI, `yt-dlp`, `supabase-py`.
   - **Supabase Functions:** Deno, TypeScript, Supabase Client.
-  - **Styling (Mobile):** React Native `StyleSheet`.
 
-## 2. Mobile App Architecture (`mobile/`)
+## 2. Server Architecture (`server/`)
 
 ### 2.1. Core Structure
-
-- **Expo Managed Workflow.**
-- **Directory Structure:**
-  ```
-  mobile/
-  ├── app/              # Routes ((tabs), video, onboarding, _layout.tsx)
-  ├── assets/
-  ├── components/
-  ├── constants/
-  ├── hooks/            # useAuth.ts, useSettings.ts, useVideoSeekHandler.ts, useVideoProcessingStatus.ts, ...
-  ├── lib/              # API layer (api.ts)
-  ├── store/            # Jotai state (index.ts, authAtom.ts)
-  ├── types/            # Shared types (actions.ts, serverActions.ts, supabase.ts - sync with server!)
-  ├── utils/            # Supabase client (supabase.ts), auth utils
-  └── ...
-  ```
-- **Navigation:** Expo Router.
-- **State Management:** Jotai (`authAtom`), local component state (`VideoPlayerScreen`), `useVideoProcessingStatus`.
-
-### 2.2. Authentication Flow
-
-- Uses Supabase Auth, Google/Apple Sign-In via native SDKs, `signInWithIdToken`.
-- `onAuthStateChange` listener in `_layout.tsx` manages session persistence (AsyncStorage) and Jotai state (`authAtom`).
-- **API Calls (`lib/api.ts`):** `callServerAction` helper sends session token for authenticated requests.
-
-### 2.3. Video Player & Backend-Driven Processing
-
-- **State Handling (`app/video/[id].tsx`):**
-  - Manages `currentTime`, `playerState`, `videoDuration`.
-  - Tracks the overall backend processing status via `videoProcessingStatus` state, updated by `useVideoProcessingStatus`.
-  - Stores **completed** transcription segments (`transcriptionSegments` - from the single row) fetched via `useVideoTranscription`.
-  - Stores **completed** translated segments (`translatedSegments`) fetched via `useVideoTranslation` (populated based on the single transcription row's `translations` field).
-  - Stores **completed** generated audio chunk data (`generatedChunks`) fetched via `useAudioGeneration`.
-- **Settings Integration:** Uses `useSettings` for initial language/voice/volume selections.
-- **Hook Integration:**
-  - `useVideoProcessingStatus`: Central hook to interpret `videos.processing_status` (including new statuses like `transcribing_full`, `translating_full`), player state, and errors to provide user-facing status messages and loading indicators.
-  - `useVideoTranscription`: Fetches the existing completed **single** transcription row, subscribes to Realtime updates for that row.
-  - `useVideoTranslation`: Fetches/manages translated segments based on Realtime updates to the single `transcription_segments.translations` field.
-  - `useAudioGeneration`: Manages the `generatedChunks` state. Chunks are fetched via `fetchAudioChunks` when the backend status for the language/voice combination is detected as 'completed'.
-  - `useAudioPlayback`: Plays available pre-generated audio chunks based on `currentTime`.
-  - `useVideoSeekHandler`: Checks for the _existence_ of required data (from the single transcription row's `content` or `translations`, and `generatedChunks`) at the seek target time.
-  - `useVideoHistory`, `useAuth`, `useSettings`.
-- **Initialization:**
-  - Calls `initiateVideoProcessingJobApi` on the server, providing the YouTube URL and desired language/voice combinations.
-  - Subscribes to Supabase Realtime channel for `videos` table updates (specifically `processing_status` column) for the current `dbVideoId`.
-  - Subscribes to `transcription_segments` (for the single row) Realtime channel to receive newly completed transcription/translation data.
-  - Fetches any pre-existing completed data using `getCompletedTranscriptionSegmentsApi` and `getCompletedAudioChunksApi`.
-- **Realtime Updates:**
-  - Primarily listens to `videos` table for changes in `processing_status` to update the UI state via `useVideoProcessingStatus`.
-  - Listens to the single `transcription_segments` row Realtime channel to populate local data (`transcriptionSegments`, `translatedSegments`).
-- **Buffering:** Primarily handled by `useVideoProcessingStatus` based on the backend status and player state.
-- **Seek Handling (`useVideoSeekHandler`):**
-  - `YouTubePlayer` detects seek -> `onSeek` prop -> `handleSeek(targetTime)`.
-  - `handleSeek` pauses player, sets `isSeeking` state (shows overlay).
-  - Hook polls `checkSeekCompletion`.
-  - `checkSeekCompletion` verifies if transcription data, translation, and audio _already exist_ for the `seekTargetTime`.
-  - Once data exists, sets `isSeeking` false, resumes player, stops polling.
-- **Player State (`onStateChange`):** Relays state to `VideoPlayerScreen`. Used by `useAudioPlayback` and `useVideoProcessingStatus`.
-- **Audio Playback (`useAudioPlayback`):**
-  - Finds the completed audio chunk (from `generatedChunks`) corresponding to `currentTime`.
-  - Uses `expo-av` to load and play the chunk URL.
-  - Pauses/resumes/syncs rate based on `playerState`.
-- **Language/Voice Changes:**
-  - When user selects a new language/voice:
-    - Checks if the `processing_status` for the new combination indicates completion or ongoing processing.
-    - If not processed, calls `initiateVideoProcessingJobApi` again for the _new_ target language/voice combination.
-    - Resets local state (`generatedChunks`, `translatedSegments`) for the new target.
-    - Fetches any existing completed data for the new target via hooks.
-- **History/Favorites:** API calls (`updateHistoryApi`, `toggleFavoriteApi`, `getFavoriteStatusApi`).
-
-### 2.4. Settings Management (`app/(tabs)/settings.tsx`)
-
-- Unchanged.
-
-## 3. Server Architecture (`server/`)
-
-### 3.1. Core Structure
 
 - **Next.js App Router.**
 - **Directory Structure:**
@@ -106,7 +28,7 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
   ├── src/
   │   ├── app/
   │   │   ├── api/
-  │   │   │   ├── actions/[...actionName]/ # Client-facing actions
+  │   │   │   ├── actions/[...actionName]/ # Client-facing actions (for Chrome Extension)
   │   │   │   │   └── route.ts
   │   │   │   ├── internal/              # Internal actions (called by Supabase Functions)
   │   │   │   │   └── trigger-action/
@@ -134,7 +56,7 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
   └── schema.sql
   ```
 
-### 3.2. Supabase Integration
+### 2.2. Supabase Integration
 
 - **Clients:** Unchanged.
 - **Database:**
@@ -149,13 +71,13 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
   - `translated-audio`: Stores generated TTS audio chunks.
 - **Functions:** Deno Edge Functions triggered by database webhooks orchestrate the processing pipeline by calling internal Next.js actions.
 
-### 3.3. Server Actions (`app/actions/`)
+### 2.3. Server Actions (`app/actions/`)
 
 - **Framework:** `next-safe-action`.
 - **Setup:** Unchanged.
 - **Error Handling:** Unchanged.
-- **Client-Facing Actions (`video.ts`):**
-  - `initiateVideoProcessingJob` (Protected): Main entry point.
+- **Client-Facing Actions (`video.ts` - for Chrome Extension):**
+  - `initiateVideoProcessingJob` (Protected): Main entry point for backend processing jobs (typically for non-YouTube content or complex YouTube scenarios not handled by direct TTS in the extension).
     - Checks/creates the video record.
     - **Re-fetches** the video state (including `processing_status`) immediately after creation/lookup to get the latest status before proceeding.
     - Checks prerequisites (download, transcription, translation) based on the fetched state.
@@ -166,6 +88,7 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
     - Returns the video ID and the final committed processing status.
   - `getCompletedTranscriptionSegments` (Protected): Fetches the single completed transcription row for a video.
   - `getCompletedAudioChunks` (Protected): Fetches all completed audio chunks for a specific language/voice.
+  - `generateAudioChunk` (Protected): Client-callable action for the Chrome Extension to request generation of a specific audio chunk on-demand (e.g., for seeks or continuous playback).
   - `updateHistory`, `toggleFavorite`, `getFavoriteStatus`, `getFavorites`, `getHistory`, `getSuggestedVideos`, `translateVideoTitle` (Protected): Unchanged.
 - **Internal Actions (`videoInternal.ts` - Called by Supabase Functions):**
   - `internalRequestFullTranscription`: Called by `on-download-complete`. Gets full audio URL, starts Replicate job, updates the single `transcription_segments` row (status: `processing`).
@@ -173,13 +96,13 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
   - `internalGenerateAudioChunk`: Called by `internalSpawnTtsJobs`. Takes details for a specific sub-segment (start/end time), extracts text from the full `content` or `translations`, calls TTS API (OpenAI/Google), uploads chunk, inserts record into `translated_audio_chunks`.
   - `internalSpawnTtsJobs`: Called by `on-translation-complete`. Triggers `internalGenerateAudioChunk` **in batches** using `Promise.allSettled` for segments where `end_time <= 60`. If trigger errors occur, it uses the `update_processing_status` **RPC function** to set the `processing_status` to `failed`.
 
-### 3.4. API Routes
+### 2.4. API Routes
 
-- **`/api/actions/[...actionName]/route.ts`:** Handles calls from the mobile app for _client-facing_ server actions.
+- **`/api/actions/[...actionName]/route.ts`:** Handles calls from the Chrome Extension for _client-facing_ server actions.
 - **`/api/internal/trigger-action/route.ts`:** Secured endpoint (using `FUNCTION_SECRET`) for Supabase Functions to invoke internal server actions.
 - **`/api/webhooks/replicate/route.ts`:** Handles Replicate completion webhook. Updates the **single** `transcription_segments` row for the video (status: `completed`, stores full `content`). This update triggers the `on-transcription-complete` function.
 
-### 3.5. Supabase Functions (`supabase/functions/`)
+### 2.5. Supabase Functions (`supabase/functions/`)
 
 - **Purpose:** Orchestrate the backend processing steps, triggered by database changes or webhooks. They primarily act as controllers, calling internal Next.js actions to perform the actual work.
 - **Status Updates:** All functions now use the `update_processing_status` **RPC function** to atomically update the `videos.processing_status` JSONB field, preventing race conditions.
@@ -207,7 +130,7 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
     - If count of initial chunks matches total expected initial chunks, sets `processing_status` to `completed` **via RPC**.
     - Otherwise, updates `processing_status` progress percentage **via RPC**.
 
-### 3.6. Admin Logging Dashboard (`server/src/app/(admin)/dashboard/logs/`)
+### 2.6. Admin Logging Dashboard (`server/src/app/(admin)/dashboard/logs/`)
 
 - **Purpose:** Provides a comprehensive interface for viewing, filtering, and analyzing application logs stored in the `app_logs` table.
 - **Access:** Protected via server-side checks in the layout (`server/src/app/(admin)/layout.tsx`) and middleware in server actions, restricting access to a predefined admin email authenticated via Google. A "Logs" link appears in the main navigation for the admin user.
@@ -244,7 +167,7 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
   src/app/(admin)/dashboard/logs/page.tsx
   src/app/actions/admin/schemas.ts
 
-## 4. Downloader Service (`youtube-download/`)
+## 3. Downloader Service (`youtube-download/`)
 
 - This service is responsible for downloading full audio from YouTube videos and also for downloading/processing SRT subtitles.
 - **Audio Download (`/` endpoint in `app/main.py`):**
@@ -271,10 +194,12 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
     - If source subtitles need translation, the list of formatted sentences (from `format_subtitle_text_for_translation`) is translated in chunks.
     - This process uses the Gemini API (e.g., `gemini-1.5-flash-latest` model) for the actual translation task.
 
-## 5. Communication Flow (Backend-Driven Processing - Full Transcription)
+## 4. Communication Flow (Backend-Driven Processing - Full Transcription)
 
-1.  **Mobile App -> Server API:** User selects video/language/voice -> `callServerAction('video/initiateVideoProcessingJob', { youtubeUrl, processingTargets: { 'es_nova': {...}, 'en_alloy': {...} } })`.
-    - If a previous attempt for a specific language/voice combination resulted in a `failed` status, the mobile app can re-initiate by calling this action again with the same `processingTargets`. The server will then attempt to retry the failed target(s).
+This describes the flow when the Chrome Extension initiates a dubbing process that requires full backend processing (e.g., for a movie or a complex YouTube scenario not handled by direct TTS).
+
+1.  **Chrome Extension -> Server API:** User selects video/language/voice -> `callServerAction('video/initiateVideoProcessingJob', { videoUrl, processingTargets: { 'es_nova': {...}, 'en_alloy': {...} } })`.
+    - If a previous attempt for a specific language/voice combination resulted in a `failed` status, the extension can re-initiate by calling this action again with the same `processingTargets`. The server will then attempt to retry the failed target(s).
 2.  **Server (`initiateVideoProcessingJob`):**
     - Finds/creates video record.
     - Re-fetches video status.
@@ -287,11 +212,11 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
     - Triggers downloader service _if_ a new job was created.
     - Triggers transcription/translation/TTS spawn _if_ prerequisites are met based on committed status.
     - Returns `{ videoId, downloadJobId, initialProcessingStatus }` (with the committed status).
-3.  **Mobile App (Realtime):** Subscribes to `videos` table for `videoId`. Receives `processing_status` updates. Displays status via `useVideoProcessingStatus`.
+3.  **Chrome Extension (Realtime):** Subscribes to `videos` table for `videoId` (if backend processing was initiated). Receives `processing_status` updates. Displays status.
 4.  **Downloader Service -> Supabase:** Downloads audio, uploads to `youtube-audio` bucket, updates `download_jobs` status to `completed`, sets `storage_path`, updates `videos` table with audio `duration`.
 5.  **Supabase Trigger (`trigger_on_download_complete`) -> Supabase Function (`on-download-complete`):** Triggered by `download_jobs` update.
 6.  **`on-download-complete` Function:** Atomically updates relevant targets in `processing_status` to `transcribing_full` **via RPC**. Calls internal action `internalRequestFullTranscription` via `/api/internal`.
-7.  **Mobile App (Realtime):** Receives `processing_status` update (`transcribing_full`) -> Displays "Processing audio...".
+7.  **Chrome Extension (Realtime):** Receives `processing_status` update (`transcribing_full`) -> Displays "Processing audio...".
 8.  **Server (`internalRequestFullTranscription`):** Gets full audio URL, calls Replicate API for transcription, updates the **single** `transcription_segments` row (links Replicate ID, status: `processing`).
 9.  **Replicate -> Server Webhook (`/api/webhooks/replicate`):** Replicate finishes -> POSTs full transcription result.
 10. **Server (Webhook):** Verifies signature, processes transcription result, updates the **single** `transcription_segments` row (status: `completed`, stores full `content`).
@@ -300,43 +225,41 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
     - Finds targets in `transcribing_full` state.
     - **For English targets:** Atomically updates status to `generating_audio` **via RPC**. Triggers `internalSpawnTtsJobs` (via API).
     - **For Non-English targets:** Atomically updates status to `translating_full` **via RPC**. Triggers `internalTranslateFullContent` (via API) **once** per target language.
-13. **Mobile App (Realtime):** Receives `processing_status` updates (`translating_full`, `generating_audio`...). Listens for updates to the single `transcription_segments` row. When `processing_status` for the target lang/voice becomes `completed`, it can fetch all completed audio chunks. **Client is now responsible for requesting audio chunks beyond the initial pre-generated ones using `generateAudioChunk`.**
+13. **Chrome Extension (Realtime):** Receives `processing_status` updates (`translating_full`, `generating_audio`...). Listens for updates to the single `transcription_segments` row. When `processing_status` for the target lang/voice becomes `completed`, it can fetch all completed audio chunks. The Extension is responsible for requesting audio chunks beyond the initial pre-generated ones using `generateAudioChunk` action.
 14. **Server (`internalTranslateFullContent`):** Translates text, updates the `translations` field in the single `transcription_segments` row.
 15. **Supabase Trigger (`trigger_on_transcription_translation_update`) -> Supabase Function (`on-translation-complete`):** Triggered by the `translations` field update.
 16. **`on-translation-complete` Function:**
     - Finds targets in `translating_full` state matching the updated language.
     - Atomically updates status to `generating_audio` **via RPC**.
     - Triggers `internalSpawnTtsJobs` (via API) to **batch-trigger** `internalGenerateAudioChunk` for translated sub-segments **where `end_time <= 60`**. If triggering fails for any chunk in a batch, the `internalSpawnTtsJobs` action will attempt to update the status for that lang/voice to `failed` **via RPC**.
-17. **Server (`internalGenerateAudioChunk` / Client Action `generateAudioChunk`):** Receives request for a sub-segment (either from `internalSpawnTtsJobs` or client). Extracts text (original or translated), calls TTS (OpenAI/Google), uploads chunk, inserts record into `translated_audio_chunks`.
+17. **Server (`internalGenerateAudioChunk` / Client Action `generateAudioChunk`):** Receives request for a sub-segment (either from `internalSpawnTtsJobs` or Chrome Extension). Extracts text (original or translated), calls TTS (OpenAI/Google), uploads chunk, inserts record into `translated_audio_chunks`.
 18. **Supabase Trigger (`trigger_on_audio_chunk_insert`) -> Supabase Function (`on-audio-chunk-complete`):** Updates `processing_status` progress/completion **via RPC** based on initial chunk count vs. total expected initial chunk count.
-19. **Mobile App (Realtime):** Receives `processing_status` updates (progress, eventual completion, or `failed`). Fetches initially generated chunks. Plays available audio chunks via `useAudioPlayback`. **When approaching the end of available audio, triggers `generateAudioChunk` action for the next required segment(s).**
-20. **Mobile App (Seek):**
+19. **Chrome Extension (Realtime):** Receives `processing_status` updates (progress, eventual completion, or `failed`). Fetches initially generated chunks. Plays available audio chunks. When approaching the end of available audio, triggers `generateAudioChunk` action for the next required segment(s).
+20. **Chrome Extension (Seek):**
     - User seeks.
-    - `handleSeek` pauses player, sets `isSeeking`.
-    - `checkSeekCompletion` polls until the single `transcription_segments` row's data (`content` or `translations`) is available **AND** the necessary `generatedChunks` contain the audio data for the `seekTargetTime`. **If audio chunk is missing, `handleSeek` (or a related mechanism) needs to trigger `generateAudioChunk` action for the required segment.**
-    - Once data exists, `isSeeking` becomes false, player resumes.
+    - `content.ts` (via `DubbingManager`) pauses audio.
+    - `DubbingManager` checks if transcription/translation data (from `SubtitleManager`) and audio chunk (`AudioFileManager`) are available for the seek target.
+    - If audio chunk is missing, `AudioFileManager` (via `background.ts`) triggers the `generateAudioChunk` server action for the required segment.
+    - Once data exists, audio resumes.
 
-## 6. TODOs / Pending Items
+## 5. TODOs / Pending Items
 
-- **Review Client-Side Audio Chunk Triggering:** The client needs a robust way to trigger `generateAudioChunk` on demand (for seek/playback continuation). Needs a dedicated client-callable action.
+- **Review Extension-Side Audio Chunk Triggering:** The Chrome Extension needs a robust way to trigger `generateAudioChunk` on demand (for seek/playback continuation).
 - **Review/Refine Error Handling:** Ensure errors in internal actions consistently lead to a `failed` status update via RPC. Review Supabase Function error paths. The retry mechanism relies on this for client-initiated retries.
-- **Client-Side Retry UI:** The mobile app and Chrome extension need UI elements (e.g., a "Retry" button) when a processing target enters a `failed` state, allowing the user to trigger `initiateVideoProcessingJob` again for the failed targets.
-- **Regenerate Supabase Types:** Update `database.types.ts` in `server` and `mobile` to reflect latest schema (including the new SQL function).
+- **Extension-Side Retry UI:** The Chrome extension needs UI elements (e.g., a "Retry" button) when a processing target enters a `failed` state, allowing the user to trigger `initiateVideoProcessingJob` again for the failed targets.
+- **Regenerate Supabase Types:** Update `database.types.ts` in `server` and `extension` to reflect latest schema (including the new SQL function).
 - **Testing:** Thoroughly test the end-to-end backend processing flow with concurrent requests and various language/voice combinations, including the new retry logic for failed jobs.
 - Review/configure Supabase Storage policies.
 - Review/improve logging across all services.
-- **Client-Side Logic:** Implement client-side logic in the mobile app to:
-  - Request audio chunks on-demand using the `generateAudioChunk` action when playback nears the end of available chunks.
-  - Request audio chunks on-demand during seek operations if the target time's chunk hasn't been generated yet.
 - **Note:** Atomic updates for `processing_status` have been implemented using an SQL RPC function (`update_processing_status`) to mitigate race conditions.
 
-## 7. Client-Side (Chrome Extension)
+## 6. Client-Side (Chrome Extension)
 
-### 7.1. Overview
+### 6.1. Overview
 
-The Chrome Extension allows users to apply dubbing directly while watching videos on youtube.com or other supported movie/show platforms. It interacts with the existing backend server (`server/`) for initiating processing jobs (for movies/shows that require backend processing) and fetching generated audio data or subtitles. For YouTube videos, it can fetch subtitles directly without backend processing status tracking.
+The Chrome Extension allows users to apply dubbing directly while watching videos on youtube.com or other supported movie/show platforms. It interacts with the existing backend server (`server/`) for initiating processing jobs (for movies/shows that require backend processing) and fetching generated audio data or subtitles. For YouTube videos, it primarily fetches subtitles directly via the `youtube-download` service and then uses on-demand TTS via the main server (without creating a persistent backend video processing job for that specific YouTube video unless explicitly chosen for a more complex workflow).
 
-### 7.2. Extension User Flow
+### 6.2. Extension User Flow
 
 1.  **Video Detection & UI (`MovieSearchPage.tsx`, `MovieSearch.tsx`):**
 
@@ -346,15 +269,15 @@ The Chrome Extension allows users to apply dubbing directly while watching video
       - If a YouTube video is detected, a prominent button "Dub Current YouTube Video" (or similar) is shown.
       - Clicking this button dispatches `fetchAndPrepareYouTubeSubtitles` from `movieSlice.ts`. This thunk uses the globally selected language (from extension settings/Redux state) to fetch SRT subtitles directly via the `/download-srt` endpoint of the `youtube-download` service.
       - If successful, the SRT content is stored in Redux, and the UI navigates to `DubbingPage.tsx`.
-    - **Movie/Show Search Flow:**
+    - **Movie/Show Search Flow (Potentially Involving Backend Processing):**
       - Users can search for movies or shows using the `MovieSearch.tsx` component.
       - When a movie/show is selected from the search results:
         - The selected item is displayed on `MovieSearchPage.tsx` (e.g., using `MovieCard.tsx`).
         - If the selected item is a series, input fields for season and episode numbers appear.
         - A "Fetch Subtitles" button is displayed.
       - Clicking "Fetch Subtitles":
-        - Dispatches `selectSubtitle` from `movieSlice.ts`. This thunk uses the selected movie's IMDb ID, the globally selected language, season/episode numbers (if applicable), and the current tab's URL (for context, though subtitles are primarily fetched by IMDb ID) to get SRT subtitles from the backend (which in turn might use OpenSubtitles or similar providers).
-        - If successful, the SRT content is stored in Redux, and the UI navigates to `DubbingPage.tsx`.
+        - Dispatches `selectSubtitle` from `movieSlice.ts`. This thunk uses the selected movie's IMDb ID, the globally selected language, season/episode numbers (if applicable) to get SRT subtitles from the backend (which in turn might use OpenSubtitles or similar providers, or trigger a full backend processing job if subtitles aren't readily available).
+        - If successful (SRT obtained), the SRT content is stored in Redux, and the UI navigates to `DubbingPage.tsx`.
     - **SRT Upload:** Users can also upload an SRT file directly using `SubtitleUpload.tsx`. This also stores the SRT in Redux and navigates to `DubbingPage.tsx`.
     - Global language for dubbing is managed via `SettingsPage.tsx` and stored in Redux.
 
@@ -364,7 +287,7 @@ The Chrome Extension allows users to apply dubbing directly while watching video
     - It provides controls (`DubbingControls.tsx`) to start/stop the dubbing process.
     - Clicking "Start Dubbing":
       - Dispatches `toggleDubbingProcess` from `movieSlice.ts`.
-      - This thunk sends a message (`initializeDubbing` or `initializeYouTubeDubbing`) to the content script (`content.ts`).
+      - This thunk sends a message (`initializeDubbing` for movies/uploaded SRTs, or direct initialization for YouTube with provided SRT) to the content script (`content.ts`).
       - The message includes the SRT content, language code, voice selection, and relevant IDs (IMDb ID for movies, YouTube video ID string for YouTube).
 
 3.  **Content Script (`content.ts`):**
@@ -378,30 +301,28 @@ The Chrome Extension allows users to apply dubbing directly while watching video
 4.  **Background Script (`background.ts`):**
 
     - Handles `generateAudioChunk` messages from the content script.
-    - **For YouTube videos (direct TTS):** It will call a simplified server action (e.g., `audio/generateDubbingAudioDirect`) that takes text, language, and voice, and returns a TTS audio URL directly, without database interaction for video processing status.
-    - **For movies/shows (potentially with backend processing):** If the flow involved `initiateVideoProcessingJob` (not the case for the simplified YouTube flow described above, but kept for general movie dubbing that might still use backend jobs), it would interact with actions that might check database job statuses or fetch pre-generated chunks. However, the primary mode now for the extension after subtitle acquisition is on-demand TTS.
+    - It calls the `generateAudioChunkApi` server action (a client-facing action in `server/src/app/actions/video.ts`) that takes text, language, and voice, and returns a TTS audio URL directly. This action performs the TTS generation without relying on the full backend video processing job system for these on-demand requests from the extension.
 
 5.  **Audio Playback & Subtitle Display:**
     - `DubbingManager` coordinates playing audio chunks synchronized with video playback.
     - It also sends current subtitle information to the popup UI (`DubbingPage.tsx`) for display if needed.
 
-**Simplified YouTube Flow (No Backend DB Job for the Video):**
+**Simplified YouTube Flow (Direct TTS via Server Action, No Backend DB Job for the Video):**
 
 1.  User on YouTube, opens extension.
 2.  `MovieSearchPage.tsx` shows "Dub Current YouTube Video".
-3.  User clicks button -> `fetchAndPrepareYouTubeSubtitles` (gets SRT for current YouTube video ID and global language).
+3.  User clicks button -> `fetchAndPrepareYouTubeSubtitles` (gets SRT for current YouTube video ID and global language from `youtube-download` service).
 4.  Navigate to `DubbingPage.tsx`. SRT content is now in Redux.
-5.  User clicks "Start Dubbing" -> `toggleDubbingProcess` sends `initializeYouTubeDubbing` to `content.ts` with SRT, YouTube video ID string, language, voice.
+5.  User clicks "Start Dubbing" -> `toggleDubbingProcess` sends initialization message to `content.ts` with SRT, YouTube video ID string, language, voice.
 6.  `content.ts` initializes. `AudioFileManager` requests audio for current subtitle text from `background.ts`.
-7.  `background.ts` calls a direct TTS server action (no DB `videoId` needed, just text, lang, voice).
+7.  `background.ts` calls `generateAudioChunkApi` server action (text, lang, voice).
 8.  Audio plays.
 
 This revised flow removes the `LanguageSelectionPage.tsx` and streamlines the process by initiating subtitle fetching directly from `MovieSearchPage.tsx` for both movies and YouTube videos, then proceeding to `DubbingPage.tsx`.
-The core backend processing for _movies and shows that might still use the job system_ (initiated via `initiateVideoProcessingJobApi` by the mobile app) remains largely the same on the server-side as described in sections 3-6, but the Chrome Extension's primary interaction after acquiring subtitles is geared towards on-demand TTS.
 
-## 8. Authentication & Authorization
+## 7. Authentication & Authorization
 
-### 8.1. Authentication Flow (Server)
+### 7.1. Authentication Flow (Server)
 
 - **Provider:** Supabase Auth with Google OAuth and Email/Password.
 - **Identifying the Initiator:** To differentiate between authentication flows started by the Chrome Extension versus the website, an `initiator_id` parameter is used.
@@ -444,7 +365,7 @@ The core backend processing for _movies and shows that might still use the job s
        - Displays a message: "Authentication successful! Redirecting to the homepage..."
        - Redirects the user to the website's homepage (e.g., `/`) after a short delay.
 
-### 8.2. Chrome Extension Authentication
+### 7.2. Chrome Extension Authentication
 
 - **Token Reception & Storage:**
   - `background.ts` (listening via `onMessageExternal` or `onMessage` for messages from the known server origin, specifically the `/auth/callback/success` page) receives the `{ type: "AUTH_TOKEN_FROM_SERVER", token, profile }` payload.
@@ -453,7 +374,7 @@ The core backend processing for _movies and shows that might still use the job s
   - The hook also saves the `authToken` and `userProfile` to `chrome.storage.local` for persistence.
   - On app initialization, the `useInitialization` hook attempts to load `authToken` and `userProfile` from `chrome.storage.local` to rehydrate the Redux state.
 
-### 8.3. User Profiles
+### 7.3. User Profiles
 
 - **Profile Creation:**
   - Automatically created on first sign-in via a Supabase Auth trigger.
@@ -478,9 +399,9 @@ The core backend processing for _movies and shows that might still use the job s
   ```
   This table is used by the `checkVideoLimit` server action to count unique videos processed by a free user on a given day. The foreign key from `video_id` to `videos.id` has been removed.
 
-## 9. Subscription Plans & Features
+## 8. Subscription Plans & Features
 
-### 9.1. Free Plan
+### 8.1. Free Plan
 
 - **Limitations:**
   - **4 unique videos/movies per day.** This limit is checked by the `checkVideoLimit` server action against the `daily_video_limits` table.
@@ -491,7 +412,7 @@ The core backend processing for _movies and shows that might still use the job s
   - Support for all languages.
   - Basic voice quality.
 
-### 9.2. Premium Plan
+### 8.2. Premium Plan
 
 - **Benefits:**
   - Unlimited videos/movies per day.
@@ -502,7 +423,7 @@ The core backend processing for _movies and shows that might still use the job s
   - Premium voice options.
   - Advanced audio quality options.
 
-### 9.3. Subscription Management (Server)
+### 8.3. Subscription Management (Server)
 
 - **Subscription Status Tracking:**
   - `subscription_status`, `subscription_id`, `stripe_customer_id`, and `subscription_end_date` in the `profiles` table.
@@ -516,7 +437,7 @@ The core backend processing for _movies and shows that might still use the job s
     - Returns `canProcess`, `dailyProcessedVideoCount`, `remainingVideos`, `isPremium`.
   - No trial period functionality.
 
-### 9.4. Feature Access Control (Chrome Extension)
+### 8.4. Feature Access Control (Chrome Extension)
 
 - **Dubbing Initiation (`DubbingPage.tsx` - `handleDubbingToggle`):**
   - **Authentication:** If not authenticated (checked via `authSlice.isAuthenticated`), opens server login page in a popup.
@@ -530,56 +451,4 @@ The core backend processing for _movies and shows that might still use the job s
 - **Settings Page (`SettingsPage.tsx`):**
   - Allows free users to select and save premium voices to their Redux state.
   - The primary enforcement (blocking usage and showing persistent warning) occurs on `DubbingPage`.
-- No trial-related UI or logic.
-
-## 2. Chrome Extension Architecture (`extension/`)
-
-### 2.1. Core Structure
-
-- **Manifest V3.**
-- **Directory Structure:**
-  ```
-  extension/
-  ├── public/              # manifest.json, icons
-  ├── src/
-  │   ├── assets/
-  │   ├── components/        # React UI components (DubbingControls, MovieCard, etc.)
-  │   ├── extension/         # Background script (background.ts), content script (content.ts)
-  │   ├── hooks/             # Custom React hooks (useInitialization, useContentScript, useChromeMessageListener)
-  │   ├── lib/               # Language codes, messaging utils
-  │   ├── pages/             # Popup pages (SearchPage, DubbingPage, SettingsPage)
-  │   ├── store/             # Redux store (authSlice, movieSlice, index.ts)
-  │   ├── styles/
-  │   ├── types/             # TypeScript definitions (index.ts, serverActions.ts, actions.ts)
-  │   └── api.ts             # API call functions (checkAuthStatus, checkVideoLimit, etc.)
-  └── ...
-  ```
-- **UI:** React, Shadcn UI, Tailwind CSS, Sonner (for toasts).
-- **State Management:** Redux Toolkit (`authSlice`, `movieSlice`). Auth state persisted to `chrome.storage.local`.
-- **Routing (Popup):** `react-router-dom`.
-- **App Initialization (`App.tsx`):** Uses custom hooks (`useInitialization`, `useContentScript`, `useChromeMessageListener`) to manage app setup, content script injection, and message handling. `useInitialization` rehydrates auth state from `chrome.storage.local`.
-
-### 2.2. Authentication Flow (Summary - refer to section 8.2 for details)
-
-- Login initiated from `DubbingPage` if unauthenticated, opening server's `/login` page in a popup window.
-- Server's `/auth/callback/success` page (client-side Next.js page) receives token and profile data as URL query parameters.
-- This success page then uses `chrome.runtime.sendMessage(extensionId, payload)` to send `{ type: "AUTH_TOKEN_FROM_SERVER", token, profile }` to the extension's `background.ts`.
-- `background.ts` (via `onMessageExternal` or `onMessage`) relays this payload to the UI (`App.tsx` through the `useChromeMessageListener` hook).
-- The `useChromeMessageListener` hook dispatches actions to `authSlice` to update the Redux store and saves `authToken` and `userProfile` to `chrome.storage.local` for persistence.
-- `useInitialization` hook in `App.tsx` loads this data from `chrome.storage.local` on startup to maintain session.
-
-### 2.3. Dubbing Process & Usage Limits (Summary - refer to section 9.4 for details)
-
-- `DubbingPage.tsx` (`handleDubbingToggle`):
-  - Checks auth (`authSlice.isAuthenticated`). If not logged in, opens login popup.
-  - If logged in, calls `checkVideoLimit` server action.
-  - **Persistent Banners on `DubbingPage`:**
-    - An amber-colored banner is shown at the bottom if a free user has a premium voice selected (via `dubbingVoice` from Redux state), informing them that premium voices require a subscription. Dubbing is blocked if they attempt to start with this configuration.
-    - A red-colored banner is shown at the bottom if a free user has exhausted their daily unique video processing limit (`remainingVideos <= 0` from server).
-  - **Toast Notifications:** Toasts are used for immediate feedback if an attempt to dub a _new, unique_ video is blocked because it would exceed the daily limit for a free user.
-  - **Re-watches:** Free users can re-watch videos they've already processed today, even if they are over the limit for _new unique_ videos (server's `checkVideoLimit` returns `canProcess: true` for such cases).
-  - If all checks pass, starts/stops dubbing via `content.ts`.
-- `SettingsPage.tsx`:
-  - Allows free users to select and save premium voices to their Redux state.
-  - The primary enforcement (blocking usage and showing persistent warning) occurs primarily on `DubbingPage`.
 - No trial-related UI or logic.
