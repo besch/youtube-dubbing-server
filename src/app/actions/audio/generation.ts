@@ -17,6 +17,7 @@ const audioLogger = createLogger("audio-generation-service");
 interface ActionContext {
   userId?: string;
   ipAddress?: string;
+  supabaseClient: ReturnType<typeof createServerClient<Database>>;
 }
 
 // Function to map AppErrorCode to HTTP status codes (can be shared or redefined)
@@ -58,7 +59,11 @@ const audioAction = createSafeActionClient({
     } = await supabase.auth.getUser();
     const ip =
       nextHeaders().get("x-forwarded-for") ?? nextHeaders().get("remote_addr");
-    return { userId: user?.id, ipAddress: ip ?? undefined };
+    return {
+      userId: user?.id,
+      ipAddress: ip ?? undefined,
+      supabaseClient: supabase,
+    };
   },
   handleReturnedServerError(e: Error) {
     let loggedErrorCodeStr: string =
@@ -106,7 +111,7 @@ export const generateAudioChunk = audioAction(
   generateAudioSchema,
   async (
     { language, voice, startTime, endTime, text }: GenerateAudioChunkInput,
-    { userId, ipAddress }: ActionContext
+    { userId, ipAddress, supabaseClient }: ActionContext
   ): Promise<ActionResponse<{ audioBase64: string; mimeType: string }>> => {
     const actionStartTime = Date.now();
     const actionName = "generate-audio-chunk";
@@ -181,6 +186,80 @@ export const generateAudioChunk = audioAction(
         };
       }
     }
+
+    // Authorization Check: Premium voice for premium users
+    if (ttsProvider && userId) {
+      const { data: profile, error: profileError } = await supabaseClient
+        .from("profiles")
+        .select("subscription_status")
+        .eq("id", userId)
+        .single();
+
+      if (profileError) {
+        audioLogger.error(actionName, {
+          user_id: userId,
+          ip_address: ipAddress,
+          error_code: AppErrorCode[AppErrorCode.UNEXPECTED_ERROR],
+          error_message: `Failed to fetch user profile: ${profileError.message}`,
+          duration_ms: Date.now() - actionStartTime,
+          response_status_code: 500,
+        });
+        return {
+          success: false,
+          error: new AppError(
+            AppErrorCode.UNEXPECTED_ERROR,
+            "Failed to verify user subscription status."
+          ),
+        };
+      }
+
+      if (!profile || profile.subscription_status !== "premium") {
+        const forbiddenError = new AppError(
+          AppErrorCode.FORBIDDEN,
+          `Voice '${voice}' is a premium voice and requires an active premium subscription.`
+        );
+        const durationMs = Date.now() - actionStartTime;
+        audioLogger.warn(actionName, {
+          user_id: userId,
+          ip_address: ipAddress,
+          error_code: AppErrorCode[forbiddenError.code],
+          error_message: forbiddenError.message,
+          duration_ms: durationMs,
+          response_status_code: getStatusCodeFromAppError(forbiddenError.code),
+          metadata: {
+            language,
+            voice,
+            subscription_status: profile?.subscription_status || "unknown",
+          },
+        });
+        return {
+          success: false,
+          error: forbiddenError,
+        };
+      }
+    } else if (ttsProvider && !userId) {
+      const unauthenticatedError = new AppError(
+        AppErrorCode.UNAUTHENTICATED,
+        `Authentication is required to use premium voice '${voice}'.`
+      );
+      const durationMs = Date.now() - actionStartTime;
+      audioLogger.warn(actionName, {
+        user_id: userId,
+        ip_address: ipAddress,
+        error_code: AppErrorCode[unauthenticatedError.code],
+        error_message: unauthenticatedError.message,
+        duration_ms: durationMs,
+        response_status_code: getStatusCodeFromAppError(
+          unauthenticatedError.code
+        ),
+        metadata: { language, voice },
+      });
+      return {
+        success: false,
+        error: unauthenticatedError,
+      };
+    }
+
     if (!ttsProvider) {
       const providerError = new AppError(
         AppErrorCode.UNEXPECTED_ERROR,

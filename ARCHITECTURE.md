@@ -89,6 +89,7 @@ The project allows users to watch YouTube videos with dubbed audio tracks genera
   - `getCompletedTranscriptionSegments` (Protected): Fetches the single completed transcription row for a video.
   - `getCompletedAudioChunks` (Protected): Fetches all completed audio chunks for a specific language/voice.
   - `generateAudioChunk` (Protected): Client-callable action for the Chrome Extension to request generation of a specific audio chunk on-demand (e.g., for seeks or continuous playback).
+    - **Authorization:** Checks if the user is authenticated and has a premium subscription if the requested voice is an OpenAI or Google TTS voice (which are considered premium). Returns a `FORBIDDEN` (403) error if a non-premium user attempts to use a premium voice, or `UNAUTHENTICATED` (401) if the user is not logged in for such a request. Free browser-based TTS voices are not handled by this server action.
   - `updateHistory`, `toggleFavorite`, `getFavoriteStatus`, `getFavorites`, `getHistory`, `getSuggestedVideos`, `translateVideoTitle` (Protected): Unchanged.
 - **Internal Actions (`videoInternal.ts` - Called by Supabase Functions):**
   - `internalRequestFullTranscription`: Called by `on-download-complete`. Gets full audio URL, starts Replicate job, updates the single `transcription_segments` row (status: `processing`).
@@ -405,22 +406,22 @@ This revised flow removes the `LanguageSelectionPage.tsx` and streamlines the pr
 
 - **Limitations:**
   - **4 unique videos/movies per day.** This limit is checked by the `checkVideoLimit` server action against the `daily_video_limits` table.
-  - Basic voice options only.
-  - No access to premium voices.
+  - Basic voice options only (browser-based TTS).
+  - No access to premium voices (OpenAI/Google TTS via server).
 - **Features:**
-  - Access to all basic dubbing features.
-  - Support for all languages.
-  - Basic voice quality.
+  - Access to all basic dubbing features using browser-based TTS.
+  - Support for all languages (limited by browser TTS capabilities).
+  - Basic voice quality (browser-based TTS).
 
 ### 8.2. Premium Plan
 
 - **Benefits:**
   - Unlimited videos/movies per day.
-  - Access to all premium voices.
+  - Access to all premium voices (OpenAI/Google TTS via server).
   - Early access to new features.
 - **Features:**
   - All free plan features.
-  - Premium voice options.
+  - Premium voice options (OpenAI/Google TTS).
   - Advanced audio quality options.
 
 ### 8.3. Subscription Management (Server)
@@ -444,11 +445,10 @@ This revised flow removes the `LanguageSelectionPage.tsx` and streamlines the pr
   - **Usage Limit & Premium Voice (if authenticated):**
     1. Calls `checkVideoLimit` server action (passing `videoUrlToCheck`).
     2. Gets `canProcess`, `remainingVideos`, `isPremium` from response.
-    3. **Persistent Premium Voice Warning:** If the selected `dubbingVoice` (from Redux state) is premium and the user's `isPremium` status is false, a persistent amber-colored banner is displayed at the bottom of `DubbingPage`. If the user attempts to "Start Dubbing" with this configuration, the action is blocked (no toast, banner serves as warning).
-    4. **Persistent Daily Limit Warning:** If `!isPremium` and `remainingVideos <= 0` (from the general limit check), a persistent red-colored banner is displayed at the bottom of `DubbingPage`.
-    5. **Immediate Action Toast (Daily Limit):** If `!canProcess` (for the specific `videoUrlToCheck`) and `!isPremium`, an immediate Sonner toast is shown ("You've reached your daily limit...") with remaining count and "Go Premium" link; dubbing is blocked for this new video. Re-watches are allowed as `canProcess` will be true.
-    6. If checks pass, proceeds to `toggleDubbingProcess`.
-- **Settings Page (`SettingsPage.tsx`):**
-  - Allows free users to select and save premium voices to their Redux state.
-  - The primary enforcement (blocking usage and showing persistent warning) occurs on `DubbingPage`.
+    3. **Persistent Daily Limit Warning:** If `!isPremium` and `remainingVideos <= 0` (from the general limit check), a persistent red-colored banner is displayed at the bottom of `DubbingPage`.
+    4. **Immediate Action Toast (Daily Limit):** If `!canProcess` (for the specific `videoUrlToCheck`) and `!isPremium`, an immediate Sonner toast is shown ("You've reached your daily limit...") with remaining count and "Go Premium" link; dubbing is blocked for this new video. Re-watches are allowed as `canProcess` will be true.
+    5. If checks pass, proceeds to `toggleDubbingProcess`. (Server-side check in `generateAudioChunk` will still prevent premium voice usage for non-premium users).
+- \*\*Settings Page (`SettingsPage.tsx`):
+  - Allows free users to _select_ premium voices (stores in Redux state), but the `generateAudioChunk` server action will block their use if the user is not premium.
+  - A warning is displayed on the settings page if a non-premium user selects a premium voice.
 - No trial-related UI or logic.
