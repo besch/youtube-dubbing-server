@@ -1053,3 +1053,288 @@ $$;
 
 GRANT EXECUTE ON FUNCTION public.get_unique_ip_activity(timestamptz, timestamptz, text) TO service_role;
 -- END: New function for unique IP activity
+
+-- START: Enhanced Analytics Functions for Admin Dashboard
+
+-- Function to get request volume over time
+CREATE OR REPLACE FUNCTION public.get_request_volume_over_time(
+    p_start_date timestamptz,
+    p_end_date timestamptz,
+    p_granularity text -- 'hour', 'day', 'week', 'month'
+)
+RETURNS TABLE(
+    time_bucket timestamptz, 
+    total_requests bigint,
+    unique_users bigint,
+    unique_ips bigint,
+    error_requests bigint,
+    avg_duration_ms numeric
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        date_trunc(p_granularity, al.created_at) as time_bucket,
+        COUNT(*) as total_requests,
+        COUNT(DISTINCT al.user_id) FILTER (WHERE al.user_id IS NOT NULL) as unique_users,
+        COUNT(DISTINCT al.ip_address) FILTER (WHERE al.ip_address IS NOT NULL) as unique_ips,
+        COUNT(*) FILTER (WHERE al.log_level IN ('ERROR', 'FATAL')) as error_requests,
+        ROUND(AVG(al.duration_ms)::numeric, 2) as avg_duration_ms
+    FROM
+        public.app_logs al
+    WHERE
+        (p_start_date IS NULL OR al.created_at >= p_start_date) AND
+        (p_end_date IS NULL OR al.created_at <= p_end_date)
+    GROUP BY
+        time_bucket
+    ORDER BY
+        time_bucket ASC;
+END;
+$$;
+
+-- Function to get top active IPs with detailed metrics
+CREATE OR REPLACE FUNCTION public.get_top_active_ips(
+    p_start_date timestamptz,
+    p_end_date timestamptz,
+    p_limit integer DEFAULT 20
+)
+RETURNS TABLE(
+    ip_address inet,
+    total_requests bigint,
+    unique_actions bigint,
+    unique_services bigint,
+    error_count bigint,
+    error_rate numeric,
+    avg_duration_ms numeric,
+    first_seen timestamptz,
+    last_seen timestamptz
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        al.ip_address,
+        COUNT(*) as total_requests,
+        COUNT(DISTINCT al.action_name) as unique_actions,
+        COUNT(DISTINCT al.service_name) as unique_services,
+        COUNT(*) FILTER (WHERE al.log_level IN ('ERROR', 'FATAL')) as error_count,
+        ROUND(
+            (COUNT(*) FILTER (WHERE al.log_level IN ('ERROR', 'FATAL'))::numeric / COUNT(*)::numeric) * 100, 
+            2
+        ) as error_rate,
+        ROUND(AVG(al.duration_ms)::numeric, 2) as avg_duration_ms,
+        MIN(al.created_at) as first_seen,
+        MAX(al.created_at) as last_seen
+    FROM
+        public.app_logs al
+    WHERE
+        al.ip_address IS NOT NULL AND
+        (p_start_date IS NULL OR al.created_at >= p_start_date) AND
+        (p_end_date IS NULL OR al.created_at <= p_end_date)
+    GROUP BY
+        al.ip_address
+    ORDER BY
+        total_requests DESC
+    LIMIT p_limit;
+END;
+$$;
+
+-- Function to get service performance metrics
+CREATE OR REPLACE FUNCTION public.get_service_performance_metrics(
+    p_start_date timestamptz,
+    p_end_date timestamptz
+)
+RETURNS TABLE(
+    service_name text,
+    total_requests bigint,
+    avg_duration_ms numeric,
+    p95_duration_ms numeric,
+    error_count bigint,
+    error_rate numeric,
+    unique_users bigint,
+    unique_ips bigint
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        al.service_name,
+        COUNT(*) as total_requests,
+        ROUND(AVG(al.duration_ms)::numeric, 2) as avg_duration_ms,
+        ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY al.duration_ms)::numeric, 2) as p95_duration_ms,
+        COUNT(*) FILTER (WHERE al.log_level IN ('ERROR', 'FATAL')) as error_count,
+        ROUND(
+            (COUNT(*) FILTER (WHERE al.log_level IN ('ERROR', 'FATAL'))::numeric / COUNT(*)::numeric) * 100, 
+            2
+        ) as error_rate,
+        COUNT(DISTINCT al.user_id) FILTER (WHERE al.user_id IS NOT NULL) as unique_users,
+        COUNT(DISTINCT al.ip_address) FILTER (WHERE al.ip_address IS NOT NULL) as unique_ips
+    FROM
+        public.app_logs al
+    WHERE
+        (p_start_date IS NULL OR al.created_at >= p_start_date) AND
+        (p_end_date IS NULL OR al.created_at <= p_end_date)
+    GROUP BY
+        al.service_name
+    ORDER BY
+        total_requests DESC;
+END;
+$$;
+
+-- Function to get error trends over time
+CREATE OR REPLACE FUNCTION public.get_error_trends(
+    p_start_date timestamptz,
+    p_end_date timestamptz,
+    p_granularity text -- 'hour', 'day', 'week'
+)
+RETURNS TABLE(
+    time_bucket timestamptz,
+    total_logs bigint,
+    error_count bigint,
+    warn_count bigint,
+    fatal_count bigint,
+    error_rate numeric
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        date_trunc(p_granularity, al.created_at) as time_bucket,
+        COUNT(*) as total_logs,
+        COUNT(*) FILTER (WHERE al.log_level = 'ERROR') as error_count,
+        COUNT(*) FILTER (WHERE al.log_level = 'WARN') as warn_count,
+        COUNT(*) FILTER (WHERE al.log_level = 'FATAL') as fatal_count,
+        ROUND(
+            (COUNT(*) FILTER (WHERE al.log_level IN ('ERROR', 'FATAL'))::numeric / COUNT(*)::numeric) * 100, 
+            2
+        ) as error_rate
+    FROM
+        public.app_logs al
+    WHERE
+        (p_start_date IS NULL OR al.created_at >= p_start_date) AND
+        (p_end_date IS NULL OR al.created_at <= p_end_date)
+    GROUP BY
+        time_bucket
+    ORDER BY
+        time_bucket ASC;
+END;
+$$;
+
+-- Function to get user activity patterns
+CREATE OR REPLACE FUNCTION public.get_user_activity_patterns(
+    p_start_date timestamptz,
+    p_end_date timestamptz,
+    p_user_id uuid DEFAULT NULL
+)
+RETURNS TABLE(
+    user_id uuid,
+    total_requests bigint,
+    unique_actions bigint,
+    unique_services bigint,
+    avg_duration_ms numeric,
+    error_count bigint,
+    first_activity timestamptz,
+    last_activity timestamptz,
+    peak_hour integer
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RETURN QUERY
+    WITH user_stats AS (
+        SELECT
+            al.user_id,
+            COUNT(*) as total_requests,
+            COUNT(DISTINCT al.action_name) as unique_actions,
+            COUNT(DISTINCT al.service_name) as unique_services,
+            ROUND(AVG(al.duration_ms)::numeric, 2) as avg_duration_ms,
+            COUNT(*) FILTER (WHERE al.log_level IN ('ERROR', 'FATAL')) as error_count,
+            MIN(al.created_at) as first_activity,
+            MAX(al.created_at) as last_activity
+        FROM public.app_logs al
+        WHERE
+            al.user_id IS NOT NULL AND
+            (p_start_date IS NULL OR al.created_at >= p_start_date) AND
+            (p_end_date IS NULL OR al.created_at <= p_end_date) AND
+            (p_user_id IS NULL OR al.user_id = p_user_id)
+        GROUP BY al.user_id
+    ),
+    user_peak_hours AS (
+        SELECT
+            al.user_id,
+            EXTRACT(HOUR FROM al.created_at)::integer as peak_hour,
+            ROW_NUMBER() OVER (PARTITION BY al.user_id ORDER BY COUNT(*) DESC) as rn
+        FROM public.app_logs al
+        WHERE
+            al.user_id IS NOT NULL AND
+            (p_start_date IS NULL OR al.created_at >= p_start_date) AND
+            (p_end_date IS NULL OR al.created_at <= p_end_date) AND
+            (p_user_id IS NULL OR al.user_id = p_user_id)
+        GROUP BY al.user_id, EXTRACT(HOUR FROM al.created_at)
+    )
+    SELECT
+        us.user_id,
+        us.total_requests,
+        us.unique_actions,
+        us.unique_services,
+        us.avg_duration_ms,
+        us.error_count,
+        us.first_activity,
+        us.last_activity,
+        uph.peak_hour
+    FROM user_stats us
+    LEFT JOIN user_peak_hours uph ON us.user_id = uph.user_id AND uph.rn = 1
+    ORDER BY us.total_requests DESC;
+END;
+$$;
+
+-- Function to get detailed IP activity over time
+CREATE OR REPLACE FUNCTION public.get_ip_activity_detail(
+    p_ip_address inet,
+    p_start_date timestamptz,
+    p_end_date timestamptz,
+    p_granularity text DEFAULT 'hour'
+)
+RETURNS TABLE(
+    time_bucket timestamptz,
+    request_count bigint,
+    unique_actions bigint,
+    error_count bigint,
+    avg_duration_ms numeric
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        date_trunc(p_granularity, al.created_at) as time_bucket,
+        COUNT(*) as request_count,
+        COUNT(DISTINCT al.action_name) as unique_actions,
+        COUNT(*) FILTER (WHERE al.log_level IN ('ERROR', 'FATAL')) as error_count,
+        ROUND(AVG(al.duration_ms)::numeric, 2) as avg_duration_ms
+    FROM
+        public.app_logs al
+    WHERE
+        al.ip_address = p_ip_address AND
+        (p_start_date IS NULL OR al.created_at >= p_start_date) AND
+        (p_end_date IS NULL OR al.created_at <= p_end_date)
+    GROUP BY
+        time_bucket
+    ORDER BY
+        time_bucket ASC;
+END;
+$$;
+
+-- Grant execute permissions for all new functions
+GRANT EXECUTE ON FUNCTION public.get_request_volume_over_time(timestamptz, timestamptz, text) TO service_role, authenticated;
+GRANT EXECUTE ON FUNCTION public.get_top_active_ips(timestamptz, timestamptz, integer) TO service_role, authenticated;
+GRANT EXECUTE ON FUNCTION public.get_service_performance_metrics(timestamptz, timestamptz) TO service_role, authenticated;
+GRANT EXECUTE ON FUNCTION public.get_error_trends(timestamptz, timestamptz, text) TO service_role, authenticated;
+GRANT EXECUTE ON FUNCTION public.get_user_activity_patterns(timestamptz, timestamptz, uuid) TO service_role, authenticated;
+GRANT EXECUTE ON FUNCTION public.get_ip_activity_detail(inet, timestamptz, timestamptz, text) TO service_role, authenticated;
+
+-- END: Enhanced Analytics Functions for Admin Dashboard

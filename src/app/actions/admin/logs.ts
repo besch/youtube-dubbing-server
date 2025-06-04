@@ -20,11 +20,30 @@ import {
   type TimeSeriesStatData,
   getUniqueIpActivitySchema,
   type UniqueIpActivityData,
+  getRequestVolumeSchema,
+  getTopActiveIpsSchema,
+  getServicePerformanceSchema,
+  getErrorTrendsSchema,
+  getUserActivityPatternsSchema,
+  getIpActivityDetailSchema,
+  getFilteredLogsSchema,
+  type RequestVolumeData,
+  type TopActiveIpData,
+  type ServicePerformanceData,
+  type ErrorTrendsData,
+  type UserActivityData,
+  type IpActivityDetailData,
 } from "./schemas";
 
 export type { LogStat }; // Re-export LogStat
 export type { TimeSeriesStatData }; // Re-export TimeSeriesStatData
 export type { UniqueIpActivityData }; // Re-export UniqueIpActivityData
+export type { RequestVolumeData }; // Re-export RequestVolumeData
+export type { TopActiveIpData }; // Re-export TopActiveIpData
+export type { ServicePerformanceData }; // Re-export ServicePerformanceData
+export type { ErrorTrendsData }; // Re-export ErrorTrendsData
+export type { UserActivityData }; // Re-export UserActivityData
+export type { IpActivityDetailData }; // Re-export IpActivityDetailData
 
 // Helper function to get Supabase admin client (remains unchanged if used for direct DB ops)
 function getSupabaseAdminClient() {
@@ -319,5 +338,284 @@ export const getUniqueIpActivityAction = action(
     }));
 
     return transformedData;
+  }
+);
+
+// Enhanced Analytics Actions
+
+export const getRequestVolumeAction = action(
+  getRequestVolumeSchema,
+  async (parsedInput) => {
+    const { startDate, endDate, granularity } = parsedInput;
+    const supabase = getSupabaseAdminClient();
+
+    const { data, error } = await (supabase as any).rpc(
+      "get_request_volume_over_time",
+      {
+        p_granularity: granularity,
+        p_start_date: startDate === undefined ? null : startDate,
+        p_end_date: endDate === undefined ? null : endDate,
+      }
+    );
+
+    if (error) {
+      console.error(`Error fetching request volume (${granularity}):`, error);
+      throw new AppError(
+        error.message,
+        appErrors.DATABASE_ERROR.code,
+        appErrors.DATABASE_ERROR.statusCode
+      );
+    }
+
+    return ((data as any[]) || []).map((item: any) => ({
+      time_bucket: item.time_bucket,
+      total_requests: Number(item.total_requests),
+      unique_users: Number(item.unique_users),
+      unique_ips: Number(item.unique_ips),
+      error_requests: Number(item.error_requests),
+      avg_duration_ms: Number(item.avg_duration_ms || 0),
+    })) as RequestVolumeData[];
+  }
+);
+
+export const getTopActiveIpsAction = action(
+  getTopActiveIpsSchema,
+  async (parsedInput) => {
+    const { startDate, endDate, limit } = parsedInput;
+    const supabase = getSupabaseAdminClient();
+
+    const { data, error } = await (supabase as any).rpc("get_top_active_ips", {
+      p_start_date: startDate === undefined ? null : startDate,
+      p_end_date: endDate === undefined ? null : endDate,
+      p_limit: limit,
+    });
+
+    if (error) {
+      console.error("Error fetching top active IPs:", error);
+      throw new AppError(
+        error.message,
+        appErrors.DATABASE_ERROR.code,
+        appErrors.DATABASE_ERROR.statusCode
+      );
+    }
+
+    return ((data as any[]) || []).map((item: any) => ({
+      ip_address: item.ip_address,
+      total_requests: Number(item.total_requests),
+      unique_actions: Number(item.unique_actions),
+      unique_services: Number(item.unique_services),
+      error_count: Number(item.error_count),
+      error_rate: Number(item.error_rate),
+      avg_duration_ms: Number(item.avg_duration_ms || 0),
+      first_seen: item.first_seen,
+      last_seen: item.last_seen,
+    })) as TopActiveIpData[];
+  }
+);
+
+export const getServicePerformanceAction = action(
+  getServicePerformanceSchema,
+  async (parsedInput) => {
+    const { startDate, endDate } = parsedInput;
+    const supabase = getSupabaseAdminClient();
+
+    const { data, error } = await (supabase as any).rpc(
+      "get_service_performance_metrics",
+      {
+        p_start_date: startDate === undefined ? null : startDate,
+        p_end_date: endDate === undefined ? null : endDate,
+      }
+    );
+
+    if (error) {
+      console.error("Error fetching service performance:", error);
+      throw new AppError(
+        error.message,
+        appErrors.DATABASE_ERROR.code,
+        appErrors.DATABASE_ERROR.statusCode
+      );
+    }
+
+    return ((data as any[]) || []).map((item: any) => ({
+      service_name: item.service_name,
+      total_requests: Number(item.total_requests),
+      avg_duration_ms: Number(item.avg_duration_ms || 0),
+      p95_duration_ms: Number(item.p95_duration_ms || 0),
+      error_count: Number(item.error_count),
+      error_rate: Number(item.error_rate),
+      unique_users: Number(item.unique_users),
+      unique_ips: Number(item.unique_ips),
+    })) as ServicePerformanceData[];
+  }
+);
+
+export const getErrorTrendsAction = action(
+  getErrorTrendsSchema,
+  async (parsedInput) => {
+    const { startDate, endDate, granularity } = parsedInput;
+    const supabase = getSupabaseAdminClient();
+
+    const { data, error } = await (supabase as any).rpc("get_error_trends", {
+      p_granularity: granularity,
+      p_start_date: startDate === undefined ? null : startDate,
+      p_end_date: endDate === undefined ? null : endDate,
+    });
+
+    if (error) {
+      console.error(`Error fetching error trends (${granularity}):`, error);
+      throw new AppError(
+        error.message,
+        appErrors.DATABASE_ERROR.code,
+        appErrors.DATABASE_ERROR.statusCode
+      );
+    }
+
+    return ((data as any[]) || []).map((item: any) => ({
+      time_bucket: item.time_bucket,
+      total_logs: Number(item.total_logs),
+      error_count: Number(item.error_count),
+      warn_count: Number(item.warn_count),
+      fatal_count: Number(item.fatal_count),
+      error_rate: Number(item.error_rate),
+    })) as ErrorTrendsData[];
+  }
+);
+
+export const getUserActivityPatternsAction = action(
+  getUserActivityPatternsSchema,
+  async (parsedInput) => {
+    const { startDate, endDate, userId } = parsedInput;
+    const supabase = getSupabaseAdminClient();
+
+    const { data, error } = await (supabase as any).rpc(
+      "get_user_activity_patterns",
+      {
+        p_start_date: startDate === undefined ? null : startDate,
+        p_end_date: endDate === undefined ? null : endDate,
+        p_user_id: userId === undefined ? null : userId,
+      }
+    );
+
+    if (error) {
+      console.error("Error fetching user activity patterns:", error);
+      throw new AppError(
+        error.message,
+        appErrors.DATABASE_ERROR.code,
+        appErrors.DATABASE_ERROR.statusCode
+      );
+    }
+
+    return ((data as any[]) || []).map((item: any) => ({
+      user_id: item.user_id,
+      total_requests: Number(item.total_requests),
+      unique_actions: Number(item.unique_actions),
+      unique_services: Number(item.unique_services),
+      avg_duration_ms: Number(item.avg_duration_ms || 0),
+      error_count: Number(item.error_count),
+      first_activity: item.first_activity,
+      last_activity: item.last_activity,
+      peak_hour: Number(item.peak_hour || 0),
+    })) as UserActivityData[];
+  }
+);
+
+export const getIpActivityDetailAction = action(
+  getIpActivityDetailSchema,
+  async (parsedInput) => {
+    const { ipAddress, startDate, endDate, granularity } = parsedInput;
+    const supabase = getSupabaseAdminClient();
+
+    const { data, error } = await (supabase as any).rpc(
+      "get_ip_activity_detail",
+      {
+        p_ip_address: ipAddress,
+        p_start_date: startDate === undefined ? null : startDate,
+        p_end_date: endDate === undefined ? null : endDate,
+        p_granularity: granularity,
+      }
+    );
+
+    if (error) {
+      console.error(
+        `Error fetching IP activity detail for ${ipAddress}:`,
+        error
+      );
+      throw new AppError(
+        error.message,
+        appErrors.DATABASE_ERROR.code,
+        appErrors.DATABASE_ERROR.statusCode
+      );
+    }
+
+    return ((data as any[]) || []).map((item: any) => ({
+      time_bucket: item.time_bucket,
+      request_count: Number(item.request_count),
+      unique_actions: Number(item.unique_actions),
+      error_count: Number(item.error_count),
+      avg_duration_ms: Number(item.avg_duration_ms || 0),
+    })) as IpActivityDetailData[];
+  }
+);
+
+// Enhanced logs action with better filtering
+export const getFilteredLogsAction = action(
+  getFilteredLogsSchema,
+  async (parsedInput) => {
+    const {
+      page,
+      limit,
+      startDate,
+      endDate,
+      logLevel,
+      serviceName,
+      actionName,
+      userId: filterUserId,
+      ipAddress,
+      errorCode,
+      sortBy,
+      sortOrder,
+    } = parsedInput;
+    const supabase = getSupabaseAdminClient();
+
+    let query = supabase
+      .from("app_logs")
+      .select("*, profiles ( email )", { count: "exact" });
+
+    if (startDate) query = query.gte("created_at", startDate);
+    if (endDate) query = query.lte("created_at", endDate);
+    if (logLevel) query = query.eq("log_level", logLevel);
+    if (serviceName) query = query.ilike("service_name", `%${serviceName}%`);
+    if (actionName) query = query.ilike("action_name", `%${actionName}%`);
+    if (filterUserId) query = query.eq("user_id", filterUserId);
+    if (ipAddress) query = query.eq("ip_address", ipAddress);
+    if (errorCode) query = query.ilike("error_code", `%${errorCode}%`);
+
+    query = query.order(sortBy, { ascending: sortOrder === "asc" });
+    query = query.range((page - 1) * limit, page * limit - 1);
+
+    const { data, error, count } = await query;
+
+    if (error) {
+      console.error("Error fetching filtered logs:", error);
+      throw new AppError(
+        error.message,
+        appErrors.DATABASE_ERROR.code,
+        appErrors.DATABASE_ERROR.statusCode
+      );
+    }
+
+    const logsWithEmail =
+      data?.map((log: any) => ({
+        ...log,
+        user_email: log.profiles?.email,
+        profiles: undefined,
+      })) || [];
+
+    return {
+      logs: logsWithEmail as LogEntry[],
+      totalCount: count || 0,
+      totalPages: Math.ceil((count || 0) / limit),
+      currentPage: page,
+    };
   }
 );
