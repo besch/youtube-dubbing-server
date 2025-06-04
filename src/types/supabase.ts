@@ -214,24 +214,29 @@ export type Database = {
         }[]
       }
       get_logs_by_time_granularity: {
-        Args:
-          | {
-              p_granularity: string
-              p_start_date?: string
-              p_end_date?: string
-            }
-          | { p_start_date: string; p_end_date: string; p_granularity: string }
+        Args: {
+          p_start_date: string
+          p_end_date: string
+          p_granularity: string
+        }
         Returns: {
           time_bucket: string
           log_count: number
         }[]
       }
+      get_unique_ip_activity: {
+        Args: {
+          p_start_date: string
+          p_end_date: string
+          p_granularity: string
+        }
+        Returns: {
+          time_bucket: string
+          unique_ip_count: number
+        }[]
+      }
       reset_daily_video_count: {
         Args: Record<PropertyKey, never>
-        Returns: undefined
-      }
-      update_processing_status: {
-        Args: { video_uuid: string; status_key: string; status_value: Json }
         Returns: undefined
       }
     }

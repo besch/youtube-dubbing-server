@@ -11,11 +11,13 @@ import {
   getLogsAction,
   getLogStatsAction,
   getTimeBasedLogStatsAction,
+  getUniqueIpActivityAction,
 } from "@/app/actions/admin/logs";
 import type {
   PaginatedLogsResponse as AdminPaginatedLogsResponse,
   LogStat as AdminLogStat,
   TimeSeriesStatData,
+  UniqueIpActivityData,
 } from "@/app/actions/admin/logs";
 import type { LogEntry, LogLevel } from "@/lib/logger";
 import { Button } from "@/components/ui/button";
@@ -104,10 +106,18 @@ export default function AdminLogsPage() {
   const [monthlyLogCounts, setMonthlyLogCounts] = useState<
     TimeSeriesStat[] | null
   >(null);
+  const [dailyUniqueIpCounts, setDailyUniqueIpCounts] = useState<
+    UniqueIpActivityData[] | null
+  >(null);
+  const [monthlyUniqueIpCounts, setMonthlyUniqueIpCounts] = useState<
+    UniqueIpActivityData[] | null
+  >(null);
 
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
   const [isLoadingCharts, setIsLoadingCharts] = useState(false);
   const [isLoadingTimeCharts, setIsLoadingTimeCharts] = useState(false);
+  const [isLoadingIpActivityCharts, setIsLoadingIpActivityCharts] =
+    useState(false);
   const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null);
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [activeDateRange, setActiveDateRange] = useState<string | null>(null);
@@ -297,6 +307,80 @@ export default function AdminLogsPage() {
     setIsLoadingTimeCharts(false);
   }, [startDateFilter, endDateFilter]);
 
+  const fetchUniqueIpActivityCounts = useCallback(async () => {
+    if (!startDateFilter || !endDateFilter) {
+      setDailyUniqueIpCounts(null);
+      setMonthlyUniqueIpCounts(null);
+      return;
+    }
+    setIsLoadingIpActivityCharts(true);
+    setDailyUniqueIpCounts(null);
+    setMonthlyUniqueIpCounts(null);
+
+    try {
+      const [dailyResult, monthlyResult] = await Promise.all([
+        getUniqueIpActivityAction({
+          granularity: "day",
+          startDate: startDateFilter.toISOString(),
+          endDate: endDateFilter.toISOString(),
+        }),
+        getUniqueIpActivityAction({
+          granularity: "month",
+          startDate: startDateFilter.toISOString(),
+          endDate: endDateFilter.toISOString(),
+        }),
+      ]);
+
+      if (dailyResult.data) {
+        setDailyUniqueIpCounts(
+          Array.isArray(dailyResult.data) ? [...dailyResult.data] : null
+        );
+      } else if (dailyResult.serverError) {
+        toast.error(
+          `Chart Error (Daily Unique IPs): ${dailyResult.serverError}`
+        );
+        setDailyUniqueIpCounts(null);
+      } else if (dailyResult.validationError) {
+        toast.error(
+          `Validation Error (Daily Unique IPs): ${Object.values(
+            dailyResult.validationError
+          )
+            .flat()
+            .join(", ")}`
+        );
+        setDailyUniqueIpCounts(null);
+      } else {
+        setDailyUniqueIpCounts(null);
+      }
+
+      if (monthlyResult.data) {
+        setMonthlyUniqueIpCounts(
+          Array.isArray(monthlyResult.data) ? [...monthlyResult.data] : null
+        );
+      } else if (monthlyResult.serverError) {
+        toast.error(
+          `Chart Error (Monthly Unique IPs): ${monthlyResult.serverError}`
+        );
+        setMonthlyUniqueIpCounts(null);
+      } else if (monthlyResult.validationError) {
+        toast.error(
+          `Validation Error (Monthly Unique IPs): ${Object.values(
+            monthlyResult.validationError
+          )
+            .flat()
+            .join(", ")}`
+        );
+        setMonthlyUniqueIpCounts(null);
+      } else {
+        setMonthlyUniqueIpCounts(null);
+      }
+    } catch (error) {
+      toast.error("Failed to load unique IP activity counts.");
+      console.error("Unique IP activity counts fetch error:", error);
+    }
+    setIsLoadingIpActivityCharts(false);
+  }, [startDateFilter, endDateFilter]);
+
   useEffect(() => {
     fetchLogs();
   }, [fetchLogs]);
@@ -308,6 +392,10 @@ export default function AdminLogsPage() {
   useEffect(() => {
     fetchTimeBasedLogCounts();
   }, [fetchTimeBasedLogCounts]);
+
+  useEffect(() => {
+    fetchUniqueIpActivityCounts();
+  }, [fetchUniqueIpActivityCounts]);
 
   const handleSetDateRange = (
     rangeKey: string,
@@ -341,6 +429,7 @@ export default function AdminLogsPage() {
       fetchLogs();
       fetchAllChartData();
       fetchTimeBasedLogCounts();
+      fetchUniqueIpActivityCounts();
     });
   };
 
@@ -529,7 +618,9 @@ export default function AdminLogsPage() {
         <h2 className="text-2xl font-semibold tracking-tight">
           Activity Overview
         </h2>
-        {(isLoadingCharts || isLoadingTimeCharts) && (
+        {(isLoadingCharts ||
+          isLoadingTimeCharts ||
+          isLoadingIpActivityCharts) && (
           <p className="text-center text-muted-foreground py-8">
             Loading charts...
           </p>
@@ -637,6 +728,120 @@ export default function AdminLogsPage() {
                   </BarChart>
                 </ResponsiveContainer>
               </CardContent>
+            </Card>
+          )}
+
+        {!isLoadingIpActivityCharts &&
+          dailyUniqueIpCounts &&
+          dailyUniqueIpCounts.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Daily Unique IP Addresses</CardTitle>
+                <CardDescription>
+                  Count of unique IP addresses per day for the selected period.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={350}>
+                  <LineChart
+                    data={dailyUniqueIpCounts}
+                    margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+                  >
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      stroke="hsl(var(--border))"
+                    />
+                    <XAxis
+                      dataKey="date"
+                      tickFormatter={(tick) => format(new Date(tick), "MMM dd")}
+                      stroke="hsl(var(--muted-foreground))"
+                    />
+                    <YAxis stroke="hsl(var(--muted-foreground))" />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "hsl(var(--popover))",
+                        borderColor: "hsl(var(--border))",
+                      }}
+                      labelStyle={{ color: "hsl(var(--popover-foreground))" }}
+                    />
+                    <Legend />
+                    <Line
+                      type="monotone"
+                      dataKey="unique_ip_count"
+                      name="Unique IPs"
+                      stroke={LINE_CHART_STROKE_COLOR}
+                      strokeWidth={2}
+                      dot={{ r: 4 }}
+                      activeDot={{ r: 6 }}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          )}
+        {!isLoadingIpActivityCharts &&
+          (!dailyUniqueIpCounts || dailyUniqueIpCounts.length === 0) && (
+            <Card className="flex items-center justify-center h-48">
+              <p className="text-muted-foreground">
+                No daily unique IP data for selected period.
+              </p>
+            </Card>
+          )}
+
+        {!isLoadingIpActivityCharts &&
+          monthlyUniqueIpCounts &&
+          monthlyUniqueIpCounts.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Monthly Unique IP Addresses</CardTitle>
+                <CardDescription>
+                  Count of unique IP addresses per month for the selected
+                  period.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={350}>
+                  <BarChart
+                    data={monthlyUniqueIpCounts}
+                    margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+                  >
+                    <CartesianGrid
+                      strokeDasharray="3 3"
+                      stroke="hsl(var(--border))"
+                    />
+                    <XAxis
+                      dataKey="date"
+                      tickFormatter={(tick) =>
+                        format(new Date(tick + "-01"), "MMM yyyy")
+                      }
+                      stroke="hsl(var(--muted-foreground))"
+                    />
+                    <YAxis stroke="hsl(var(--muted-foreground))" />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: "hsl(var(--popover))",
+                        borderColor: "hsl(var(--border))",
+                      }}
+                      labelStyle={{ color: "hsl(var(--popover-foreground))" }}
+                    />
+                    <Legend />
+                    <Bar
+                      dataKey="unique_ip_count"
+                      name="Unique IPs"
+                      fill={BAR_CHART_FILL_COLOR}
+                      radius={[4, 4, 0, 0]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          )}
+        {!isLoadingIpActivityCharts &&
+          (!monthlyUniqueIpCounts || monthlyUniqueIpCounts.length === 0) && (
+            <Card className="flex items-center justify-center h-48">
+              <p className="text-muted-foreground">
+                No monthly unique IP data for selected period.
+              </p>
             </Card>
           )}
 

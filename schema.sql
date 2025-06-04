@@ -1023,3 +1023,33 @@ GRANT EXECUTE ON FUNCTION public.get_log_stats(timestamptz, timestamptz, text) T
 
     -- Grant execute to the authenticated role (or service_role if called by admin actions)
     GRANT EXECUTE ON FUNCTION public.get_logs_by_time_granularity(timestamptz, timestamptz, text) TO service_role;
+
+-- START: New function for unique IP activity
+CREATE OR REPLACE FUNCTION public.get_unique_ip_activity(
+    p_start_date timestamptz,
+    p_end_date timestamptz,
+    p_granularity text -- 'day', 'month', 'year'
+)
+RETURNS TABLE(time_bucket timestamptz, unique_ip_count bigint)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        date_trunc(p_granularity, al.created_at) as time_bucket,
+        COUNT(DISTINCT al.ip_address) as unique_ip_count
+    FROM
+        public.app_logs al
+    WHERE
+        al.ip_address IS NOT NULL AND
+        (p_start_date IS NULL OR al.created_at >= p_start_date) AND
+        (p_end_date IS NULL OR al.created_at <= p_end_date)
+    GROUP BY
+        time_bucket
+    ORDER BY
+        time_bucket ASC;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.get_unique_ip_activity(timestamptz, timestamptz, text) TO service_role;
+-- END: New function for unique IP activity

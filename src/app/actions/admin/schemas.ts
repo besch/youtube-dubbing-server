@@ -54,3 +54,16 @@ export interface TimeSeriesStatData {
   date: string; // ISO string from date_trunc, e.g., "2023-10-26T00:00:00.000Z"
   count: number;
 }
+
+// Schema for unique IP activity action
+export const getUniqueIpActivitySchema = z.object({
+  startDate: z.string().datetime({ offset: true }).optional(),
+  endDate: z.string().datetime({ offset: true }).optional(),
+  granularity: z.enum(["day", "month", "year"]),
+});
+
+// Interface for data returned by getUniqueIpActivityAction
+export interface UniqueIpActivityData {
+  date: string; // ISO string from date_trunc
+  unique_ip_count: number;
+}

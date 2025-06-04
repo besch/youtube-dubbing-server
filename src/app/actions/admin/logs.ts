@@ -18,10 +18,13 @@ import {
   type LogStat,
   getTimeBasedLogStatsSchema,
   type TimeSeriesStatData,
+  getUniqueIpActivitySchema,
+  type UniqueIpActivityData,
 } from "./schemas";
 
 export type { LogStat }; // Re-export LogStat
 export type { TimeSeriesStatData }; // Re-export TimeSeriesStatData
+export type { UniqueIpActivityData }; // Re-export UniqueIpActivityData
 
 // Helper function to get Supabase admin client (remains unchanged if used for direct DB ops)
 function getSupabaseAdminClient() {
@@ -215,10 +218,10 @@ export const getTimeBasedLogStatsAction = action(
     const supabase = getSupabaseAdminClient();
 
     const { data, error } = await supabase.rpc("get_logs_by_time_granularity", {
-      p_start_date: startDate,
-      p_end_date: endDate,
       p_granularity: granularity,
-    });
+      p_start_date: startDate === undefined ? null : startDate,
+      p_end_date: endDate === undefined ? null : endDate,
+    } as any);
 
     if (error) {
       console.error(
@@ -274,5 +277,47 @@ export const getLogByIdAction = action(
       );
     }
     return data as LogEntry | null;
+  }
+);
+
+export const getUniqueIpActivityAction = action(
+  getUniqueIpActivitySchema,
+  async (parsedInput) => {
+    const { startDate, endDate, granularity } = parsedInput;
+    const supabase = getSupabaseAdminClient();
+
+    const { data, error } = await supabase.rpc("get_unique_ip_activity", {
+      p_granularity: granularity,
+      p_start_date: startDate === undefined ? null : startDate,
+      p_end_date: endDate === undefined ? null : endDate,
+    } as any);
+
+    if (error) {
+      console.error(
+        `Error fetching unique IP activity (granularity: ${granularity}):`,
+        error
+      );
+      throw new AppError(
+        error.message,
+        appErrors.DATABASE_ERROR.code,
+        appErrors.DATABASE_ERROR.statusCode
+      );
+    }
+
+    if (!data) {
+      console.warn(
+        `No data returned from get_unique_ip_activity for ${granularity} between ${startDate} and ${endDate}`
+      );
+      return [];
+    }
+
+    // Ensure the RPC response matches the expected structure for UniqueIpActivityData
+    // The SQL function returns time_bucket and unique_ip_count
+    const transformedData: UniqueIpActivityData[] = data.map((item: any) => ({
+      date: item.time_bucket, // time_bucket is already a string from date_trunc
+      unique_ip_count: Number(item.unique_ip_count),
+    }));
+
+    return transformedData;
   }
 );
