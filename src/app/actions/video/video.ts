@@ -129,9 +129,9 @@ export const getVideoByUrl = videoAction(
       videoActionsLogger.error(actionName, {
         user_id: userId,
         ip_address: ipAddress,
+        request_payload: { youtubeUrl },
         error_code: AppErrorCode[appErr.code],
         error_message: appErr.message,
-        request_payload: { youtubeUrl },
         stack_trace: appErr.stack,
         duration_ms: durationMs,
         response_status_code: getStatusCodeFromAppError(appErr.code),
@@ -147,6 +147,7 @@ export const getVideoByUrl = videoAction(
       videoActionsLogger.debug(actionName, {
         user_id: userId,
         ip_address: ipAddress,
+        request_payload: { youtubeUrl },
         metadata: {
           custom_message: "Fetching oEmbed metadata",
           oembedUrl,
@@ -160,6 +161,7 @@ export const getVideoByUrl = videoAction(
         videoActionsLogger.warn(actionName, {
           user_id: userId,
           ip_address: ipAddress,
+          request_payload: { youtubeUrl },
           response_status_code: oembedResponse.status, // Log actual oEmbed status
           duration_ms: durationMs,
           metadata: {
@@ -178,6 +180,7 @@ export const getVideoByUrl = videoAction(
       videoActionsLogger.info(actionName, {
         user_id: userId,
         ip_address: ipAddress,
+        request_payload: { youtubeUrl },
         duration_ms: durationMs,
         response_status_code: 200, // Overall action success
         metadata: {
@@ -209,9 +212,9 @@ export const getVideoByUrl = videoAction(
       videoActionsLogger.error(actionName, {
         user_id: userId,
         ip_address: ipAddress,
+        request_payload: { youtubeUrl, youtubeId_extracted: youtubeId },
         error_code: AppErrorCode[appErr.code],
         error_message: appErr.message,
-        request_payload: { youtubeUrl, youtubeId_extracted: youtubeId },
         stack_trace: appErr.stack,
         duration_ms: durationMs,
         response_status_code: getStatusCodeFromAppError(appErr.code),

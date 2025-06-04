@@ -107,10 +107,9 @@ export const fetchYouTubeSubtitles = youtubeSubtitleAction(
     youtubeSubtitleLogger.info(actionName, {
       user_id: userId,
       ip_address: ipAddress,
+      request_payload: { youtubeUrl, languageCode },
       metadata: {
         custom_message: "Attempting to fetch YouTube subtitles.",
-        youtubeUrl,
-        languageCode,
       },
     });
 
@@ -124,6 +123,7 @@ export const fetchYouTubeSubtitles = youtubeSubtitleAction(
       youtubeSubtitleLogger.error(actionName, {
         user_id: userId,
         ip_address: ipAddress,
+        request_payload: { youtubeUrl, languageCode },
         error_code: AppErrorCode[configError.code],
         error_message: configError.message,
         duration_ms: durationMs,
@@ -136,7 +136,8 @@ export const fetchYouTubeSubtitles = youtubeSubtitleAction(
     youtubeSubtitleLogger.debug(actionName, {
       user_id: userId,
       ip_address: ipAddress,
-      metadata: { endpoint, youtubeUrl, languageCode },
+      request_payload: { youtubeUrl, languageCode },
+      metadata: { endpoint },
     });
 
     const controller = new AbortController();
@@ -144,12 +145,11 @@ export const fetchYouTubeSubtitles = youtubeSubtitleAction(
       youtubeSubtitleLogger.warn(actionName, {
         user_id: userId,
         ip_address: ipAddress,
+        request_payload: { youtubeUrl, languageCode },
         metadata: {
           custom_message:
             "Subtitle downloader service request timed out (60s).",
           endpoint,
-          youtubeUrl,
-          languageCode,
         },
       });
       controller.abort();
@@ -187,10 +187,11 @@ export const fetchYouTubeSubtitles = youtubeSubtitleAction(
         youtubeSubtitleLogger.error(actionName, {
           user_id: userId,
           ip_address: ipAddress,
+          request_payload: { youtubeUrl, languageCode },
           error_code: AppErrorCode[serviceError.code],
           error_message: serviceError.message,
           response_status_code: response.status,
-          metadata: { errorBody, endpoint, youtubeUrl, languageCode },
+          metadata: { errorBody, endpoint },
         });
         return { success: false, error: serviceError };
       }
@@ -208,12 +209,11 @@ export const fetchYouTubeSubtitles = youtubeSubtitleAction(
       youtubeSubtitleLogger.info(actionName, {
         user_id: userId,
         ip_address: ipAddress,
+        request_payload: { youtubeUrl, languageCode },
         duration_ms: durationMs,
         response_status_code: 200,
         metadata: {
           custom_message: "Successfully fetched YouTube subtitles.",
-          youtubeUrl,
-          languageCode,
           srtLength: srtContent.length,
         },
       });
@@ -254,6 +254,7 @@ export const fetchYouTubeSubtitles = youtubeSubtitleAction(
       youtubeSubtitleLogger.error(actionName, {
         user_id: userId,
         ip_address: ipAddress,
+        request_payload: { youtubeUrl, languageCode },
         error_code: AppErrorCode[appErr.code],
         error_message: appErr.message,
         stack_trace: appErr.stack,

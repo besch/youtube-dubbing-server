@@ -59,9 +59,29 @@ async function logToSupabase(entry: LogEntry): Promise<void> {
   // Create a copy of the entry to avoid mutating the original object passed by the caller
   const entryToSave = { ...entry };
 
-  // Remove request_payload before saving to the database
-  if ("request_payload" in entryToSave) {
-    delete entryToSave.request_payload;
+  // Sanitize request_payload to remove sensitive data while keeping useful debugging info
+  if (
+    entryToSave.request_payload &&
+    typeof entryToSave.request_payload === "object"
+  ) {
+    const sanitized = { ...(entryToSave.request_payload as any) };
+
+    // Remove potentially sensitive fields
+    const sensitiveFields = [
+      "password",
+      "token",
+      "apikey",
+      "api_key",
+      "secret",
+      "authorization",
+    ];
+    sensitiveFields.forEach((field) => {
+      if (field in sanitized) {
+        sanitized[field] = "[REDACTED]";
+      }
+    });
+
+    entryToSave.request_payload = sanitized;
   }
 
   try {
@@ -73,16 +93,16 @@ async function logToSupabase(entry: LogEntry): Promise<void> {
       console.error(
         "Failed to insert log into Supabase:",
         error,
-        "Original entry (before removing payload):",
-        entry // Log original entry for debugging if needed
+        "Entry:",
+        entryToSave
       );
     }
   } catch (e) {
     console.error(
       "Exception while inserting log into Supabase:",
       e,
-      "Original entry (before removing payload):",
-      entry // Log original entry for debugging if needed
+      "Entry:",
+      entryToSave
     );
   }
 }

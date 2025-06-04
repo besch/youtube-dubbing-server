@@ -120,11 +120,9 @@ export const searchMovies = movieAction(
     movieSearchLogger.info(actionName, {
       user_id: userId,
       ip_address: ipAddress,
-      // request_payload: { text, page }, // Will be stripped by logger
+      request_payload: { text, page },
       metadata: {
         custom_message: "Attempting to search movies on OMDB.",
-        text,
-        page,
       },
     });
 
@@ -137,6 +135,7 @@ export const searchMovies = movieAction(
       movieSearchLogger.error(actionName, {
         user_id: userId,
         ip_address: ipAddress,
+        request_payload: { text, page },
         error_code: AppErrorCode[configError.code],
         error_message: configError.message,
         duration_ms: durationMs,
@@ -149,7 +148,8 @@ export const searchMovies = movieAction(
       movieSearchLogger.debug(actionName, {
         user_id: userId,
         ip_address: ipAddress,
-        metadata: { custom_message: `Searching OMDB.`, text, page },
+        request_payload: { text, page },
+        metadata: { custom_message: `Searching OMDB.` },
       });
 
       const response = await fetch(
@@ -168,6 +168,7 @@ export const searchMovies = movieAction(
         movieSearchLogger.error(actionName, {
           user_id: userId,
           ip_address: ipAddress,
+          request_payload: { text, page },
           error_code: AppErrorCode[serviceError.code],
           error_message: serviceError.message,
           response_status_code: response.status, // Actual OMDB response status
@@ -184,12 +185,11 @@ export const searchMovies = movieAction(
           movieSearchLogger.info(actionName, {
             user_id: userId,
             ip_address: ipAddress,
+            request_payload: { text, page },
             duration_ms: durationMs,
             response_status_code: 200, // Action is success, though OMDB found nothing
             metadata: {
               custom_message: "OMDB: Movie not found.",
-              query: text,
-              page,
               omdb_response_status: data.Response,
               omdb_error_message: data.Error,
             },
@@ -207,12 +207,11 @@ export const searchMovies = movieAction(
       movieSearchLogger.info(actionName, {
         user_id: userId,
         ip_address: ipAddress,
+        request_payload: { text, page },
         duration_ms: durationMs,
         response_status_code: 200,
         metadata: {
           custom_message: "OMDB search successful.",
-          query: text,
-          page,
           total_results: data.totalResults,
           received_count: data.Search?.length,
         },
@@ -243,6 +242,7 @@ export const searchMovies = movieAction(
       movieSearchLogger.error(actionName, {
         user_id: userId,
         ip_address: ipAddress,
+        request_payload: { text, page },
         error_code: AppErrorCode[appErr.code],
         error_message: appErr.message,
         stack_trace: appErr.stack,

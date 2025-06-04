@@ -104,12 +104,9 @@ export const fetchSubtitles = subtitleAction(
     subtitleFetchLogger.info(actionName, {
       user_id: userId,
       ip_address: ipAddress,
+      request_payload: { imdbID, languageCode, seasonNumber, episodeNumber },
       metadata: {
         custom_message: "Attempting to fetch movie/show subtitles.",
-        imdbID,
-        languageCode,
-        seasonNumber,
-        episodeNumber,
       },
     });
 
@@ -135,14 +132,11 @@ export const fetchSubtitles = subtitleAction(
       subtitleFetchLogger.info(actionName, {
         user_id: userId,
         ip_address: ipAddress,
+        request_payload: { imdbID, languageCode, seasonNumber, episodeNumber },
         duration_ms: durationMs,
         response_status_code: 200,
         metadata: {
           custom_message: "Successfully fetched/generated subtitles.",
-          imdbID,
-          languageCode,
-          seasonNumber,
-          episodeNumber,
           generated,
           srtLength: content.length,
         },
@@ -169,6 +163,7 @@ export const fetchSubtitles = subtitleAction(
       subtitleFetchLogger.error(actionName, {
         user_id: userId,
         ip_address: ipAddress,
+        request_payload: { imdbID, languageCode, seasonNumber, episodeNumber },
         error_code: AppErrorCode[appErr.code],
         error_message: appErr.message,
         stack_trace: appErr.stack,

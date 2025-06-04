@@ -119,7 +119,6 @@ export const generateAudioChunk = audioAction(
     audioLogger.info(actionName, {
       user_id: userId,
       ip_address: ipAddress,
-      metadata: { custom_message: "Attempting to generate audio chunk." },
       request_payload: {
         language,
         voice,
@@ -127,6 +126,7 @@ export const generateAudioChunk = audioAction(
         endTime,
         textLength: text.length,
       },
+      metadata: { custom_message: "Attempting to generate audio chunk." },
     });
 
     let textToSynthesize: string = text.trim();
@@ -173,6 +173,13 @@ export const generateAudioChunk = audioAction(
         audioLogger.error(actionName, {
           user_id: userId,
           ip_address: ipAddress,
+          request_payload: {
+            language,
+            voice,
+            startTime,
+            endTime,
+            textLength: text.length,
+          },
           error_code: AppErrorCode[invalidInputError.code],
           error_message: invalidInputError.message,
           duration_ms: durationMs,
@@ -199,6 +206,13 @@ export const generateAudioChunk = audioAction(
         audioLogger.error(actionName, {
           user_id: userId,
           ip_address: ipAddress,
+          request_payload: {
+            language,
+            voice,
+            startTime,
+            endTime,
+            textLength: text.length,
+          },
           error_code: AppErrorCode[AppErrorCode.UNEXPECTED_ERROR],
           error_message: `Failed to fetch user profile: ${profileError.message}`,
           duration_ms: Date.now() - actionStartTime,
@@ -222,13 +236,18 @@ export const generateAudioChunk = audioAction(
         audioLogger.warn(actionName, {
           user_id: userId,
           ip_address: ipAddress,
+          request_payload: {
+            language,
+            voice,
+            startTime,
+            endTime,
+            textLength: text.length,
+          },
           error_code: AppErrorCode[forbiddenError.code],
           error_message: forbiddenError.message,
           duration_ms: durationMs,
           response_status_code: getStatusCodeFromAppError(forbiddenError.code),
           metadata: {
-            language,
-            voice,
             subscription_status: profile?.subscription_status || "unknown",
           },
         });
@@ -246,13 +265,19 @@ export const generateAudioChunk = audioAction(
       audioLogger.warn(actionName, {
         user_id: userId,
         ip_address: ipAddress,
+        request_payload: {
+          language,
+          voice,
+          startTime,
+          endTime,
+          textLength: text.length,
+        },
         error_code: AppErrorCode[unauthenticatedError.code],
         error_message: unauthenticatedError.message,
         duration_ms: durationMs,
         response_status_code: getStatusCodeFromAppError(
           unauthenticatedError.code
         ),
-        metadata: { language, voice },
       });
       return {
         success: false,
@@ -269,6 +294,13 @@ export const generateAudioChunk = audioAction(
       audioLogger.error(actionName, {
         user_id: userId,
         ip_address: ipAddress,
+        request_payload: {
+          language,
+          voice,
+          startTime,
+          endTime,
+          textLength: text.length,
+        },
         error_code: AppErrorCode[providerError.code],
         error_message: providerError.message,
         duration_ms: durationMs,
@@ -284,10 +316,15 @@ export const generateAudioChunk = audioAction(
       audioLogger.debug(actionName, {
         user_id: userId,
         ip_address: ipAddress,
-        metadata: {
-          custom_message: "Starting direct TTS generation.",
+        request_payload: {
           language,
           voice,
+          startTime,
+          endTime,
+          textLength: text.length,
+        },
+        metadata: {
+          custom_message: "Starting direct TTS generation.",
           ttsProvider,
           textSnippet: textToSynthesize.substring(0, 50),
         },
@@ -302,6 +339,13 @@ export const generateAudioChunk = audioAction(
         audioLogger.error(actionName, {
           user_id: userId,
           ip_address: ipAddress,
+          request_payload: {
+            language,
+            voice,
+            startTime,
+            endTime,
+            textLength: text.length,
+          },
           error_code: AppErrorCode[noTextError.code],
           error_message: noTextError.message,
           duration_ms: durationMs,
@@ -338,12 +382,17 @@ export const generateAudioChunk = audioAction(
       audioLogger.info(actionName, {
         user_id: userId,
         ip_address: ipAddress,
+        request_payload: {
+          language,
+          voice,
+          startTime,
+          endTime,
+          textLength: text.length,
+        },
         duration_ms: durationMs,
         response_status_code: 200,
         metadata: {
           custom_message: "TTS generation successful.",
-          language,
-          voice,
           mimeType,
           audioLengthBase64: audioBase64.length,
         },
@@ -363,6 +412,13 @@ export const generateAudioChunk = audioAction(
       audioLogger.error(actionName, {
         user_id: userId,
         ip_address: ipAddress,
+        request_payload: {
+          language,
+          voice,
+          startTime,
+          endTime,
+          textLength: text.length,
+        },
         error_code: AppErrorCode[appErr.code],
         error_message: appErr.message,
         stack_trace: appErr.stack,
