@@ -20,7 +20,7 @@ export default function HomePage() {
           </div>
 
           <h1 className="text-4xl leading-loose sm:text-5xl sm:leading-loose md:text-6xl md:leading-loose font-extrabold tracking-tight mb-4 bg-clip-text text-transparent bg-gradient-to-r from-violet-400 via-purple-500 to-orange-500">
-            AI Dubbing for YouTube
+            AI Dubbing for YouTube, Movies and TV Shows
           </h1>
           <p className="text-lg sm:text-xl text-neutral-300/80 max-w-2xl mx-auto mb-10">
             Experience YouTube videos in your preferred language and voice with
