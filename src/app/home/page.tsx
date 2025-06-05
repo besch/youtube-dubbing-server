@@ -72,25 +72,13 @@ export default function HomePage() {
               </div>
             </div>
           </div>
-
-          {/* TODO: Add a mobile app screenshot here */}
-          {/* <div className="relative w-full aspect-video max-w-3xl mx-auto rounded-xl overflow-hidden shadow-2xl border border-neutral-700/50">
-            <Image
-              src="/images/demo-screenshot.png" // This image does not exist
-              alt="YouTube Dubbing App Screenshot"
-              fill
-              priority
-              className="object-cover object-center"
-              sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
-            />
-          </div> */}
         </div>
       </main>
 
       <footer className="text-center p-6 text-sm text-neutral-500 space-x-4">
         <span>
-          &copy; {new Date().getFullYear()} YouTube Dubbing. All rights
-          reserved.
+          &copy; {new Date().getFullYear()} Dubabase. Movie and YouTube Dubbing.
+          All rights reserved.
         </span>
         <span className="text-neutral-600">|</span>
         <Link

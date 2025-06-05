@@ -1,8 +1,7 @@
 export default function PrivacyPolicyPage() {
   const lastUpdated = "January 1, 2024"; // TODO: Update this date
-  const companyName = "YouTube Dubbing"; // TODO: Confirm Company Name
-  const companyAddress = "YouTube Dubbing Address Placeholder"; // TODO: Add Company Address
-  const contactEmail = "contact@youtubedubbing.vercel.app"; // Updated domain
+  const companyName = "Dubabase"; // TODO: Confirm Company Name
+  const contactEmail = "contact@dubabase.com"; // Updated domain
   const country = "United States"; // TODO: Confirm Country
 
   return (
@@ -64,7 +63,7 @@ export default function PrivacyPolicyPage() {
             <li>
               <strong>Company</strong> (referred to as either &quot;the
               Company&quot;, &quot;We&quot;, &quot;Us&quot; or &quot;Our&quot;
-              in this Agreement) refers to {companyName},{companyAddress}.
+              in this Agreement) refers to {companyName}.
             </li>
             <li>
               <strong>Country</strong> refers to: {country}.
