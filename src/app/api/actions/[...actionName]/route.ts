@@ -6,6 +6,7 @@ import { fetchYouTubeSubtitles } from "@/app/actions/subtitle/fetch-youtube";
 import { AppError, AppErrorCode } from "@/app/actions/actions";
 import { generateAudioChunk } from "@/app/actions/audio/generation";
 import { checkVideoLimit } from "@/app/actions/subscription";
+import { logTtsStatisticsAction } from "@/app/actions/admin/logs";
 import { validateExtensionRequest, setCorsHeaders } from "@/lib/extension-auth";
 
 type ActionFunction = (input: any) => Promise<any>;
@@ -27,6 +28,7 @@ const actionRegistry: Record<string, ActionFunction> = {
   "subtitle/fetch": fetchSubtitles,
   "subtitle/fetch-youtube": fetchYouTubeSubtitles,
   "subscription/checkVideoLimit": checkVideoLimit,
+  "admin/logTtsStatistics": logTtsStatisticsAction,
 };
 
 // Handle CORS preflight requests
@@ -192,7 +194,11 @@ export async function POST(request: NextRequest) {
 
     // If no errors, assume success and return data
     if (result.data) {
-      return createCorsResponse(result.data, 200, requestOrigin);
+      return createCorsResponse(
+        { success: true, data: result.data },
+        200,
+        requestOrigin
+      );
     } else {
       console.error(
         `API Route: Action ${actionPath} succeeded but returned no data.`

@@ -9,6 +9,7 @@ import type { Database } from "@/types/supabase";
 import type { ActionResponse } from "@/types/actions";
 import { AppError, appErrors } from "@/lib/errors";
 import type { LogEntry, LogLevel } from "@/lib/logger";
+import { createLogger } from "@/lib/logger"; // Import logger
 import { createClient as createSupabaseClient } from "@supabase/supabase-js"; // Specific import for admin client
 import { ADMIN_EMAIL } from "@/config/constants"; // Import ADMIN_EMAIL
 import {
@@ -66,6 +67,7 @@ function getSupabaseAdminClient() {
 interface MiddlewareContext {
   isAdmin: boolean;
   userId: string;
+  ipAddress?: string;
 }
 
 async function isAdminUser(user: User | null): Promise<boolean> {
@@ -126,7 +128,19 @@ const action = createSafeActionClient({
         appErrors.FORBIDDEN.statusCode
       );
     }
-    return { isAdmin: true, userId: user.id };
+
+    // Try to get IP address from headers (for API route usage)
+    const headers =
+      cookieStore.constructor.name === "RequestCookies"
+        ? (cookieStore as any).request?.headers
+        : null;
+    const ipAddress =
+      headers?.get("x-forwarded-for")?.split(",")[0] ||
+      headers?.get("x-real-ip") ||
+      headers?.get("cf-connecting-ip") ||
+      undefined;
+
+    return { isAdmin: true, userId: user.id, ipAddress };
   },
   handleReturnedServerError(e: Error) {
     if (e instanceof AppError) {
@@ -616,6 +630,174 @@ export const getFilteredLogsAction = action(
       totalCount: count || 0,
       totalPages: Math.ceil((count || 0) / limit),
       currentPage: page,
+    };
+  }
+);
+
+// Add new schema for TTS statistics logging
+const logTtsStatisticsSchema = z.object({
+  totalUtterances: z.number().int().min(0),
+  totalDurationMs: z.number().min(0),
+  successfulUtterances: z.number().int().min(0),
+  failedUtterances: z.number().int().min(0),
+  languageUsage: z.record(z.string(), z.number().int().min(0)),
+  voiceUsage: z.record(z.string(), z.number().int().min(0)),
+  averageUtteranceDuration: z.number().min(0),
+  sessionStartTime: z.number(),
+  sessionEndTime: z.number().optional(),
+  sessionDurationMs: z.number().min(0).optional(),
+  currentUrl: z.string().url().optional(),
+  videoId: z.string().optional(), // YouTube video ID or movie ID
+});
+
+// Create a separate action client for TTS statistics (no admin required)
+const publicAction = createSafeActionClient({
+  async middleware() {
+    const cookieStore = cookies();
+    const supabase = createServerClient<Database>(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          get(name: string) {
+            return cookieStore.get(name)?.value;
+          },
+          set(name: string, value: string, options: any) {
+            cookieStore.set({ name, value, ...options });
+          },
+          remove(name: string, options: any) {
+            cookieStore.set({ name, value: "", ...options });
+          },
+        },
+      }
+    );
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabase.auth.getUser();
+
+    if (userError || !user) {
+      throw new AppError(
+        "User is not authenticated.",
+        appErrors.UNAUTHORIZED.code,
+        appErrors.UNAUTHORIZED.statusCode
+      );
+    }
+
+    return { userId: user.id, ipAddress: undefined };
+  },
+  handleReturnedServerError(e: Error) {
+    if (e instanceof AppError) {
+      return {
+        serverError: e.message,
+        errorCode: e.code,
+      };
+    }
+    console.error("Unhandled error in TTS statistics action:", e);
+    return {
+      serverError: appErrors.UNEXPECTED_ERROR.message,
+      errorCode: appErrors.UNEXPECTED_ERROR.code,
+    };
+  },
+});
+
+export const logTtsStatisticsAction = publicAction(
+  logTtsStatisticsSchema,
+  async (parsedInput, { userId, ipAddress }) => {
+    const {
+      totalUtterances,
+      totalDurationMs,
+      successfulUtterances,
+      failedUtterances,
+      languageUsage,
+      voiceUsage,
+      averageUtteranceDuration,
+      sessionStartTime,
+      sessionEndTime,
+      sessionDurationMs,
+      currentUrl,
+      videoId,
+    } = parsedInput;
+
+    // Calculate derived metrics
+    const actualSessionDuration =
+      sessionDurationMs ||
+      (sessionEndTime ? sessionEndTime - sessionStartTime : 0);
+    const errorRate =
+      totalUtterances > 0 ? (failedUtterances / totalUtterances) * 100 : 0;
+    const successRate =
+      totalUtterances > 0 ? (successfulUtterances / totalUtterances) * 100 : 0;
+
+    // Prepare log entry for TTS statistics
+    const logEntry: LogEntry = {
+      log_level: "INFO",
+      service_name: "tts",
+      action_name: "local_tts_session_complete",
+      user_id: userId,
+      ip_address: ipAddress,
+      duration_ms: actualSessionDuration,
+      request_payload: {
+        totalUtterances,
+        totalDurationMs,
+        successfulUtterances,
+        failedUtterances,
+        languageUsage,
+        voiceUsage,
+        averageUtteranceDuration,
+        sessionStartTime,
+        sessionEndTime,
+        sessionDurationMs: actualSessionDuration,
+        currentUrl,
+        videoId,
+      },
+      response_payload: {
+        errorRate: Math.round(errorRate * 100) / 100, // Round to 2 decimals
+        successRate: Math.round(successRate * 100) / 100,
+        utterancesPerMinute:
+          actualSessionDuration > 0
+            ? Math.round(
+                (totalUtterances / (actualSessionDuration / 60000)) * 100
+              ) / 100
+            : 0,
+        avgDurationPerUtterance: averageUtteranceDuration,
+      },
+      metadata: {
+        isLocalTts: true,
+        primaryLanguage:
+          Object.keys(languageUsage).length > 0
+            ? Object.keys(languageUsage).reduce(
+                (a, b) => (languageUsage[a] > languageUsage[b] ? a : b),
+                Object.keys(languageUsage)[0]
+              )
+            : undefined,
+        primaryVoice:
+          Object.keys(voiceUsage).length > 0
+            ? Object.keys(voiceUsage).reduce(
+                (a, b) => (voiceUsage[a] > voiceUsage[b] ? a : b),
+                Object.keys(voiceUsage)[0]
+              )
+            : undefined,
+        totalLanguages: Object.keys(languageUsage).length,
+        totalVoices: Object.keys(voiceUsage).length,
+      },
+      tags: ["tts", "local", "dubbing", "statistics"],
+    };
+
+    // Use the logger to save the entry
+    const logger = createLogger("tts");
+    await logger.info("Local TTS session completed", logEntry);
+
+    return {
+      logged: true,
+      sessionSummary: {
+        totalUtterances,
+        successRate,
+        errorRate,
+        sessionDurationMs: actualSessionDuration,
+        primaryLanguage: (logEntry.metadata as any)?.primaryLanguage,
+        primaryVoice: (logEntry.metadata as any)?.primaryVoice,
+      },
     };
   }
 );

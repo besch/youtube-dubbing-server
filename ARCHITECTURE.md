@@ -452,3 +452,103 @@ This revised flow removes the `LanguageSelectionPage.tsx` and streamlines the pr
   - Allows free users to _select_ premium voices (stores in Redux state), but the `generateAudioChunk` server action will block their use if the user is not premium.
   - A warning is displayed on the settings page if a non-premium user selects a premium voice.
 - No trial-related UI or logic.
+
+## 8. TTS Statistics Logging
+
+### 8.1. Overview
+
+The system now includes comprehensive statistics collection and logging for local Chrome TTS usage. This provides analytics to understand user behavior and TTS performance across different languages, voices, and usage patterns.
+
+### 8.2. Implementation Components
+
+**Chrome Extension Components:**
+
+1. **TtsManager Statistics Collection (`extension/src/extension/content/TtsManager.ts`):**
+
+   - Tracks utterance counts, durations, success/failure rates
+   - Records language and voice usage patterns
+   - Measures session timing and performance metrics
+   - Provides methods to get and clear statistics
+
+2. **DubbingManager Integration (`extension/src/extension/content/DubbingManager.ts`):**
+
+   - Exposes methods to retrieve TTS statistics from TtsManager
+   - Automatically collects statistics when dubbing stops
+   - Returns statistics as part of the stop operation
+
+3. **Content Script Response (`extension/src/extension/content.ts`):**
+
+   - Includes TTS statistics in the response when stopping dubbing
+   - Passes statistics from DubbingManager to the popup
+
+4. **Popup UI Integration (`extension/src/pages/DubbingPage.tsx`):**
+   - Collects TTS statistics when user clicks "Stop Dubbing"
+   - Sends statistics to server via API call
+   - Includes contextual information (current URL, video ID)
+
+**Server Components:**
+
+5. **Server Action (`server/src/app/actions/admin/logs.ts`):**
+
+   - `logTtsStatisticsAction`: Processes and logs TTS statistics
+   - Calculates derived metrics (error rates, usage patterns)
+   - Stores comprehensive log entries in the database
+
+6. **API Route Integration (`server/src/app/api/actions/[...actionName]/route.ts`):**
+   - Exposes `admin/logTtsStatistics` endpoint
+   - Handles authentication and request validation
+
+### 8.3. Data Collection
+
+**Statistics Tracked:**
+
+- Total utterances attempted and completed
+- Success vs. failure rates
+- Session duration and timing metrics
+- Language usage patterns by frequency
+- Voice usage patterns by frequency
+- Average utterance duration
+- Session context (URL, video ID)
+
+**Derived Analytics:**
+
+- Error rates and success rates
+- Utterances per minute (usage intensity)
+- Primary language and voice preferences
+- Session activity patterns
+
+### 8.4. Data Flow
+
+1. **Collection Phase:**
+
+   - TtsManager tracks statistics during active dubbing session
+   - Statistics accumulate across all TTS operations
+   - Timing and performance data recorded in real-time
+
+2. **Transmission Phase:**
+
+   - User clicks "Stop Dubbing" in extension popup
+   - DubbingManager collects final statistics from TtsManager
+   - Content script returns statistics in stop response
+   - Popup sends statistics to server via API
+
+3. **Storage Phase:**
+   - Server validates and processes statistics
+   - Calculates additional metrics and insights
+   - Stores structured log entry in `app_logs` table
+   - Data available for admin dashboard analytics
+
+### 8.5. Benefits
+
+- **User Behavior Insights:** Understanding language preferences and usage patterns
+- **Performance Monitoring:** Tracking TTS success rates and error patterns
+- **Feature Usage:** Measuring adoption of different voices and modes
+- **Quality Metrics:** Identifying common failure scenarios
+- **Usage Analytics:** Understanding session lengths and user engagement
+
+### 8.6. Privacy & Security
+
+- Statistics are only collected for authenticated users
+- No sensitive personal data is stored in statistics
+- URL and video IDs provide context without exposing private content
+- Data used for aggregate analytics and system improvement
