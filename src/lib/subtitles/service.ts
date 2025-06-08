@@ -3,7 +3,7 @@ import type {
   SubtitleDownloadResult,
   SubtitleFetchOptions,
 } from "@/types/subtitles";
-import { translateSubtitles } from "@/lib/subtitles";
+import { translateSubtitles } from "./translate";
 
 import { SubdlApiClient } from "./api-client";
 import { downloadAndExtractSubtitle } from "./downloader";
