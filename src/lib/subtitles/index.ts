@@ -20,8 +20,6 @@ export {
   buildFallbackLanguageQueryString,
   buildAllLanguagesQueryString,
   getLanguageSearchStrategy,
-  buildSubdlUrl,
-  redactApiKey,
   insertNewLineIfWrongFormattedSRT,
   isTargetLanguage,
   logSubtitleOperation,

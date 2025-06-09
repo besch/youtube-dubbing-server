@@ -77,6 +77,8 @@ const subtitleAction = createSafeActionClient({
 
 const fetchSubtitlesSchema = z.object({
   imdbID: z.string().min(1, { message: "IMDb ID cannot be empty" }),
+  title: z.string().min(1, { message: "Movie title cannot be empty" }),
+  year: z.string().optional(),
   languageCode: z
     .string()
     .length(2, { message: "Language code must be 2 characters" }),
@@ -98,13 +100,21 @@ export const fetchSubtitles = subtitleAction(
     { userId, ipAddress }: ActionContext
   ): Promise<ActionResponse<FetchSubtitlesOutput>> => {
     const actionStartTime = Date.now();
-    const { imdbID, languageCode, seasonNumber, episodeNumber } = input;
+    const { imdbID, title, year, languageCode, seasonNumber, episodeNumber } =
+      input;
     const actionName = "fetch-movie-subtitles";
 
     subtitleFetchLogger.info(actionName, {
       user_id: userId,
       ip_address: ipAddress,
-      request_payload: { imdbID, languageCode, seasonNumber, episodeNumber },
+      request_payload: {
+        imdbID,
+        title,
+        year,
+        languageCode,
+        seasonNumber,
+        episodeNumber,
+      },
       metadata: {
         custom_message: "Attempting to fetch movie/show subtitles.",
       },
@@ -113,6 +123,8 @@ export const fetchSubtitles = subtitleAction(
     try {
       const result = await subtitleService.getOrGenerateSubtitles({
         imdbID,
+        title,
+        year,
         targetLanguage: languageCode,
         seasonNumber,
         episodeNumber,
@@ -132,7 +144,14 @@ export const fetchSubtitles = subtitleAction(
       subtitleFetchLogger.info(actionName, {
         user_id: userId,
         ip_address: ipAddress,
-        request_payload: { imdbID, languageCode, seasonNumber, episodeNumber },
+        request_payload: {
+          imdbID,
+          title,
+          year,
+          languageCode,
+          seasonNumber,
+          episodeNumber,
+        },
         duration_ms: durationMs,
         response_status_code: 200,
         metadata: {
@@ -163,7 +182,14 @@ export const fetchSubtitles = subtitleAction(
       subtitleFetchLogger.error(actionName, {
         user_id: userId,
         ip_address: ipAddress,
-        request_payload: { imdbID, languageCode, seasonNumber, episodeNumber },
+        request_payload: {
+          imdbID,
+          title,
+          year,
+          languageCode,
+          seasonNumber,
+          episodeNumber,
+        },
         error_code: AppErrorCode[appErr.code],
         error_message: appErr.message,
         stack_trace: appErr.stack,

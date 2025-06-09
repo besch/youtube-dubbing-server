@@ -36,27 +36,6 @@ export function getLanguageSearchStrategy(targetLanguage: string) {
   };
 }
 
-export function buildSubdlUrl(
-  baseUrl: string,
-  apiKey: string,
-  imdbID: string,
-  languages: string,
-  seasonNumber?: number,
-  episodeNumber?: number
-): string {
-  let url = `${baseUrl}/subtitles?api_key=${apiKey}&imdb_id=${imdbID}&languages=${languages}`;
-
-  if (seasonNumber !== undefined && episodeNumber !== undefined) {
-    url += `&season_number=${seasonNumber}&episode_number=${episodeNumber}`;
-  }
-
-  return url;
-}
-
-export function redactApiKey(url: string): string {
-  return url.replace(/api_key=[^&]+/g, "api_key=***REDACTED***");
-}
-
 export function insertNewLineIfWrongFormattedSRT(input: string): string {
   return input.replace(/^(\d+)(\r?\n)/gm, "\n$1$2");
 }
@@ -68,21 +47,11 @@ export function isTargetLanguage(
   return subtitleLanguage.toLowerCase() === targetLanguage.toLowerCase();
 }
 
-export function createRetryDelay(attemptNumber: number): number {
-  return Math.min(1000 * Math.pow(2, attemptNumber), 10000);
-}
-
 export function logSubtitleOperation(
   operation: string,
   details: Record<string, unknown>
 ): void {
-  // Redact API keys from any URL fields
-  const sanitizedDetails = { ...details };
-  if (sanitizedDetails.url && typeof sanitizedDetails.url === "string") {
-    sanitizedDetails.url = redactApiKey(sanitizedDetails.url);
-  }
-
-  console.log(`[Subtitle ${operation}]`, sanitizedDetails);
+  console.log(`[Subtitle ${operation}]`, details);
 }
 
 export function logSubtitleError(
@@ -90,14 +59,8 @@ export function logSubtitleError(
   error: unknown,
   context?: Record<string, unknown>
 ): void {
-  // Redact API keys from any URL fields in context
-  const sanitizedContext = context ? { ...context } : {};
-  if (sanitizedContext.url && typeof sanitizedContext.url === "string") {
-    sanitizedContext.url = redactApiKey(sanitizedContext.url);
-  }
-
   console.error(`[Subtitle ${operation} Error]`, {
     error: error instanceof Error ? error.message : String(error),
-    ...sanitizedContext,
+    ...context,
   });
 }

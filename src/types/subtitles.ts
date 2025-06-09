@@ -30,6 +30,8 @@ export interface SubtitleDownloadResult {
 
 export interface SubtitleFetchOptions {
   imdbID: string;
+  title: string;
+  year?: string;
   targetLanguage: string;
   seasonNumber?: number;
   episodeNumber?: number;

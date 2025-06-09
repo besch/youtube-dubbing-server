@@ -54,6 +54,9 @@ A Next.js server application for dubbing YouTube videos with AI-generated voices
    # YouTube API
    YOUTUBE_API_KEY=your_youtube_api_key
 
+   # TMDb (The Movie Database) - for movie/TV show search
+   TMDB_API_KEY=your_tmdb_api_key
+
    # AWS
    AWS_ACCESS_KEY_ID=your_aws_access_key_id
    AWS_SECRET_ACCESS_KEY=your_aws_secret_access_key

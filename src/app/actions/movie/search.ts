@@ -88,7 +88,28 @@ const searchMoviesSchema = z.object({
 
 type SearchMoviesInput = z.infer<typeof searchMoviesSchema>;
 
-// Define the expected structure of the OMDB API response
+// TMDb API response structures
+interface TMDbMovie {
+  id: number;
+  title?: string; // For movies
+  name?: string; // For TV shows
+  release_date?: string; // For movies
+  first_air_date?: string; // For TV shows
+  poster_path?: string | null;
+  media_type?: "movie" | "tv" | "person";
+  overview?: string;
+  vote_average?: number;
+  genre_ids?: number[];
+}
+
+interface TMDbSearchResponse {
+  page: number;
+  results: TMDbMovie[];
+  total_pages: number;
+  total_results: number;
+}
+
+// Interface matching the expected frontend format (keeping OMDB structure for compatibility)
 export interface OmdbMovie {
   Title: string;
   Year: string;
@@ -97,11 +118,35 @@ export interface OmdbMovie {
   Poster: string;
 }
 
-interface OmdbSearchResponse {
-  Search?: OmdbMovie[];
-  totalResults?: string;
-  Response: "True" | "False";
-  Error?: string;
+// Function to convert TMDb movie to OMDB-compatible format
+function convertTMDbToOmdbFormat(tmdbMovie: TMDbMovie): OmdbMovie {
+  const title = tmdbMovie.title || tmdbMovie.name || "Unknown Title";
+  const year = tmdbMovie.release_date
+    ? tmdbMovie.release_date.split("-")[0]
+    : tmdbMovie.first_air_date
+    ? tmdbMovie.first_air_date.split("-")[0]
+    : "N/A";
+
+  // Generate a pseudo-IMDB ID using TMDb ID (prefixed with 'tm' for TMDb)
+  const imdbID = `tm${tmdbMovie.id}`;
+
+  // Determine type based on media_type or presence of certain fields
+  let type: "movie" | "series" | "episode" = "movie";
+  if (tmdbMovie.media_type === "tv" || tmdbMovie.name) {
+    type = "series";
+  }
+
+  const poster = tmdbMovie.poster_path
+    ? `https://image.tmdb.org/t/p/w500${tmdbMovie.poster_path}`
+    : "N/A";
+
+  return {
+    Title: title,
+    Year: year,
+    imdbID: imdbID,
+    Type: type,
+    Poster: poster,
+  };
 }
 
 export const searchMovies = movieAction(
@@ -114,22 +159,22 @@ export const searchMovies = movieAction(
   > => {
     const actionStartTime = Date.now();
     const { text, page } = input;
-    const apiKey = process.env.OMDB_API_KEY;
-    const actionName = "search-movies-omdb";
+    const apiKey = process.env.TMDB_API_KEY;
+    const actionName = "search-movies-tmdb";
 
     movieSearchLogger.info(actionName, {
       user_id: userId,
       ip_address: ipAddress,
       request_payload: { text, page },
       metadata: {
-        custom_message: "Attempting to search movies on OMDB.",
+        custom_message: "Attempting to search movies on TMDb.",
       },
     });
 
     if (!apiKey) {
       const configError = new AppError(
         AppErrorCode.CONFIGURATION_ERROR,
-        "OMDB API key is not configured."
+        "TMDb API key is not configured."
       );
       const durationMs = Date.now() - actionStartTime;
       movieSearchLogger.error(actionName, {
@@ -149,60 +194,41 @@ export const searchMovies = movieAction(
         user_id: userId,
         ip_address: ipAddress,
         request_payload: { text, page },
-        metadata: { custom_message: `Searching OMDB.` },
+        metadata: { custom_message: `Searching TMDb.` },
       });
 
+      // TMDb multi-search endpoint to search both movies and TV shows
       const response = await fetch(
-        `http://www.omdbapi.com/?apikey=${apiKey}&s=${encodeURIComponent(
+        `https://api.themoviedb.org/3/search/multi?api_key=${apiKey}&query=${encodeURIComponent(
           text
-        )}&page=${page}`
+        )}&page=${page}&include_adult=false`
       );
-      // Note: duration here would be for the external API call, not the whole action yet.
 
       if (!response.ok) {
         const serviceError = new AppError(
           AppErrorCode.SERVICE_ERROR,
-          `OMDB API request failed with status ${response.status}`
+          `TMDb API request failed with status ${response.status}`
         );
-        // Log duration of this attempt, not whole action yet.
         movieSearchLogger.error(actionName, {
           user_id: userId,
           ip_address: ipAddress,
           request_payload: { text, page },
           error_code: AppErrorCode[serviceError.code],
           error_message: serviceError.message,
-          response_status_code: response.status, // Actual OMDB response status
-          // duration_ms: undefined here, or calculate if meaningful for this sub-step
+          response_status_code: response.status,
         });
-        throw serviceError; // This will be caught by the outer try-catch, which calculates total duration
+        throw serviceError;
       }
 
-      const data: OmdbSearchResponse = await response.json();
+      const data: TMDbSearchResponse = await response.json();
 
-      if (data.Response === "False") {
-        if (data.Error === "Movie not found!") {
-          const durationMs = Date.now() - actionStartTime;
-          movieSearchLogger.info(actionName, {
-            user_id: userId,
-            ip_address: ipAddress,
-            request_payload: { text, page },
-            duration_ms: durationMs,
-            response_status_code: 200, // Action is success, though OMDB found nothing
-            metadata: {
-              custom_message: "OMDB: Movie not found.",
-              omdb_response_status: data.Response,
-              omdb_error_message: data.Error,
-            },
-          });
-          return { success: true, data: { Search: [], totalResults: "0" } };
-        }
-        const omdbError = new AppError(
-          AppErrorCode.SERVICE_ERROR,
-          data.Error || "OMDB API returned an error."
-        );
-        // This path leads to action failure, handled by outer catch.
-        throw omdbError;
-      }
+      // Filter out person results and convert to OMDB format
+      const movieResults = data.results
+        .filter(
+          (item) => item.media_type === "movie" || item.media_type === "tv"
+        )
+        .map(convertTMDbToOmdbFormat);
+
       const durationMs = Date.now() - actionStartTime;
       movieSearchLogger.info(actionName, {
         user_id: userId,
@@ -211,20 +237,22 @@ export const searchMovies = movieAction(
         duration_ms: durationMs,
         response_status_code: 200,
         metadata: {
-          custom_message: "OMDB search successful.",
-          total_results: data.totalResults,
-          received_count: data.Search?.length,
+          custom_message: "TMDb search successful.",
+          total_results: data.total_results.toString(),
+          received_count: movieResults.length,
+          total_pages: data.total_pages,
         },
         response_payload: {
-          totalResults: data.totalResults,
-          receivedCount: data.Search?.length,
+          totalResults: data.total_results.toString(),
+          receivedCount: movieResults.length,
         },
       });
+
       return {
         success: true,
         data: {
-          Search: data.Search || [],
-          totalResults: data.totalResults || null,
+          Search: movieResults,
+          totalResults: data.total_results.toString(),
         },
       };
     } catch (error: unknown) {

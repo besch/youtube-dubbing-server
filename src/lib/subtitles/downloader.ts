@@ -1,8 +1,3 @@
-import fetch from "node-fetch";
-import unzipper from "unzipper";
-import iconv from "iconv-lite";
-import detectEncoding from "detect-file-encoding-and-language";
-
 import { AppError, AppErrorCode } from "@/app/actions/actions";
 import { EPISODE_PATTERNS, SUBTITLE_CONFIG } from "./config";
 import { logSubtitleOperation, logSubtitleError } from "./utils";
@@ -13,6 +8,14 @@ export async function downloadSubtitleArchive(
   logSubtitleOperation("Download", { url: downloadUrl });
 
   try {
+    // Handle data URLs from subdl package
+    if (downloadUrl.startsWith("data:text/srt;base64,")) {
+      const base64Data = downloadUrl.replace("data:text/srt;base64,", "");
+      return Buffer.from(base64Data, "base64");
+    }
+
+    // Fallback for regular URLs (if any legacy URLs exist)
+    const fetch = (await import("node-fetch")).default;
     const response = await fetch(downloadUrl, {
       timeout: SUBTITLE_CONFIG.downloadTimeout,
     });
@@ -52,6 +55,19 @@ export async function extractSubtitleFromArchive(
   });
 
   try {
+    // Since subdl package returns direct SRT content, we can decode it directly
+    const content = buffer.toString("utf-8");
+
+    // If this looks like SRT content, return it directly
+    if (content.includes("-->") && /^\d+$/m.test(content)) {
+      logSubtitleOperation("DirectSrtContent", {
+        contentLength: content.length,
+      });
+      return content;
+    }
+
+    // Otherwise, try to extract from ZIP (fallback for legacy URLs)
+    const unzipper = (await import("unzipper")).default;
     const zip = await unzipper.Open.buffer(buffer);
     let subtitleBuffer: Buffer | null = null;
 
@@ -94,13 +110,15 @@ export async function extractSubtitleFromArchive(
 }
 
 async function findEpisodeSubtitle(
-  zip: unzipper.CentralDirectory,
+  zip: any,
   seasonNumber: number,
   episodeNumber: number
 ): Promise<Buffer | null> {
   for (const patternFn of EPISODE_PATTERNS) {
     const pattern = patternFn(seasonNumber, episodeNumber);
-    const matchingEntry = zip.files.find((entry) => pattern.test(entry.path));
+    const matchingEntry = zip.files.find((entry: any) =>
+      pattern.test(entry.path)
+    );
 
     if (matchingEntry) {
       logSubtitleOperation("EpisodeMatch", {
@@ -114,10 +132,8 @@ async function findEpisodeSubtitle(
   return null;
 }
 
-async function findFirstSrtFile(
-  zip: unzipper.CentralDirectory
-): Promise<Buffer | null> {
-  const srtEntry = zip.files.find((entry) =>
+async function findFirstSrtFile(zip: any): Promise<Buffer | null> {
+  const srtEntry = zip.files.find((entry: any) =>
     entry.path.toLowerCase().endsWith(".srt")
   );
 
@@ -131,6 +147,10 @@ async function findFirstSrtFile(
 
 async function decodeSubtitleContent(buffer: Buffer): Promise<string> {
   try {
+    const detectEncoding = (await import("detect-file-encoding-and-language"))
+      .default;
+    const iconv = (await import("iconv-lite")).default;
+
     const encodingInfo = await detectEncoding(buffer);
     const encoding = encodingInfo?.encoding || SUBTITLE_CONFIG.defaultEncoding;
 
@@ -145,7 +165,7 @@ async function decodeSubtitleContent(buffer: Buffer): Promise<string> {
     logSubtitleError("Decode", error);
 
     // Fall back to UTF-8 if encoding detection fails
-    return iconv.decode(buffer, SUBTITLE_CONFIG.defaultEncoding);
+    return buffer.toString("utf-8");
   }
 }
 
@@ -154,9 +174,8 @@ export async function downloadAndExtractSubtitle(
   seasonNumber?: number,
   episodeNumber?: number
 ): Promise<string> {
-  const downloadUrl = `https://dl.subdl.com${subdlPath}`;
-
-  const buffer = await downloadSubtitleArchive(downloadUrl);
+  // For data URLs, subdlPath is the full data URL
+  const buffer = await downloadSubtitleArchive(subdlPath);
   const content = await extractSubtitleFromArchive(
     buffer,
     seasonNumber,

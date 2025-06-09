@@ -1,20 +1,12 @@
 import { SubtitleApiConfig } from "@/types/subtitles";
-import { AppError, AppErrorCode } from "@/app/actions/actions";
 
+// Note: The subdl npm package doesn't require API configuration
+// This function is kept for backward compatibility but may not be needed
 export function getSubdlConfig(): SubtitleApiConfig {
-  const apiKey = process.env.SUBDL_API_KEY;
-
-  if (!apiKey) {
-    throw new AppError(
-      AppErrorCode.CONFIGURATION_ERROR,
-      "Subdl API key is not configured."
-    );
-  }
-
   return {
-    apiKey,
-    baseUrl: "https://api.subdl.com/api/v1",
-    downloadBaseUrl: "https://dl.subdl.com",
+    apiKey: "", // Not needed for npm subdl package
+    baseUrl: "", // Not needed for npm subdl package
+    downloadBaseUrl: "", // Not needed for npm subdl package
   };
 }
 

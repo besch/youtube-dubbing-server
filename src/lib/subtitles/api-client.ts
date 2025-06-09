@@ -1,236 +1,322 @@
-import fetch from "node-fetch";
+import {
+  Download,
+  ErrNoMovies,
+  ErrNoSubtitles,
+  FetchOpenSubtitlesCom,
+  FetchMovieSubtitlesOrg,
+  FetchMoviesubtitlesrtCom,
+  FetchPodnapisiNet,
+  FetchSubdlCom,
+  FetchYifySubtitlesCh,
+  type DownloadOptions,
+} from "./subdl";
+
+import {
+  type SubtitleOptions,
+  type LanguageID,
+  type DownloadedFile,
+} from "./subdl/src/utils/download";
 
 import { AppError, AppErrorCode } from "@/app/actions/actions";
-import type { SubdlApiResponse, SubtitleFetchOptions } from "@/types/subtitles";
-import { getSubdlConfig, SUBTITLE_CONFIG } from "./config";
+import type {
+  SubdlApiResponse,
+  SubtitleFetchOptions,
+  SubdlSubtitle,
+} from "@/types/subtitles";
+import { SUBTITLE_CONFIG } from "./config";
 import {
   getLanguageSearchStrategy,
-  buildSubdlUrl,
-  createRetryDelay,
   logSubtitleOperation,
   logSubtitleError,
 } from "./utils";
 
+// Language mapping from our system to subdl's expected language codes
+const LANGUAGE_MAPPING: Record<string, LanguageID> = {
+  en: "en",
+  es: "es",
+  fr: "fr",
+  de: "de",
+  it: "it",
+  pt: "pt",
+  ru: "ru",
+  ja: "ja",
+  zh: "zh",
+  ko: "ko",
+  ar: "ar",
+  hi: "hi",
+  nl: "nl",
+  sv: "sv",
+  no: "no",
+  da: "da",
+  fi: "fi",
+  pl: "pl",
+  tr: "tr",
+  he: "he",
+};
+
 export class SubdlApiClient {
-  private readonly config = getSubdlConfig();
+  private readonly fetchers = [
+    FetchSubdlCom,
+    FetchOpenSubtitlesCom,
+    FetchMovieSubtitlesOrg,
+    FetchMoviesubtitlesrtCom,
+    FetchPodnapisiNet,
+    FetchYifySubtitlesCh,
+  ];
 
   async fetchSubtitles(
     options: SubtitleFetchOptions
   ): Promise<SubdlApiResponse> {
-    const { imdbID, targetLanguage, seasonNumber, episodeNumber } = options;
+    const { imdbID, title, year, targetLanguage, seasonNumber, episodeNumber } =
+      options;
 
     logSubtitleOperation("API_Fetch", {
       imdbID,
+      title,
+      year,
       targetLanguage,
       hasEpisode: seasonNumber !== undefined && episodeNumber !== undefined,
     });
 
+    // Use movie title and year for better search results
+    const movieQuery = await this.buildMovieQuery(
+      title,
+      year,
+      seasonNumber,
+      episodeNumber
+    );
+
+    logSubtitleOperation("API_MovieQuery", {
+      imdbID,
+      title,
+      year,
+      movieQuery,
+      targetLanguage,
+    });
+
     const strategy = getLanguageSearchStrategy(targetLanguage);
 
-    // Step 1: Try target language only
-    logSubtitleOperation("API_Strategy_Primary", {
-      imdbID,
-      targetLanguage,
-      searchLanguages: strategy.primary,
-    });
+    // Try each language strategy
+    const languageStrategies = [
+      { languages: strategy.primary, step: "primary" },
+      { languages: strategy.fallback, step: "fallback" },
+      { languages: strategy.lastResort, step: "last_resort" },
+    ];
 
-    let response = await this.querySubdlApi(
-      imdbID,
-      strategy.primary,
-      seasonNumber,
-      episodeNumber
-    );
-
-    if (
-      response.status &&
-      response.subtitles &&
-      response.subtitles.length > 0
-    ) {
-      logSubtitleOperation("API_Strategy_Success", {
-        step: "primary",
-        subtitleCount: response.subtitles.length,
+    for (const { languages, step } of languageStrategies) {
+      logSubtitleOperation("API_Strategy", {
+        imdbID,
+        title,
+        step,
+        searchLanguages: languages,
       });
-      return response;
-    }
 
-    // Step 2: Try common languages (good for translation)
-    logSubtitleOperation("API_Strategy_Fallback", {
-      imdbID,
-      searchLanguages: strategy.fallback,
-    });
+      const languageList = languages.split(",").map((lang) => lang.trim());
 
-    response = await this.querySubdlApi(
-      imdbID,
-      strategy.fallback,
-      seasonNumber,
-      episodeNumber
-    );
-
-    if (
-      response.status &&
-      response.subtitles &&
-      response.subtitles.length > 0
-    ) {
-      logSubtitleOperation("API_Strategy_Success", {
-        step: "fallback",
-        subtitleCount: response.subtitles.length,
-      });
-      return response;
-    }
-
-    // Step 3: Last resort - try all languages
-    logSubtitleOperation("API_Strategy_LastResort", {
-      imdbID,
-      searchLanguages: "all_supported_languages",
-    });
-
-    response = await this.querySubdlApi(
-      imdbID,
-      strategy.lastResort,
-      seasonNumber,
-      episodeNumber
-    );
-
-    logSubtitleOperation("API_Strategy_Final", {
-      step: "last_resort",
-      subtitleCount: response.subtitles?.length || 0,
-      success: response.status,
-    });
-
-    return response;
-  }
-
-  private async querySubdlApi(
-    imdbID: string,
-    languages: string,
-    seasonNumber?: number,
-    episodeNumber?: number
-  ): Promise<SubdlApiResponse> {
-    const url = buildSubdlUrl(
-      this.config.baseUrl,
-      this.config.apiKey,
-      imdbID,
-      languages,
-      seasonNumber,
-      episodeNumber
-    );
-
-    return await this.makeApiRequest(url);
-  }
-
-  private async makeApiRequest(url: string): Promise<SubdlApiResponse> {
-    let lastError: unknown;
-
-    for (let attempt = 0; attempt < SUBTITLE_CONFIG.maxRetries; attempt++) {
-      try {
-        logSubtitleOperation("API_Request", { url, attempt: attempt + 1 });
-
-        const response = await fetch(url, {
-          timeout: SUBTITLE_CONFIG.downloadTimeout,
-          headers: {
-            "User-Agent": "Mozilla/5.0 (compatible; SubtitleDownloader/1.0)",
-          },
-        });
-
-        if (!response.ok) {
-          throw new AppError(
-            AppErrorCode.SERVICE_ERROR,
-            `Subdl API request failed: HTTP ${response.status} ${response.statusText}`
-          );
+      for (const language of languageList) {
+        // Skip if we don't have a mapping for this language
+        if (!LANGUAGE_MAPPING[language]) {
+          logSubtitleOperation("API_LanguageSkipped", {
+            language,
+            reason: "No mapping available",
+          });
+          continue;
         }
 
-        const rawData = (await response.json()) as any;
-
-        // Normalize the response structure
-        const normalizedData: SubdlApiResponse = {
-          status: rawData.status || rawData.success || false,
-          subtitles: rawData.subtitles || rawData.results || [],
-          totalPages: rawData.totalPages,
-          currentPage: rawData.currentPage,
-          message: rawData.message,
-          error: rawData.error,
-        };
-
-        // Debug: Log what we got before filtering
-        logSubtitleOperation("API_RawResponse", {
-          url,
-          totalSubtitles: normalizedData.subtitles.length,
-          sampleSubtitles: normalizedData.subtitles.slice(0, 3).map((sub) => ({
-            url: sub.url,
-            language: sub.language,
-            file_name: sub.file_name,
-          })),
-        });
-
-        // Filter to only include SRT format subtitles - be more permissive
-        const originalCount = normalizedData.subtitles.length;
-        normalizedData.subtitles = normalizedData.subtitles.filter(
-          (subtitle) => {
-            if (!subtitle.url) return false;
-
-            const url = subtitle.url.toLowerCase();
-            const fileName = subtitle.file_name?.toLowerCase() || "";
-
-            // Be more permissive - most subtitle downloads are SRT even if not explicitly stated
-            // Only exclude if we know it's definitely not SRT (like .vtt, .ass, .sub)
-            const isExplicitlyNotSrt =
-              url.includes(".vtt") ||
-              url.includes(".ass") ||
-              url.includes(".sub") ||
-              fileName.endsWith(".vtt") ||
-              fileName.endsWith(".ass") ||
-              fileName.endsWith(".sub");
-
-            return !isExplicitlyNotSrt;
-          }
+        const subtitles = await this.tryFetchFromAllSources(
+          movieQuery,
+          language
         );
 
-        logSubtitleOperation("API_Success", {
-          url,
-          originalCount,
-          filteredCount: normalizedData.subtitles.length,
-          status: normalizedData.status,
-        });
-
-        return normalizedData;
-      } catch (error) {
-        lastError = error;
-        logSubtitleError("API_Request", error, { url, attempt: attempt + 1 });
-
-        // Don't retry on certain errors
-        if (
-          error instanceof AppError &&
-          error.code === AppErrorCode.SERVICE_ERROR
-        ) {
-          const response = error.message;
-          if (
-            response.includes("404") ||
-            response.includes("401") ||
-            response.includes("403")
-          ) {
-            break;
-          }
-        }
-
-        // Wait before retrying (except on last attempt)
-        if (attempt < SUBTITLE_CONFIG.maxRetries - 1) {
-          const delay = createRetryDelay(attempt);
-          logSubtitleOperation("API_Retry", {
-            url,
-            delay,
-            nextAttempt: attempt + 2,
+        if (subtitles.length > 0) {
+          logSubtitleOperation("API_Strategy_Success", {
+            step,
+            language,
+            subtitleCount: subtitles.length,
           });
-          await new Promise((resolve) => setTimeout(resolve, delay));
+
+          return {
+            status: true,
+            subtitles: subtitles,
+          };
         }
       }
     }
 
-    // All retries failed
-    throw new AppError(
-      AppErrorCode.SERVICE_ERROR,
-      `Subdl API request failed after ${SUBTITLE_CONFIG.maxRetries} attempts: ${
-        lastError instanceof Error ? lastError.message : String(lastError)
-      }`
-    );
+    logSubtitleOperation("API_Strategy_Final", {
+      step: "all_failed",
+      subtitleCount: 0,
+      success: false,
+    });
+
+    return {
+      status: false,
+      subtitles: [],
+      message: "No subtitles found after trying all sources and languages",
+    };
+  }
+
+  private async buildMovieQuery(
+    title: string,
+    year?: string,
+    seasonNumber?: number,
+    episodeNumber?: number
+  ): Promise<string> {
+    // Use movie title as the primary search query
+    let query = title.trim();
+
+    // Add year for more precise matching if available
+    if (year) {
+      query += ` ${year}`;
+    }
+
+    // For episodes, add season and episode information
+    if (seasonNumber !== undefined && episodeNumber !== undefined) {
+      // Try different episode formats that might work better
+      const episodeFormats = [
+        `S${String(seasonNumber).padStart(2, "0")}E${String(
+          episodeNumber
+        ).padStart(2, "0")}`,
+        `Season ${seasonNumber} Episode ${episodeNumber}`,
+        `${seasonNumber}x${String(episodeNumber).padStart(2, "0")}`,
+      ];
+
+      // Use the most common format first
+      query += ` ${episodeFormats[0]}`;
+    }
+
+    logSubtitleOperation("API_QueryBuilt", {
+      originalTitle: title,
+      year,
+      seasonNumber,
+      episodeNumber,
+      finalQuery: query,
+    });
+
+    return query;
+  }
+
+  private async tryFetchFromAllSources(
+    movieQuery: string,
+    language: string
+  ): Promise<SubdlSubtitle[]> {
+    const mappedLanguage = LANGUAGE_MAPPING[language];
+    if (!mappedLanguage) {
+      logSubtitleOperation("API_LanguageMappingFailed", {
+        originalLanguage: language,
+        availableMappings: Object.keys(LANGUAGE_MAPPING),
+      });
+      return [];
+    }
+
+    const subtitleOptions: SubtitleOptions = {
+      language: mappedLanguage,
+    };
+
+    const downloadOptions: DownloadOptions = {
+      movieListQuery: movieQuery,
+      movieListSorter: {},
+      subtitleListQuery: "",
+      subtitleListSorter: {},
+    };
+
+    const allSubtitles: SubdlSubtitle[] = [];
+
+    for (const fetcher of this.fetchers) {
+      try {
+        logSubtitleOperation("API_SourceAttempt", {
+          source: fetcher.name,
+          movieQuery,
+          language: mappedLanguage,
+        });
+
+        const downloadedFile: DownloadedFile = await Download(
+          movieQuery,
+          subtitleOptions,
+          fetcher,
+          downloadOptions
+        );
+
+        if (downloadedFile.subtitles && downloadedFile.subtitles.length > 0) {
+          logSubtitleOperation("API_SourceDownloadSuccess", {
+            source: fetcher.name,
+            subtitleCount: downloadedFile.subtitles.length,
+            filenames: downloadedFile.subtitles
+              .map((s) => s.filename)
+              .join(", "),
+          });
+
+          // Convert subdl format to our expected format
+          downloadedFile.subtitles.forEach(
+            (subtitleFileContent, index: number) => {
+              if (
+                subtitleFileContent.subtitles &&
+                subtitleFileContent.subtitles.trim()
+              ) {
+                allSubtitles.push({
+                  url: `data:text/srt;base64,${Buffer.from(
+                    subtitleFileContent.subtitles
+                  ).toString("base64")}`,
+                  language: language,
+                  file_name:
+                    subtitleFileContent.filename || `subtitle_${index}.srt`,
+                  author: "subdl",
+                  comment: `Downloaded from ${fetcher.name}`,
+                  rating: 0,
+                  download_count: 0,
+                  release_name: subtitleFileContent.filename || "",
+                  fps: 0,
+                  cd_count: 1,
+                  hi: false,
+                });
+              }
+            }
+          );
+
+          logSubtitleOperation("API_SourceSuccess", {
+            source: fetcher.name,
+            subtitleCount: allSubtitles.length,
+          });
+        } else {
+          logSubtitleOperation("API_SourceEmptyResult", {
+            source: fetcher.name,
+            movieQuery,
+            language: mappedLanguage,
+          });
+        }
+      } catch (error) {
+        if (error === ErrNoMovies) {
+          logSubtitleOperation("API_SourceNoMovies", {
+            source: fetcher.name,
+            movieQuery,
+            language: mappedLanguage,
+          });
+        } else if (error === ErrNoSubtitles) {
+          logSubtitleOperation("API_SourceNoSubtitles", {
+            source: fetcher.name,
+            movieQuery,
+            language: mappedLanguage,
+          });
+        } else {
+          logSubtitleError("API_SourceError", error, {
+            source: fetcher.name,
+            movieQuery,
+            language: mappedLanguage,
+            errorMessage:
+              error instanceof Error ? error.message : String(error),
+          });
+        }
+        // Continue to next source
+      }
+    }
+
+    logSubtitleOperation("API_SourceSummary", {
+      movieQuery,
+      language: mappedLanguage,
+      totalSubtitlesFound: allSubtitles.length,
+      sourcesAttempted: this.fetchers.length,
+    });
+
+    return allSubtitles;
   }
 }
