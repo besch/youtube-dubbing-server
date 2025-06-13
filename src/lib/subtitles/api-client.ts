@@ -17,13 +17,11 @@ import {
   type DownloadedFile,
 } from "./subdl/src/utils/download";
 
-import { AppError, AppErrorCode } from "@/app/actions/actions";
 import type {
   SubdlApiResponse,
   SubtitleFetchOptions,
   SubdlSubtitle,
 } from "@/types/subtitles";
-import { SUBTITLE_CONFIG } from "./config";
 import {
   getLanguageSearchStrategy,
   logSubtitleOperation,
