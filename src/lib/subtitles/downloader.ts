@@ -132,7 +132,18 @@ async function findFirstSrtFile(
 async function decodeSubtitleContent(buffer: Buffer): Promise<string> {
   try {
     const encodingInfo = await detectEncoding(buffer);
-    const encoding = encodingInfo?.encoding || SUBTITLE_CONFIG.defaultEncoding;
+    let encoding = encodingInfo?.encoding || SUBTITLE_CONFIG.defaultEncoding;
+
+    // A common issue is Cyrillic (Windows-1251) being misidentified as Latin-1.
+    // If ISO-8859-1 is detected, it's safer to bet on 'cp1251' for subtitles
+    // as it's a common encoding for Russian/Cyrillic subtitles.
+    if (encoding === "ISO-8859-1") {
+      encoding = "CP1251";
+      logSubtitleOperation("Decode_EncodingOverride", {
+        detected: "ISO-8859-1",
+        overriddenTo: "CP1251",
+      });
+    }
 
     logSubtitleOperation("Decode", {
       detectedEncoding: encodingInfo?.encoding,
