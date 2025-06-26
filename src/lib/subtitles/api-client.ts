@@ -54,8 +54,8 @@ const LANGUAGE_MAPPING: Record<string, LanguageID> = {
 
 export class SubdlApiClient {
   private readonly fetchers = [
-    FetchSubdlCom,
     FetchOpenSubtitlesCom,
+    FetchSubdlCom,
     FetchMovieSubtitlesOrg,
     FetchMoviesubtitlesrtCom,
     FetchPodnapisiNet,
@@ -160,27 +160,16 @@ export class SubdlApiClient {
     seasonNumber?: number,
     episodeNumber?: number
   ): Promise<string> {
-    // Use movie title as the primary search query
     let query = title.trim();
 
-    // Add year for more precise matching if available
     if (year) {
       query += ` ${year}`;
     }
 
-    // For episodes, add season and episode information
     if (seasonNumber !== undefined && episodeNumber !== undefined) {
-      // Try different episode formats that might work better
-      const episodeFormats = [
-        `S${String(seasonNumber).padStart(2, "0")}E${String(
-          episodeNumber
-        ).padStart(2, "0")}`,
-        `Season ${seasonNumber} Episode ${episodeNumber}`,
-        `${seasonNumber}x${String(episodeNumber).padStart(2, "0")}`,
-      ];
-
-      // Use the most common format first
-      query += ` ${episodeFormats[0]}`;
+      query += ` S${String(seasonNumber).padStart(2, "0")}E${String(
+        episodeNumber
+      ).padStart(2, "0")}`;
     }
 
     logSubtitleOperation("API_QueryBuilt", {

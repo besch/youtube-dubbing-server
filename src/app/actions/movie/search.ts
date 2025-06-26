@@ -3,7 +3,6 @@
 import { z } from "zod";
 import { createSafeActionClient } from "next-safe-action";
 import { ActionResponse, AppError, AppErrorCode } from "../actions";
-import type { Json } from "@/types/supabase";
 import { createLogger } from "@/lib/logger";
 import { createServerClient } from "@supabase/ssr";
 import { cookies, headers as nextHeaders } from "next/headers";
