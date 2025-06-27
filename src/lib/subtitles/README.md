@@ -1,72 +1,72 @@
 # Subtitle Service
 
-A modular, type-safe subtitle downloading and translation service that fetches subtitles from Subdl API and provides translation capabilities.
+A modular, extensible subtitle service with multiple provider support and automatic fallback. Supports OpenSubtitles.com (primary) and Subdl.com (fallback) with quality validation and translation capabilities.
 
 ## Architecture
 
-The subtitle service is organized into focused modules:
+The subtitle service is now organized around a provider-based architecture for better extensibility and fault tolerance:
 
 ### 📁 Module Structure
 
 ```
 lib/subtitles/
-├── index.ts          # Main exports
-├── service.ts        # Main orchestration service
-├── api-client.ts     # Subdl API client with retry logic
-├── downloader.ts     # File download and extraction
-├── utils.ts          # Utility functions
-├── config.ts         # Configuration and constants
-└── README.md         # This file
+├── index.ts               # Main exports (provider manager, service, types)
+├── service.ts             # Main orchestration service
+├── providers/             # Provider implementations
+│   ├── index.ts          # Provider manager with fallback logic
+│   ├── base.ts           # Provider interface and types
+│   ├── opensubtitles.ts  # OpenSubtitles.com provider (primary)
+│   ├── subdl.ts          # Subdl.com provider (fallback)
+│   └── README.md         # Provider documentation
+├── api-client.ts          # Subdl API client (internal)
+├── downloader.ts          # File download and extraction (internal)
+├── quality-validator.ts   # AI quality validation
+├── translate.ts           # Translation service
+├── utils.ts              # Utility functions
+├── config.ts             # Configuration (internal)
+└── README.md             # This file
 ```
 
 ### 🔧 Core Components
 
+#### `SubtitleProviderManager` (`providers/index.ts`)
+
+Manages multiple subtitle providers with automatic fallback logic.
+
+**Key Features:**
+
+- **Provider Priority System**: OpenSubtitles (priority 1) → Subdl (priority 2)
+- **Automatic Fallback**: Seamlessly switches between providers
+- **Availability Caching**: Checks provider health with 5-minute cache
+- **Error Isolation**: Failed providers don't affect others
+- **Comprehensive Logging**: Provider-specific error tracking
+
+#### Provider System
+
+**OpenSubtitles Provider** (Primary)
+
+- Uses OpenSubtitles.com API v1
+- Requires API key, optional authentication for higher limits
+- Supports direct file ID downloads
+- Language-specific search optimization
+
+**Subdl Provider** (Fallback)
+
+- Uses existing Subdl integration
+- ZIP archive handling for TV episodes
+- Reliable fallback when OpenSubtitles is unavailable
+
 #### `SubtitleService` (`service.ts`)
 
-Main orchestration service that coordinates fetching, downloading, and translating subtitles.
+Main orchestration service that coordinates providers, validation, and translation.
 
 **Key Features:**
 
-- Attempts direct language matches first
-- Falls back to translation from best available subtitle
-- **Quality validation using Google Gemini AI** to detect wrong language or corrupted subtitles
-- Automatically tries next best subtitle if quality validation fails
+- Uses provider manager for source selection
+- **Quality validation using Google Gemini AI**
+- Automatic language detection and validation
+- Translation fallback for non-target languages
 - Comprehensive error handling and logging
-- Type-safe interfaces
-
-#### `SubdlApiClient` (`api-client.ts`)
-
-Handles all API communication with Subdl service.
-
-**Key Features:**
-
-- Automatic retry logic with exponential backoff
-- Intelligent language priority querying
-- Comprehensive error handling
-- Request/response logging
-
-#### `SubtitleQualityValidator` (`quality-validator.ts`)
-
-AI-powered language detection for subtitles using Google Gemini.
-
-**Key Features:**
-
-- Primary focus on language detection and verification
-- Rejects only critically corrupted or wrong-language subtitles
-- Accepts subtitles with minor quality issues (repetition, stuttering, informal speech)
-- Confidence scoring for language detection
-- Fallback validation for API errors
-
-#### Downloader (`downloader.ts`)
-
-Handles downloading and extracting subtitle files from zip archives.
-
-**Key Features:**
-
-- Episode-specific file matching for TV shows
-- Automatic encoding detection
-- Multiple file format support
-- Structured error handling
 
 ## Usage
 
@@ -75,17 +75,17 @@ Handles downloading and extracting subtitle files from zip archives.
 ```typescript
 import { subtitleService } from "@/lib/subtitles";
 
-// Fetch movie subtitles with automatic quality validation
+// Fetch movie subtitles with automatic provider fallback
 const result = await subtitleService.getOrGenerateSubtitles({
   imdbID: "tt0111161",
   targetLanguage: "es",
 });
 
 // The service will automatically:
-// 1. Try to find subtitles in the target language
-// 2. Validate language using Google Gemini AI (lenient on quality issues)
-// 3. If wrong language or critically corrupted, try the next best subtitle
-// 4. Fall back to translation if needed
+// 1. Try OpenSubtitles.com first
+// 2. Fall back to Subdl.com if needed
+// 3. Validate language using Google Gemini AI
+// 4. Translate from best available language if needed
 
 // Fetch TV show episode subtitles
 const result = await subtitleService.getOrGenerateSubtitles({
@@ -96,34 +96,41 @@ const result = await subtitleService.getOrGenerateSubtitles({
 });
 ```
 
-### Language Validation
+### Direct Provider Access
+
+```typescript
+import { subtitleProviderManager } from "@/lib/subtitles";
+
+// Search with automatic fallback between providers
+const searchResult = await subtitleProviderManager.searchWithFallback({
+  imdbID: "tt1234567",
+  targetLanguage: "en",
+});
+
+// Download from specific provider
+const content = await subtitleProviderManager.downloadFromProvider(
+  "opensubtitles",
+  fileId, // For OpenSubtitles
+  url // For Subdl
+);
+```
+
+### Quality Validation
 
 ```typescript
 import { subtitleQualityValidator } from "@/lib/subtitles";
 
-// Manually validate subtitle language (focuses on language detection, not quality)
+// AI-powered language validation
 const validationResult = await subtitleQualityValidator.validateSubtitleQuality(
   {
     content: srtContent,
     expectedLanguage: "en",
-    maxSampleLength: 2000, // Optional: limit sample size
   }
 );
 
 console.log("Is valid:", validationResult.isValid);
 console.log("Detected language:", validationResult.detectedLanguage);
 console.log("Confidence:", validationResult.confidence);
-console.log("Issues found:", validationResult.issues); // Only critical issues
-```
-
-### Response Format
-
-```typescript
-interface SubtitleDownloadResult {
-  content: string; // SRT content
-  generated: boolean; // Whether content was translated
-  sourceLanguage?: string; // Original language if translated
-}
 ```
 
 ## Configuration
@@ -131,62 +138,67 @@ interface SubtitleDownloadResult {
 ### Environment Variables
 
 ```bash
+# OpenSubtitles (Primary Provider)
+OPENSUBTITLES_API_KEY=your_opensubtitles_api_key_here
+OPENSUBTITLES_USERNAME=your_username  # Optional - for increased download limits
+OPENSUBTITLES_PASSWORD=your_password  # Optional - for increased download limits
+
+# Subdl (Fallback Provider)
 SUBDL_API_KEY=your_subdl_api_key_here
-GOOGLE_API_KEY=your_google_gemini_api_key_here  # Required for quality validation
+
+# AI Quality Validation
+GOOGLE_API_KEY=your_google_gemini_api_key_here
 ```
 
-### Supported Languages
+### Provider Availability
 
-- English (en)
-- Spanish (es)
-- French (fr)
-- Russian (ru)
-- German (de)
-- Italian (it)
-- Portuguese (pt)
-- Japanese (ja)
-- Chinese (zh)
+The system automatically detects which providers are available:
+
+- **OpenSubtitles**: Requires API key, checks with simple search
+- **Subdl**: Uses existing configuration, tests with known movie
+
+Availability is cached for 5 minutes to prevent excessive health checks.
 
 ## Features
 
-### 🎯 Smart Language Matching
+### 🎯 Multi-Provider Architecture
 
-1. **Direct Match**: Attempts to find subtitles in target language
-2. **Language Validation**: Uses Google Gemini AI to verify correct language and detect critical corruption
-3. **Automatic Retry**: Tries next best subtitle if language validation fails
-4. **Translation Fallback**: Translates from best available language
-5. **Priority Querying**: Optimizes API calls based on target language
+1. **Primary Provider**: OpenSubtitles.com with extensive API features
+2. **Fallback Provider**: Subdl.com for reliability
+3. **Automatic Switching**: Seamless fallback on errors or unavailability
+4. **Provider Isolation**: Failures don't cascade between providers
 
 ### 🔄 Robust Error Handling
 
-- Automatic retries with exponential backoff
-- Graceful degradation on download failures
-- Comprehensive error logging and context
+- **Service Errors**: Temporarily mark providers unavailable
+- **Network Errors**: Automatic retry on next provider
+- **Rate Limiting**: Graceful handling of API limits
+- **Comprehensive Logging**: Provider-specific error context
 
-### 📺 TV Show Support
+### 📺 Universal Content Support
 
-- Episode-specific file pattern matching
-- Multiple naming convention support:
-  - `S01E01` format
-  - `1x01` format
-  - Episode number with dash
-  - Season/episode with prefix
+- **Movies**: Direct IMDB ID lookup
+- **TV Shows**: Season/episode specific matching
+- **Multiple Formats**: SRT, subtitle archives, direct downloads
 
-### 🔧 Type Safety
+### 🌐 Intelligent Language Handling
 
-- Full TypeScript coverage
-- No `any` types
-- Comprehensive interfaces for all data structures
+- **Direct Matching**: Target language priority
+- **Quality Validation**: AI-powered language verification
+- **Translation Fallback**: From best available source language
+- **Language Detection**: Confidence scoring and validation
 
-### 📊 Detailed Logging
+### 🔧 Type Safety & Extensibility
 
-- Structured operation logging
-- Performance metrics
-- Error context and debugging information
+- **Provider Interface**: Easy addition of new subtitle sources
+- **Full TypeScript**: No `any` types, comprehensive interfaces
+- **Modular Design**: Clean separation of concerns
+
+## Adding New Providers
+
+The system is designed for easy extension. See `providers/README.md` for details on implementing new subtitle sources.
 
 ## Error Handling
-
-The service provides detailed error information:
 
 ```typescript
 try {
@@ -195,16 +207,10 @@ try {
   if (error instanceof AppError) {
     console.log("Error code:", error.code);
     console.log("Error message:", error.message);
+    // Message includes all provider errors for debugging
   }
 }
 ```
-
-### Common Error Codes
-
-- `CONFIGURATION_ERROR`: Missing API key
-- `RECORD_NOT_FOUND`: No subtitles found
-- `SERVICE_ERROR`: API communication issues
-- `UNEXPECTED_ERROR`: Unexpected failures
 
 ## Performance Optimizations
 

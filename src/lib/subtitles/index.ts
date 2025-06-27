@@ -1,52 +1,32 @@
-// Main service
-export { subtitleService, SubtitleService } from "./service";
+// Primary export - the new provider system
+export { subtitleProviderManager } from "./providers";
+export * from "./providers/base";
 
-// API client
-export { SubdlApiClient } from "./api-client";
-
-// Quality validator
-export {
-  subtitleQualityValidator,
-  SubtitleQualityValidator,
-} from "./quality-validator";
+// Keep essential services
+export { subtitleService } from "./service";
+export { subtitleQualityValidator } from "./quality-validator";
 export type {
   SubtitleQualityResult,
   SubtitleValidationOptions,
 } from "./quality-validator";
 
-// Utilities
+// Keep essential utilities that might be used externally
 export {
-  buildLanguageQueryString,
-  buildFallbackLanguageQueryString,
-  buildAllLanguagesQueryString,
-  getLanguageSearchStrategy,
-  buildSubdlUrl,
-  redactApiKey,
   insertNewLineIfWrongFormattedSRT,
   isTargetLanguage,
   logSubtitleOperation,
   logSubtitleError,
 } from "./utils";
 
-// Downloader
-export {
-  downloadAndExtractSubtitle,
-  downloadSubtitleArchive,
-  extractSubtitleFromArchive,
-} from "./downloader";
-
-// Configuration
-export { getSubdlConfig, SUBTITLE_CONFIG, EPISODE_PATTERNS } from "./config";
-
-// Re-export types
+// Keep essential types
 export type {
-  SubdlSubtitle,
-  SubdlApiResponse,
   SubtitleDownloadResult,
   SubtitleFetchOptions,
-  SubtitleApiConfig,
   SupportedLanguage,
   SubtitleProcessingError,
-} from "../../types/subtitles";
+} from "@/types/subtitles";
 
-export { SUPPORTED_LANGUAGES } from "../../types/subtitles";
+export { SUPPORTED_LANGUAGES } from "@/types/subtitles";
+
+// Translation service (still needed externally)
+export { translateSubtitles } from "./translate";

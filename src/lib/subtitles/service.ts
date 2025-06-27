@@ -4,9 +4,6 @@ import type {
   SubtitleFetchOptions,
 } from "@/types/subtitles";
 import { translateSubtitles } from "./translate";
-
-import { SubdlApiClient } from "./api-client";
-import { downloadAndExtractSubtitle } from "./downloader";
 import { subtitleQualityValidator } from "./quality-validator";
 import {
   insertNewLineIfWrongFormattedSRT,
@@ -14,10 +11,9 @@ import {
   logSubtitleOperation,
   logSubtitleError,
 } from "./utils";
+import { subtitleProviderManager } from "./providers";
 
 export class SubtitleService {
-  private readonly apiClient = new SubdlApiClient();
-
   async getOrGenerateSubtitles(
     options: SubtitleFetchOptions
   ): Promise<SubtitleDownloadResult> {
@@ -30,12 +26,18 @@ export class SubtitleService {
     });
 
     try {
-      const apiResponse = await this.apiClient.fetchSubtitles(options);
+      // Use the new provider system with fallback
+      const searchResult = await subtitleProviderManager.searchWithFallback({
+        imdbID,
+        targetLanguage,
+        seasonNumber,
+        episodeNumber,
+      });
 
       if (
-        !apiResponse.status ||
-        !apiResponse.subtitles ||
-        apiResponse.subtitles.length === 0
+        !searchResult.status ||
+        !searchResult.subtitles ||
+        searchResult.subtitles.length === 0
       ) {
         throw new AppError(
           AppErrorCode.RECORD_NOT_FOUND,
@@ -45,7 +47,8 @@ export class SubtitleService {
 
       // Try to get direct match in target language first
       const directMatch = await this.tryDirectLanguageMatch(
-        apiResponse.subtitles,
+        searchResult.subtitles,
+        searchResult.provider,
         targetLanguage,
         seasonNumber,
         episodeNumber
@@ -56,13 +59,15 @@ export class SubtitleService {
           imdbID,
           targetLanguage,
           sourceLanguage: targetLanguage,
+          provider: searchResult.provider,
         });
         return directMatch;
       }
 
       // Fall back to translation from best available subtitle
       const translatedResult = await this.translateFromBestAvailable(
-        apiResponse.subtitles,
+        searchResult.subtitles,
+        searchResult.provider,
         targetLanguage,
         seasonNumber,
         episodeNumber
@@ -72,6 +77,7 @@ export class SubtitleService {
         imdbID,
         targetLanguage,
         sourceLanguage: translatedResult.sourceLanguage,
+        provider: searchResult.provider,
       });
 
       return translatedResult;
@@ -92,7 +98,13 @@ export class SubtitleService {
   }
 
   private async tryDirectLanguageMatch(
-    subtitles: Array<{ url: string; language: string }>,
+    subtitles: Array<{
+      url: string;
+      language: string;
+      fileId?: string | number;
+      source: string;
+    }>,
+    provider: string,
     targetLanguage: string,
     seasonNumber?: number,
     episodeNumber?: number
@@ -108,15 +120,17 @@ export class SubtitleService {
     logSubtitleOperation("DirectMatch_Attempt", {
       targetLanguage,
       candidateCount: targetLanguageSubtitles.length,
+      provider,
     });
 
     // Try each subtitle until one works and passes quality validation
     for (const subtitle of targetLanguageSubtitles) {
       try {
-        let content = await downloadAndExtractSubtitle(
-          subtitle.url,
-          seasonNumber,
-          episodeNumber
+        // Download using the appropriate provider
+        let content = await subtitleProviderManager.downloadFromProvider(
+          subtitle.source,
+          subtitle.fileId,
+          subtitle.url
         );
 
         content = insertNewLineIfWrongFormattedSRT(content);
@@ -135,6 +149,7 @@ export class SubtitleService {
           detectedLanguage: qualityResult.detectedLanguage,
           confidence: qualityResult.confidence,
           issueCount: qualityResult.issues.length,
+          provider,
         });
 
         if (!qualityResult.isValid) {
@@ -144,6 +159,7 @@ export class SubtitleService {
             detectedLanguage: qualityResult.detectedLanguage,
             issues: qualityResult.issues,
             reason: qualityResult.reason,
+            provider,
           });
           // Continue to next subtitle
           continue;
@@ -155,6 +171,7 @@ export class SubtitleService {
           contentLength: content.length,
           detectedLanguage: qualityResult.detectedLanguage,
           confidence: qualityResult.confidence,
+          provider,
         });
 
         return {
@@ -166,6 +183,7 @@ export class SubtitleService {
         logSubtitleError("DirectMatch_Failed", error, {
           targetLanguage,
           url: subtitle.url,
+          provider,
         });
         // Continue to next subtitle
       }
@@ -174,13 +192,20 @@ export class SubtitleService {
     logSubtitleOperation("DirectMatch_AllFailed", {
       targetLanguage,
       attemptedCount: targetLanguageSubtitles.length,
+      provider,
     });
 
     return null;
   }
 
   private async translateFromBestAvailable(
-    subtitles: Array<{ url: string; language: string }>,
+    subtitles: Array<{
+      url: string;
+      language: string;
+      fileId?: string | number;
+      source: string;
+    }>,
+    provider: string,
     targetLanguage: string,
     seasonNumber?: number,
     episodeNumber?: number
@@ -195,13 +220,15 @@ export class SubtitleService {
         url: subtitle.url,
         attemptNumber: i + 1,
         totalCandidates: subtitles.length,
+        provider,
       });
 
       try {
-        let content = await downloadAndExtractSubtitle(
-          subtitle.url,
-          seasonNumber,
-          episodeNumber
+        // Download using the appropriate provider
+        let content = await subtitleProviderManager.downloadFromProvider(
+          subtitle.source,
+          subtitle.fileId,
+          subtitle.url
         );
 
         content = insertNewLineIfWrongFormattedSRT(content);
@@ -221,6 +248,7 @@ export class SubtitleService {
           detectedLanguage: qualityResult.detectedLanguage,
           confidence: qualityResult.confidence,
           issueCount: qualityResult.issues.length,
+          provider,
         });
 
         if (!qualityResult.isValid) {
@@ -231,6 +259,7 @@ export class SubtitleService {
             detectedLanguage: qualityResult.detectedLanguage,
             issues: qualityResult.issues,
             reason: qualityResult.reason,
+            provider,
           });
           // Try next subtitle if available
           if (i < subtitles.length - 1) {
@@ -243,6 +272,7 @@ export class SubtitleService {
               url: subtitle.url,
               message:
                 "Using subtitle despite quality issues as it's the last available option",
+              provider,
             });
           }
         }
@@ -254,6 +284,7 @@ export class SubtitleService {
             sourceLanguage: subtitle.language,
             detectedLanguage: qualityResult.detectedLanguage,
             confidence: qualityResult.confidence,
+            provider,
           });
 
           return {
@@ -277,6 +308,7 @@ export class SubtitleService {
           confidence: qualityResult.confidence,
           originalLength: content.length,
           translatedLength: translatedContent.length,
+          provider,
         });
 
         return {
@@ -290,6 +322,7 @@ export class SubtitleService {
           sourceLanguage: subtitle.language,
           url: subtitle.url,
           attemptNumber: i + 1,
+          provider,
         });
 
         // If this is the last subtitle, throw the error

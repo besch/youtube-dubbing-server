@@ -26,6 +26,7 @@ A Next.js server application for dubbing YouTube videos with AI-generated voices
 - **Payments**: Stripe
 - **AI Voice Generation**: OpenAI
 - **Video Processing**: AWS S3, FFmpeg
+- **Subtitle Sources**: OpenSubtitles.com (primary), Subdl.com (fallback)
 
 ## Getting Started
 
@@ -53,6 +54,11 @@ A Next.js server application for dubbing YouTube videos with AI-generated voices
 
    # YouTube API
    YOUTUBE_API_KEY=your_youtube_api_key
+
+   # OpenSubtitles (Primary subtitle provider)
+   OPENSUBTITLES_API_KEY=your_opensubtitles_api_key
+   OPENSUBTITLES_USERNAME=your_username  # Optional - for increased download limits
+   OPENSUBTITLES_PASSWORD=your_password  # Optional - for increased download limits
 
    # AWS
    AWS_ACCESS_KEY_ID=your_aws_access_key_id
