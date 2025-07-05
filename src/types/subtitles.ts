@@ -33,6 +33,8 @@ export interface SubtitleFetchOptions {
   targetLanguage: string;
   seasonNumber?: number;
   episodeNumber?: number;
+  title?: string;
+  year?: number;
 }
 
 export interface SubtitleApiConfig {

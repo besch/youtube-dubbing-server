@@ -132,8 +132,14 @@ export class OpenSubtitlesProvider implements SubtitleProvider {
           Accept: "application/json",
         },
       });
+      if (!response.ok) {
+        console.error(
+          `OpenSubtitles isAvailable check failed: ${response.status} ${response.statusText}`
+        );
+      }
       return response.ok;
-    } catch {
+    } catch (error) {
+      console.error("OpenSubtitles isAvailable check caught an error:", error);
       return false;
     }
   }
@@ -366,16 +372,18 @@ export class OpenSubtitlesProvider implements SubtitleProvider {
   ): string {
     const params = new URLSearchParams();
 
-    // Use IMDB ID if available, otherwise use title and year
-    if (options.imdbID) {
-      // Remove 'tt' prefix if present
-      const imdbId = options.imdbID.replace(/^tt/, "");
-      params.set("imdb_id", imdbId);
-    } else if (options.title) {
+    // Prioritize title and year for broader search, then add IMDB ID
+    if (options.title) {
       params.set("query", options.title);
       if (options.year) {
         params.set("year", options.year.toString());
       }
+    }
+
+    if (options.imdbID) {
+      // Remove 'tt' prefix if present
+      const imdbId = options.imdbID.replace(/^tt/, "");
+      params.set("imdb_id", imdbId);
     }
 
     // Add languages (can be single language or comma-separated list)

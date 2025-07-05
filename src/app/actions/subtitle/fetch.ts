@@ -77,6 +77,8 @@ const subtitleAction = createSafeActionClient({
 
 const fetchSubtitlesSchema = z.object({
   imdbID: z.string().min(1, { message: "IMDb ID cannot be empty" }),
+  title: z.string().min(1, { message: "Title cannot be empty" }),
+  year: z.number().int().optional(),
   languageCode: z
     .string()
     .length(2, { message: "Language code must be 2 characters" }),
@@ -98,13 +100,13 @@ export const fetchSubtitles = subtitleAction(
     { userId, ipAddress }: ActionContext
   ): Promise<ActionResponse<FetchSubtitlesOutput>> => {
     const actionStartTime = Date.now();
-    const { imdbID, languageCode, seasonNumber, episodeNumber } = input;
+    const { imdbID, languageCode, seasonNumber, episodeNumber, title, year } = input;
     const actionName = "fetch-movie-subtitles";
 
     subtitleFetchLogger.info(actionName, {
       user_id: userId,
       ip_address: ipAddress,
-      request_payload: { imdbID, languageCode, seasonNumber, episodeNumber },
+      request_payload: { imdbID, languageCode, seasonNumber, episodeNumber, title, year: year ? Number(year) : undefined },
       metadata: {
         custom_message: "Attempting to fetch movie/show subtitles.",
       },
@@ -116,6 +118,8 @@ export const fetchSubtitles = subtitleAction(
         targetLanguage: languageCode,
         seasonNumber,
         episodeNumber,
+        title,
+        year,
       });
 
       if (!result || typeof result.content !== "string") {
