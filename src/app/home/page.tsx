@@ -1,10 +1,17 @@
-import { Tv2 } from "lucide-react";
+import { Tv2, Play, Globe, Zap } from "lucide-react";
 import Link from "next/link";
 
 export default function HomePage() {
   return (
-    <div className="flex flex-col min-h-screen bg-gradient-to-b from-neutral-900 to-black text-white">
-      <main className="flex flex-col items-center justify-center flex-grow px-4 sm:px-8 py-16 sm:py-24 text-center">
+    <div className="flex flex-col min-h-screen bg-gradient-to-b from-neutral-900 to-black text-white relative overflow-hidden">
+      {/* Animated background elements */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-20 left-10 w-72 h-72 bg-violet-500/10 rounded-full blur-3xl animate-pulse"></div>
+        <div className="absolute bottom-20 right-10 w-96 h-96 bg-purple-500/10 rounded-full blur-3xl animate-pulse delay-1000"></div>
+        <div className="absolute top-1/2 left-1/2 w-80 h-80 bg-orange-500/5 rounded-full blur-3xl animate-pulse delay-2000"></div>
+      </div>
+
+      <main className="flex flex-col items-center justify-center flex-grow px-4 sm:px-8 py-16 sm:py-24 text-center relative z-10">
         <div className="max-w-4xl mx-auto">
           <div className="mb-8">
             <a
@@ -36,8 +43,9 @@ export default function HomePage() {
             our real-time AI-powered dubbing Chrome Extension.
           </p>
 
+          {/* Enhanced Video Section */}
           <div className="my-12 px-4">
-            <div className="aspect-video max-w-3xl mx-auto rounded-xl overflow-hidden shadow-2xl border border-neutral-700/50">
+            <div className="relative aspect-video max-w-3xl mx-auto rounded-xl overflow-hidden shadow-2xl border border-neutral-700/50 group">
               <iframe
                 width="100%"
                 height="100%"
@@ -47,36 +55,73 @@ export default function HomePage() {
                 allowFullScreen
                 className="rounded-xl"
               ></iframe>
+              <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+              <div className="absolute bottom-4 left-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                <div className="bg-black/80 backdrop-blur-sm rounded-lg px-3 py-2 text-white text-sm">
+                  <div className="flex items-center gap-2">
+                    <Play size={14} className="text-violet-400" />
+                    <span>Watch Demo in Action</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
+          {/* Enhanced Features Section */}
           <div className="mb-16 px-4">
-            <h2 className="text-2xl font-semibold mb-6 text-neutral-200">
-              Key Features
+            <h2 className="text-3xl font-bold mb-2 bg-clip-text text-transparent bg-gradient-to-r from-violet-400 to-purple-500">
+              Why Choose OneDub?
             </h2>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 text-left">
-              <div className="bg-neutral-800/50 p-5 rounded-lg border border-neutral-700/50">
-                <h3 className="font-semibold text-lg mb-2 text-violet-400">
+            <p className="text-neutral-400 mb-10">
+              Experience the future of multilingual entertainment
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8 text-left">
+              <div className="bg-gradient-to-br from-neutral-800/50 to-neutral-900/50 p-6 rounded-xl border border-neutral-700/50 hover:border-violet-500/50 transition-all duration-300 group hover:scale-105">
+                <div className="mb-4 p-3 bg-violet-500/20 rounded-lg w-fit">
+                  <Zap
+                    size={24}
+                    className="text-violet-400 group-hover:scale-110 transition-transform duration-300"
+                  />
+                </div>
+                <h3 className="font-semibold text-xl mb-3 text-violet-400">
                   Real-time Dubbing
                 </h3>
-                <p className="text-sm text-neutral-400">
-                  Instantly translate and dub videos as you watch.
+                <p className="text-neutral-400 leading-relaxed">
+                  Instantly translate and dub videos as you watch. No waiting,
+                  no delays - just seamless multilingual entertainment.
                 </p>
               </div>
-              <div className="bg-neutral-800/50 p-5 rounded-lg border border-neutral-700/50">
-                <h3 className="font-semibold text-lg mb-2 text-purple-400">
-                  Multiple Languages & Voices
+
+              <div className="bg-gradient-to-br from-neutral-800/50 to-neutral-900/50 p-6 rounded-xl border border-neutral-700/50 hover:border-purple-500/50 transition-all duration-300 group hover:scale-105">
+                <div className="mb-4 p-3 bg-purple-500/20 rounded-lg w-fit">
+                  <Globe
+                    size={24}
+                    className="text-purple-400 group-hover:scale-110 transition-transform duration-300"
+                  />
+                </div>
+                <h3 className="font-semibold text-xl mb-3 text-purple-400">
+                  Multiple Languages & Premium Voices
                 </h3>
-                <p className="text-sm text-neutral-400">
-                  Choose from a wide range of languages and AI voices.
+                <p className="text-neutral-400 leading-relaxed">
+                  Choose from a wide range of languages with AI voices so
+                  natural, you'll forget they're not human.
                 </p>
               </div>
-              <div className="bg-neutral-800/50 p-5 rounded-lg border border-neutral-700/50">
-                <h3 className="font-semibold text-lg mb-2 text-orange-400">
-                  Seamless Experience
+
+              <div className="bg-gradient-to-br from-neutral-800/50 to-neutral-900/50 p-6 rounded-xl border border-neutral-700/50 hover:border-orange-500/50 transition-all duration-300 group hover:scale-105">
+                <div className="mb-4 p-3 bg-orange-500/20 rounded-lg w-fit">
+                  <Tv2
+                    size={24}
+                    className="text-orange-400 group-hover:scale-110 transition-transform duration-300"
+                  />
+                </div>
+                <h3 className="font-semibold text-xl mb-3 text-orange-400">
+                  Universal Compatibility
                 </h3>
-                <p className="text-sm text-neutral-400">
-                  Integrated player, history, and favorites sync.
+                <p className="text-neutral-400 leading-relaxed">
+                  Works seamlessly with YouTube, Netflix, Prime Video, and more.
+                  Your entertainment, your language.
                 </p>
               </div>
             </div>
@@ -84,7 +129,7 @@ export default function HomePage() {
         </div>
       </main>
 
-      <footer className="text-center p-6 text-sm text-neutral-500 space-x-4">
+      <footer className="text-center p-6 text-sm text-neutral-500 space-x-4 relative z-10">
         <span>
           &copy; {new Date().getFullYear()} Dubabase. Movie and YouTube Dubbing.
           All rights reserved.
