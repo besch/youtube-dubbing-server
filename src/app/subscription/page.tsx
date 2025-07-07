@@ -84,6 +84,23 @@ export default function SubscriptionPage() {
     <div className="container mx-auto px-4 py-8">
       <h1 className="text-3xl font-bold mb-8">Subscription Plans</h1>
 
+      <div className="text-center mb-12 max-w-3xl mx-auto">
+        <p className="text-2xl sm:text-3xl text-neutral-300/80 mb-10">
+          Watch up to{" "}
+          <span className="bg-clip-text text-transparent bg-gradient-to-r from-violet-400 via-purple-500 to-orange-500 font-semibold">
+            4 dubbed movies , TV shows and YouTube videos
+          </span>{" "}
+          a day for free.
+        </p>
+        <p className="text-2xl sm:text-3xl text-neutral-300/80">
+          Or upgrade to{" "}
+          <span className="bg-clip-text text-transparent bg-gradient-to-r from-violet-400 via-purple-500 to-orange-500 font-semibold">
+            premium
+          </span>{" "}
+          to have unlimited access with premium voices.
+        </p>
+      </div>
+
       {profile && profile.subscription_status === "premium" ? (
         <SubscriptionStatus profile={profile} />
       ) : (

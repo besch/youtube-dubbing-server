@@ -6,17 +6,26 @@ export default function HomePage() {
     <div className="flex flex-col min-h-screen bg-gradient-to-b from-neutral-900 to-black text-white">
       <main className="flex flex-col items-center justify-center flex-grow px-4 sm:px-8 py-16 sm:py-24 text-center">
         <div className="max-w-4xl mx-auto">
-          <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-violet-500/30 bg-violet-950/40 px-3 py-1 text-xs font-medium text-violet-300">
-            <Tv2 size={14} className="text-violet-400" />
-            <span>
-              <a
-                href="https://chromewebstore.google.com/detail/onedub/gnkcmnoobhckipojdkemkelghfjcpmdc"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                Chrome Extension Experience
-              </a>
-            </span>
+          <div className="mb-8">
+            <a
+              href="https://chromewebstore.google.com/detail/onedub/gnkcmnoobhckipojdkemkelghfjcpmdc"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-3 px-8 py-4 bg-gradient-to-r from-violet-600 via-purple-600 to-orange-600 hover:from-violet-500 hover:via-purple-500 hover:to-orange-500 rounded-full border border-violet-400/50 shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 text-white font-semibold text-lg group"
+            >
+              <Tv2
+                size={20}
+                className="text-white group-hover:rotate-12 transition-transform duration-300"
+              />
+              <span className="bg-clip-text text-transparent bg-gradient-to-r from-white to-neutral-100">
+                Get Chrome Extension
+              </span>
+              <div className="flex items-center">
+                <span className="text-xs bg-orange-500 text-white px-2 py-1 rounded-full font-bold animate-pulse">
+                  FREE
+                </span>
+              </div>
+            </a>
           </div>
 
           <h1 className="text-4xl leading-loose sm:text-5xl sm:leading-loose md:text-6xl md:leading-loose font-extrabold tracking-tight mb-4 bg-clip-text text-transparent bg-gradient-to-r from-violet-400 via-purple-500 to-orange-500">
