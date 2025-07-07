@@ -96,6 +96,42 @@ export default function SubscriptionPage() {
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-10 right-20 w-72 h-72 bg-violet-500/5 rounded-full blur-3xl animate-pulse"></div>
         <div className="absolute bottom-10 left-20 w-96 h-96 bg-purple-500/5 rounded-full blur-3xl animate-pulse delay-1000"></div>
+
+        {/* Floating movie elements */}
+        <div className="absolute top-20 left-24 w-28 h-5 bg-gradient-to-r from-violet-500/20 to-violet-500/8 animate-float-fade-1 animate-delay-1 rounded-sm shadow-lg">
+          <div className="flex h-full">
+            {[...Array(10)].map((_, i) => (
+              <div
+                key={i}
+                className="flex-1 border-r border-violet-400/40 bg-violet-500/12"
+              ></div>
+            ))}
+          </div>
+        </div>
+
+        <div className="absolute bottom-32 right-28 w-32 h-6 bg-gradient-to-l from-purple-500/18 to-transparent animate-float-fade-2 animate-delay-3 rounded-sm shadow-md">
+          <div className="flex h-full">
+            {[...Array(12)].map((_, i) => (
+              <div
+                key={i}
+                className="flex-1 border-r border-purple-400/35 bg-purple-500/10"
+              ></div>
+            ))}
+          </div>
+        </div>
+
+        <div className="absolute top-80 left-40 w-20 h-12 bg-gradient-to-br from-orange-500/16 to-violet-500/12 rounded-md animate-float-fade-3 animate-delay-5 border border-orange-400/25 shadow-md">
+          <div className="w-full h-full rounded-md bg-gradient-to-r from-transparent via-white/10 to-transparent"></div>
+          <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-0 h-0 border-l-[5px] border-l-white/45 border-t-[3px] border-t-transparent border-b-[3px] border-b-transparent"></div>
+        </div>
+
+        <div className="absolute top-44 right-32 w-10 h-10 animate-float-fade-4 animate-delay-2">
+          <div className="w-0 h-0 border-l-[15px] border-l-purple-400/60 border-t-[7px] border-t-transparent border-b-[7px] border-b-transparent ml-2 drop-shadow-md"></div>
+        </div>
+
+        <div className="absolute bottom-48 left-20 w-3 h-3 bg-violet-400/70 rounded-full animate-float-fade-5 animate-delay-4 shadow-lg shadow-violet-400/40"></div>
+        <div className="absolute top-28 right-48 w-2 h-2 bg-orange-400/60 rounded-full animate-float-fade-6 animate-delay-6 shadow-md shadow-orange-400/30"></div>
+        <div className="absolute bottom-20 left-60 w-2.5 h-2.5 bg-purple-400/65 rounded-full animate-float-fade-1 animate-delay-1 shadow-md shadow-purple-400/30"></div>
       </div>
 
       <div className="container mx-auto px-4 py-12 relative z-10">
