@@ -4,11 +4,6 @@ export * from "./providers/base";
 
 // Keep essential services
 export { subtitleService } from "./service";
-export { subtitleQualityValidator } from "./quality-validator";
-export type {
-  SubtitleQualityResult,
-  SubtitleValidationOptions,
-} from "./quality-validator";
 
 // Keep essential utilities that might be used externally
 export {

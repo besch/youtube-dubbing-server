@@ -4,7 +4,6 @@ import type {
   SubtitleFetchOptions,
 } from "@/types/subtitles";
 import { translateSubtitles } from "./translate";
-import { subtitleQualityValidator } from "./quality-validator";
 import {
   insertNewLineIfWrongFormattedSRT,
   isTargetLanguage,
@@ -123,7 +122,7 @@ export class SubtitleService {
       provider,
     });
 
-    // Try each subtitle until one works and passes quality validation
+    // Try each subtitle until one works
     for (const subtitle of targetLanguageSubtitles) {
       try {
         // Download using the appropriate provider
@@ -135,42 +134,10 @@ export class SubtitleService {
 
         content = insertNewLineIfWrongFormattedSRT(content);
 
-        // Validate subtitle quality using Google Gemini
-        const qualityResult =
-          await subtitleQualityValidator.validateSubtitleQuality({
-            content,
-            expectedLanguage: targetLanguage,
-          });
-
-        logSubtitleOperation("DirectMatch_QualityCheck", {
-          targetLanguage,
-          url: subtitle.url,
-          isValid: qualityResult.isValid,
-          detectedLanguage: qualityResult.detectedLanguage,
-          confidence: qualityResult.confidence,
-          issueCount: qualityResult.issues.length,
-          provider,
-        });
-
-        if (!qualityResult.isValid) {
-          logSubtitleOperation("DirectMatch_QualityFailed", {
-            targetLanguage,
-            url: subtitle.url,
-            detectedLanguage: qualityResult.detectedLanguage,
-            issues: qualityResult.issues,
-            reason: qualityResult.reason,
-            provider,
-          });
-          // Continue to next subtitle
-          continue;
-        }
-
         logSubtitleOperation("DirectMatch_Success", {
           targetLanguage,
           url: subtitle.url,
           contentLength: content.length,
-          detectedLanguage: qualityResult.detectedLanguage,
-          confidence: qualityResult.confidence,
           provider,
         });
 
@@ -233,57 +200,11 @@ export class SubtitleService {
 
         content = insertNewLineIfWrongFormattedSRT(content);
 
-        // Validate source subtitle quality
-        const qualityResult =
-          await subtitleQualityValidator.validateSubtitleQuality({
-            content,
-            expectedLanguage: subtitle.language,
-          });
-
-        logSubtitleOperation("Translation_QualityCheck", {
-          targetLanguage,
-          sourceLanguage: subtitle.language,
-          url: subtitle.url,
-          isValid: qualityResult.isValid,
-          detectedLanguage: qualityResult.detectedLanguage,
-          confidence: qualityResult.confidence,
-          issueCount: qualityResult.issues.length,
-          provider,
-        });
-
-        if (!qualityResult.isValid) {
-          logSubtitleOperation("Translation_QualityFailed", {
-            targetLanguage,
-            sourceLanguage: subtitle.language,
-            url: subtitle.url,
-            detectedLanguage: qualityResult.detectedLanguage,
-            issues: qualityResult.issues,
-            reason: qualityResult.reason,
-            provider,
-          });
-          // Try next subtitle if available
-          if (i < subtitles.length - 1) {
-            continue;
-          } else {
-            // This is the last subtitle, proceed anyway with a warning
-            logSubtitleOperation("Translation_LastResort", {
-              targetLanguage,
-              sourceLanguage: subtitle.language,
-              url: subtitle.url,
-              message:
-                "Using subtitle despite quality issues as it's the last available option",
-              provider,
-            });
-          }
-        }
-
         // If source is already target language, return as-is
         if (isTargetLanguage(subtitle.language, targetLanguage)) {
           logSubtitleOperation("Translation_DirectMatch", {
             targetLanguage,
             sourceLanguage: subtitle.language,
-            detectedLanguage: qualityResult.detectedLanguage,
-            confidence: qualityResult.confidence,
             provider,
           });
 
@@ -304,8 +225,6 @@ export class SubtitleService {
         logSubtitleOperation("Translation_Success", {
           targetLanguage,
           sourceLanguage: subtitle.language,
-          detectedLanguage: qualityResult.detectedLanguage,
-          confidence: qualityResult.confidence,
           originalLength: content.length,
           translatedLength: translatedContent.length,
           provider,
@@ -336,7 +255,7 @@ export class SubtitleService {
     // This should never be reached, but just in case
     throw new AppError(
       AppErrorCode.RECORD_NOT_FOUND,
-      "No suitable subtitles found after quality validation"
+      "No suitable subtitles found"
     );
   }
 }
