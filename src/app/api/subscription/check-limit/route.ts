@@ -2,6 +2,7 @@ import { createClient } from "@/lib/supabase/server";
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { FREE_TIER_VIDEO_LIMIT } from "@/config/constants";
 
 // Force this route to be dynamic since it uses cookies
 export const dynamic = "force-dynamic";
@@ -62,14 +63,14 @@ export async function GET() {
       .order("created_at", { ascending: false });
 
     const dailyVideoCount = videos?.length ?? 0;
-    const canProcess = dailyVideoCount < 3;
+    const canProcess = dailyVideoCount < FREE_TIER_VIDEO_LIMIT;
 
     return NextResponse.json({
       success: true,
       data: {
         canProcess,
         dailyVideoCount,
-        remainingVideos: Math.max(0, 3 - dailyVideoCount),
+        remainingVideos: Math.max(0, FREE_TIER_VIDEO_LIMIT - dailyVideoCount),
         isPremium: false,
       },
     });

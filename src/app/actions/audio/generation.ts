@@ -7,6 +7,7 @@ import { config } from "@/config";
 import { generateOpenAiTts } from "@/lib/openai-tts";
 import { generateGoogleTts } from "@/lib/google-tts";
 import { createLogger } from "@/lib/logger";
+import { getCachedAudio, setCachedAudio } from "@/lib/audioCache";
 import { createServerClient } from "@supabase/ssr";
 import { cookies, headers as nextHeaders } from "next/headers";
 import type { Database } from "@/types/supabase";
@@ -319,6 +320,27 @@ export const generateAudioChunk = audioAction(
     }
 
     try {
+      // Best-effort cache: identical (text+language+voice) chunks are
+      // synthesized once and reused on subsequent requests/seeks.
+      const cached = await getCachedAudio({
+        language,
+        voice,
+        text: textToSynthesize,
+      });
+      if (cached) {
+        const audioBase64 = cached.toString("base64");
+        audioLogger.info(actionName, {
+          user_id: userId,
+          ip_address: ipAddress,
+          metadata: {
+            custom_message: "TTS cache hit - serving stored audio.",
+            mimeType: "audio/mpeg",
+            audioLengthBase64: audioBase64.length,
+          },
+        });
+        return { success: true, data: { audioBase64, mimeType: "audio/mpeg" } };
+      }
+
       audioLogger.debug(actionName, {
         user_id: userId,
         ip_address: ipAddress,
@@ -383,6 +405,11 @@ export const generateAudioChunk = audioAction(
       const { audioBuffer } = ttsResult;
       const audioBase64 = audioBuffer.toString("base64");
       const mimeType = "audio/mpeg";
+      // Persist the synthesized chunk for future requests.
+      await setCachedAudio(
+        { language, voice, text: textToSynthesize },
+        audioBuffer
+      );
       const durationMs = Date.now() - actionStartTime;
 
       audioLogger.info(actionName, {

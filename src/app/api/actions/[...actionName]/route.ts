@@ -8,6 +8,7 @@ import { generateAudioChunk } from "@/app/actions/audio/generation";
 import { checkVideoLimit } from "@/app/actions/subscription";
 import { logTtsStatisticsAction } from "@/app/actions/admin/logs";
 import { validateExtensionRequest, setCorsHeaders } from "@/lib/extension-auth";
+import { checkRateLimit, getClientIp } from "@/lib/rateLimit";
 
 type ActionFunction = (input: any) => Promise<any>;
 
@@ -61,8 +62,30 @@ export async function OPTIONS(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
-  const requestOrigin = request.headers.get("origin");
+    const requestOrigin = request.headers.get("origin");
   try {
+    // Rate limit per client IP to protect paid TTS / translation endpoints.
+    const ip = getClientIp(request);
+    const limit = checkRateLimit(`actions:${ip}`);
+    if (!limit.allowed) {
+      const retryResponse = createCorsResponse(
+        {
+          success: false,
+          error: new AppError(
+            AppErrorCode.RATE_LIMITED,
+            "Too many requests, please slow down."
+          ),
+        },
+        429,
+        requestOrigin
+      );
+      retryResponse.headers.set(
+        "Retry-After",
+        String(limit.retryAfterSeconds)
+      );
+      return retryResponse;
+    }
+
     // Validate Chrome extension request
     const authResult = validateExtensionRequest(request);
     if (!authResult.isValid) {

@@ -10,6 +10,7 @@ export enum AppErrorCode {
   UNAUTHENTICATED = 2001,
   UNAUTHORIZED = 2002,
   FORBIDDEN = 2003,
+  RATE_LIMITED = 2004,
 
   // Database Errors (3000-3999)
   DATABASE_ERROR = 3000,
