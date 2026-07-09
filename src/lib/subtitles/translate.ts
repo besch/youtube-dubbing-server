@@ -1,7 +1,17 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { createHash } from "crypto";
+import { supabaseServiceRoleClient } from "@/lib/supabase/serviceRoleClient";
 
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
-const GEMINI_MODEL_NAME = "gemini-1.5-flash-8b";
+
+// Ordered list of supported models. Older 1.5 models are being
+// deprecated by Google, so we try current GA models first and fall back
+// if a model id is retired.
+const GEMINI_MODEL_NAMES = [
+  "gemini-2.0-flash",
+  "gemini-1.5-flash",
+  "gemini-1.5-flash-8b",
+];
 
 if (!GOOGLE_API_KEY) {
   console.error(
@@ -10,20 +20,88 @@ if (!GOOGLE_API_KEY) {
 }
 
 const genAI = GOOGLE_API_KEY ? new GoogleGenerativeAI(GOOGLE_API_KEY) : null;
-const model = genAI
-  ? genAI.getGenerativeModel({ model: GEMINI_MODEL_NAME })
-  : null;
+
+async function getModel(modelIndex = 0) {
+  if (!genAI) return null;
+  const name = GEMINI_MODEL_NAMES[modelIndex] ?? GEMINI_MODEL_NAMES[0];
+  return genAI.getGenerativeModel({ model: name });
+}
 
 const generationConfig = {
   temperature: 0.3,
   maxOutputTokens: 4096,
 };
 
+const TRANSLATION_CACHE_BUCKET =
+  process.env.TRANSLATION_CACHE_BUCKET || "generated-subtitles";
+
+function getCacheKey(
+  sourceLanguage: string,
+  targetLanguage: string,
+  content: string
+): string {
+  const hash = createHash("sha256")
+    .update(`${sourceLanguage}|${targetLanguage}|${content}`)
+    .digest("hex");
+  return `${hash}.srt`;
+}
+
+async function getCachedTranslation(
+  sourceLanguage: string,
+  targetLanguage: string,
+  content: string
+): Promise<string | null> {
+  try {
+    const path = getCacheKey(sourceLanguage, targetLanguage, content);
+    const { data, error } = await supabaseServiceRoleClient.storage
+      .from(TRANSLATION_CACHE_BUCKET)
+      .download(path);
+    if (error || !data) return null;
+    const buf = await data.arrayBuffer();
+    return new TextDecoder().decode(buf);
+  } catch {
+    return null;
+  }
+}
+
+async function setCachedTranslation(
+  sourceLanguage: string,
+  targetLanguage: string,
+  content: string,
+  translated: string
+): Promise<void> {
+  try {
+    const path = getCacheKey(sourceLanguage, targetLanguage, content);
+    const { error } = await supabaseServiceRoleClient.storage
+      .from(TRANSLATION_CACHE_BUCKET)
+      .upload(path, new TextEncoder().encode(translated), {
+        contentType: "text/plain",
+        upsert: true,
+        cacheControl: "31536000",
+      });
+    if (error) {
+      console.warn("translateSubtitles: cache store failed", error.message);
+    }
+  } catch {
+    // Best-effort cache write.
+  }
+}
+
 export async function translateSubtitles(
   srtContent: string,
   sourceLanguage: string,
   targetLanguage: string
 ): Promise<string> {
+  const cached = await getCachedTranslation(
+    sourceLanguage,
+    targetLanguage,
+    srtContent
+  );
+  if (cached) {
+    console.log("translateSubtitles: cache hit");
+    return cached;
+  }
+
   const lines = srtContent.split("\n");
   const batches = [];
   const batchSize = 100;
@@ -39,7 +117,14 @@ export async function translateSubtitles(
     )
   );
 
-  return translatedBatches.join("\n");
+  const translated = translatedBatches.join("\n");
+  await setCachedTranslation(
+    sourceLanguage,
+    targetLanguage,
+    srtContent,
+    translated
+  );
+  return translated;
 }
 
 export async function translateBatch(
@@ -48,9 +133,6 @@ export async function translateBatch(
   targetLanguage: string,
   retries = 3
 ): Promise<string> {
-  if (!model) {
-    throw new Error("Gemini AI model not initialized. Check GOOGLE_API_KEY.");
-  }
   if (!batch) {
     console.warn("translateBatch called with empty batch.");
     return "";
@@ -73,68 +155,93 @@ Original Subtitles:
 
 ${batch}`;
 
-    // For Batch API, prepare request (pseudo-code, adapt for production)
-    const batchRequest = {
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig,
-    };
-
-    // Use synchronous call for simplicity; switch to Batch API for scale
-    const result = await model.generateContent(batchRequest);
-
-    const response = result.response;
-    if (
-      !response ||
-      !response.candidates ||
-      response.candidates.length === 0 ||
-      !response.candidates[0].content?.parts?.[0]?.text
+    // Try each supported model in order; fall back if one is retired/errors.
+    let lastModelError: unknown;
+    for (
+      let modelIndex = 0;
+      modelIndex < GEMINI_MODEL_NAMES.length;
+      modelIndex++
     ) {
-      let errorMessage =
-        "Gemini translation failed: Invalid response structure.";
-      if (response?.promptFeedback?.blockReason) {
-        errorMessage = `Gemini translation blocked: ${response.promptFeedback.blockReason}`;
-        console.error(
-          "Safety Ratings:",
-          JSON.stringify(response.promptFeedback.safetyRatings)
+      const model = await getModel(modelIndex);
+      if (!model) break;
+      try {
+        const batchRequest = {
+          contents: [{ role: "user", parts: [{ text: prompt }] }],
+          generationConfig,
+        };
+
+        const result = await model.generateContent(batchRequest);
+        const response = result.response;
+        if (
+          !response ||
+          !response.candidates ||
+          response.candidates.length === 0 ||
+          !response.candidates[0].content?.parts?.[0]?.text
+        ) {
+          let errorMessage =
+            "Gemini translation failed: Invalid response structure.";
+          if (response?.promptFeedback?.blockReason) {
+            errorMessage = `Gemini translation blocked: ${response.promptFeedback.blockReason}`;
+            console.error(
+              "Safety Ratings:",
+              JSON.stringify(response.promptFeedback.safetyRatings)
+            );
+          }
+          console.error(errorMessage, JSON.stringify(response, null, 2));
+          throw new Error(errorMessage);
+        }
+
+        const finishReason = response.candidates[0].finishReason;
+        if (finishReason && finishReason !== "STOP") {
+          console.warn(
+            `Gemini translation finished with reason: ${finishReason}. Output might be incomplete.`
+          );
+          if (finishReason === "MAX_TOKENS") {
+            throw new Error(
+              "Gemini translation failed: Max tokens reached. Output is incomplete."
+            );
+          }
+        }
+
+        return response.candidates[0].content.parts[0].text;
+      } catch (modelError) {
+        // Retry the same model a few times, then fall to the next model.
+        if (retries > 0) {
+          console.log(
+            `Retrying translation (model ${GEMINI_MODEL_NAMES[modelIndex]})... Attempts left: ${
+              retries - 1
+            }. Error: ${
+              modelError instanceof Error
+                ? modelError.message
+                : String(modelError)
+            }`
+          );
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          return await translateBatch(
+            batch,
+            sourceLanguage,
+            targetLanguage,
+            retries - 1
+          );
+        }
+        lastModelError = modelError;
+        console.warn(
+          `Gemini model ${GEMINI_MODEL_NAMES[modelIndex]} failed, trying next.`
         );
       }
-      console.error(errorMessage, JSON.stringify(response, null, 2));
-      throw new Error(errorMessage);
     }
 
-    const finishReason = response.candidates[0].finishReason;
-    if (finishReason && finishReason !== "STOP") {
-      console.warn(
-        `Gemini translation finished with reason: ${finishReason}. Output might be incomplete.`
-      );
-      if (finishReason === "MAX_TOKENS") {
-        throw new Error(
-          "Gemini translation failed: Max tokens reached. Output is incomplete."
-        );
-      }
+    console.error("All Gemini models failed for translation batch:", lastModelError);
+    if (lastModelError instanceof Error) {
+      throw lastModelError;
+    } else {
+      throw new Error("Gemini API call failed after trying all models.");
     }
-
-    return response.candidates[0].content.parts[0].text;
   } catch (error) {
-    if (retries > 0) {
-      console.log(
-        `Retrying translation... Attempts left: ${retries - 1}. Error: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      return await translateBatch(
-        batch,
-        sourceLanguage,
-        targetLanguage,
-        retries - 1
-      );
-    }
-    console.error("Error calling Gemini API after multiple retries:", error);
     if (error instanceof Error) {
       throw error;
     } else {
-      throw new Error("Gemini API call failed after multiple retries.");
+      throw new Error("Gemini API call failed.");
     }
   }
 }

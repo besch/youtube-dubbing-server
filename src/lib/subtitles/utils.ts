@@ -52,6 +52,10 @@ export function buildSubdlUrl(
 
   if (seasonNumber !== undefined && episodeNumber !== undefined) {
     url += `&season_number=${seasonNumber}&episode_number=${episodeNumber}`;
+    // Disambiguate TV episodes from movies for Subdl too.
+    url += `&type=episode`;
+  } else {
+    url += `&type=movie`;
   }
 
   return url;

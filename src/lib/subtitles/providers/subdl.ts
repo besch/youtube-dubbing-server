@@ -16,16 +16,12 @@ export class SubdlProvider implements SubtitleProvider {
   private apiClient = new SubdlApiClient();
 
   async isAvailable(): Promise<boolean> {
-    try {
-      // Test with a known movie to check if Subdl is working
-      const testResponse = await this.apiClient.fetchSubtitles({
-        imdbID: "tt0111161", // The Shawshank Redemption
-        targetLanguage: "en",
-      });
-      return testResponse.status === true;
-    } catch {
-      return false;
-    }
+    // Lightweight check: the API client is constructed in the field
+    // initializer and `getSubdlConfig()` throws if SUBDL_API_KEY is missing,
+    // so reaching this point means the provider is configured. A live test
+    // call here would burn a real request on every availability-cache refresh
+    // (~5 min), so reachability is validated lazily at search time instead.
+    return true;
   }
 
   async searchSubtitles(

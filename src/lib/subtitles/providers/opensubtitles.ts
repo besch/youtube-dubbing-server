@@ -339,9 +339,15 @@ export class OpenSubtitlesProvider implements SubtitleProvider {
       return;
     }
 
-    // Only authenticate if we have username and password
+    // Only authenticate if we have username and password.
+    // OpenSubtitles requires a login JWT for downloads, so without
+    // creds every download fails — surface that clearly so the caller
+    // falls through to the next subtitle/provider instead of 401-ing silently.
     if (!this.config.username || !this.config.password) {
-      return;
+      throw new AppError(
+        AppErrorCode.SERVICE_ERROR,
+        "OpenSubtitles login not configured — downloads require authentication"
+      );
     }
 
     try {
@@ -399,18 +405,7 @@ export class OpenSubtitlesProvider implements SubtitleProvider {
     const urls: string[] = [];
 
     const buildParams = (seed: Record<string, string>) => {
-      const params = new URLSearchParams(seed);
-
-      params.set("languages", languages);
-
-      if (options.seasonNumber && options.episodeNumber) {
-        params.set("season_number", options.seasonNumber.toString());
-        params.set("episode_number", options.episodeNumber.toString());
-      }
-
-      params.set("order_by", "download_count");
-      params.set("order_direction", "desc");
-
+      const params = buildOpenSubtitlesSearchParams(options, languages, seed);
       return `${this.config.baseUrl}/subtitles?${params.toString()}`;
     };
 
@@ -428,4 +423,41 @@ export class OpenSubtitlesProvider implements SubtitleProvider {
 
     return [...new Set(urls)];
   }
+}
+
+/**
+ * Pure, testable builder for OpenSubtitles search query params.
+ * Centralizes the language/exclude/type heuristics so they can be
+ * asserted in unit tests (see opensubtitles.test.ts).
+ */
+export function buildOpenSubtitlesSearchParams(
+  options: SubtitleFetchOptions,
+  languages: string,
+  seed: Record<string, string>
+): URLSearchParams {
+  const params = new URLSearchParams(seed);
+
+  params.set("languages", languages);
+  // Exclude AI-translated subtitles from search: the service would
+  // otherwise return auto-translated subs that we would then re-translate
+  // (double translation -> degraded quality). Machine-translated and
+  // foreign-parts-only are also excluded for the same reason.
+  params.set("ai_translated", "exclude");
+  params.set("machine_translated", "exclude");
+  params.set("foreign_parts_only", "exclude");
+
+  if (options.seasonNumber && options.episodeNumber) {
+    params.set("season_number", options.seasonNumber.toString());
+    params.set("episode_number", options.episodeNumber.toString());
+    // Disambiguate TV episodes from movies/features when searching by IMDb.
+    params.set("type", "episode");
+  } else if (!options.seasonNumber && !options.episodeNumber) {
+    // For non-episode lookups, prefer movie features to avoid mismatches.
+    params.set("type", "movie");
+  }
+
+  params.set("order_by", "download_count");
+  params.set("order_direction", "desc");
+
+  return params;
 }
