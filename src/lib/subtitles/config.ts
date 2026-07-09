@@ -35,9 +35,18 @@ export const EPISODE_PATTERNS = [
       )}.*\\.srt$`,
       "i"
     ),
+  // S1E1 format
+  (season: number, episode: number) =>
+    new RegExp(`S0?${season}E0?${episode}.*\\.srt$`, "i"),
   // 1x01 format
   (season: number, episode: number) =>
-    new RegExp(`${season}x${String(episode).padStart(2, "0")}.*\\.srt$`, "i"),
+    new RegExp(`${season}x0?${episode}.*\\.srt$`, "i"),
+  // Season 1 Episode 1 / Season.1.Episode.1 format
+  (season: number, episode: number) =>
+    new RegExp(
+      `season[\\s._-]*0?${season}.*episode[\\s._-]*0?${episode}.*\\.srt$`,
+      "i"
+    ),
   // Episode number at start with dash
   (season: number, episode: number) =>
     new RegExp(`^${String(episode).padStart(2, "0")}\\s*-.*\\.srt$`, "i"),

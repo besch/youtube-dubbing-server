@@ -3,6 +3,7 @@ import type {
   SubtitleDownloadResult,
   SubtitleFetchOptions,
 } from "@/types/subtitles";
+import type { SubtitleResult } from "./providers";
 import { translateSubtitles } from "./translate";
 import {
   insertNewLineIfWrongFormattedSRT,
@@ -16,7 +17,8 @@ export class SubtitleService {
   async getOrGenerateSubtitles(
     options: SubtitleFetchOptions
   ): Promise<SubtitleDownloadResult> {
-    const { imdbID, targetLanguage, seasonNumber, episodeNumber } = options;
+    const { imdbID, targetLanguage, seasonNumber, episodeNumber, title, year } =
+      options;
 
     logSubtitleOperation("Service_Start", {
       imdbID,
@@ -31,6 +33,8 @@ export class SubtitleService {
         targetLanguage,
         seasonNumber,
         episodeNumber,
+        title,
+        year,
       });
 
       if (
@@ -97,12 +101,7 @@ export class SubtitleService {
   }
 
   private async tryDirectLanguageMatch(
-    subtitles: Array<{
-      url: string;
-      language: string;
-      fileId?: string | number;
-      source: string;
-    }>,
+    subtitles: SubtitleResult[],
     provider: string,
     targetLanguage: string,
     seasonNumber?: number,
@@ -129,7 +128,9 @@ export class SubtitleService {
         let content = await subtitleProviderManager.downloadFromProvider(
           subtitle.source,
           subtitle.fileId,
-          subtitle.url
+          subtitle.url,
+          seasonNumber,
+          episodeNumber
         );
 
         content = insertNewLineIfWrongFormattedSRT(content);
@@ -166,12 +167,7 @@ export class SubtitleService {
   }
 
   private async translateFromBestAvailable(
-    subtitles: Array<{
-      url: string;
-      language: string;
-      fileId?: string | number;
-      source: string;
-    }>,
+    subtitles: SubtitleResult[],
     provider: string,
     targetLanguage: string,
     seasonNumber?: number,
@@ -195,7 +191,9 @@ export class SubtitleService {
         let content = await subtitleProviderManager.downloadFromProvider(
           subtitle.source,
           subtitle.fileId,
-          subtitle.url
+          subtitle.url,
+          seasonNumber,
+          episodeNumber
         );
 
         content = insertNewLineIfWrongFormattedSRT(content);

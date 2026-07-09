@@ -193,23 +193,42 @@ export class OpenSubtitlesProvider implements SubtitleProvider {
     options: SubtitleFetchOptions,
     languages: string
   ): Promise<OpenSubtitlesSearchResponse> {
-    const searchUrl = this.buildSearchUrl(options, languages);
-    const response = await fetch(searchUrl, {
-      headers: {
-        "Api-Key": this.config.apiKey,
-        "User-Agent": this.config.userAgent,
-        Accept: "application/json",
-      },
-    });
+    const searchUrls = this.buildSearchUrls(options, languages);
+    let lastResult: OpenSubtitlesSearchResponse | null = null;
 
-    if (!response.ok) {
-      throw new AppError(
-        AppErrorCode.SERVICE_ERROR,
-        `OpenSubtitles API request failed: ${response.status} ${response.statusText}`
-      );
+    for (const searchUrl of searchUrls) {
+      const response = await fetch(searchUrl, {
+        headers: {
+          "Api-Key": this.config.apiKey,
+          "User-Agent": this.config.userAgent,
+          Accept: "application/json",
+        },
+      });
+
+      if (!response.ok) {
+        throw new AppError(
+          AppErrorCode.SERVICE_ERROR,
+          `OpenSubtitles API request failed: ${response.status} ${response.statusText}`
+        );
+      }
+
+      const result = await response.json();
+      lastResult = result;
+
+      if (result.data.length > 0) {
+        return result;
+      }
     }
 
-    return await response.json();
+    return (
+      lastResult || {
+        total_pages: 0,
+        total_count: 0,
+        per_page: 0,
+        page: 1,
+        data: [],
+      }
+    );
   }
 
   private formatSearchResult(
@@ -223,6 +242,13 @@ export class OpenSubtitlesProvider implements SubtitleProvider {
         subtitle.attributes.files[0]?.file_name || subtitle.attributes.slug,
       downloadCount: subtitle.attributes.download_count,
       rating: subtitle.attributes.ratings,
+      trusted: subtitle.attributes.from_trusted,
+      hearingImpaired: subtitle.attributes.hearing_impaired,
+      hd: subtitle.attributes.hd,
+      aiTranslated: subtitle.attributes.ai_translated,
+      machineTranslated: subtitle.attributes.machine_translated,
+      foreignPartsOnly: subtitle.attributes.foreign_parts_only,
+      release: subtitle.attributes.release,
       source: this.name,
     }));
 
@@ -366,39 +392,40 @@ export class OpenSubtitlesProvider implements SubtitleProvider {
     }
   }
 
-  private buildSearchUrl(
+  private buildSearchUrls(
     options: SubtitleFetchOptions,
     languages: string
-  ): string {
-    const params = new URLSearchParams();
+  ): string[] {
+    const urls: string[] = [];
 
-    // Prioritize title and year for broader search, then add IMDB ID
-    if (options.title) {
-      params.set("query", options.title);
-      if (options.year) {
-        params.set("year", options.year.toString());
+    const buildParams = (seed: Record<string, string>) => {
+      const params = new URLSearchParams(seed);
+
+      params.set("languages", languages);
+
+      if (options.seasonNumber && options.episodeNumber) {
+        params.set("season_number", options.seasonNumber.toString());
+        params.set("episode_number", options.episodeNumber.toString());
       }
-    }
+
+      params.set("order_by", "download_count");
+      params.set("order_direction", "desc");
+
+      return `${this.config.baseUrl}/subtitles?${params.toString()}`;
+    };
 
     if (options.imdbID) {
-      // Remove 'tt' prefix if present
-      const imdbId = options.imdbID.replace(/^tt/, "");
-      params.set("imdb_id", imdbId);
+      urls.push(buildParams({ imdb_id: options.imdbID.replace(/^tt/, "") }));
     }
 
-    // Add languages (can be single language or comma-separated list)
-    params.set("languages", languages);
-
-    // Add episode details for TV shows
-    if (options.seasonNumber && options.episodeNumber) {
-      params.set("season_number", options.seasonNumber.toString());
-      params.set("episode_number", options.episodeNumber.toString());
+    if (options.title) {
+      const titleParams: Record<string, string> = { query: options.title };
+      if (options.year) {
+        titleParams.year = options.year.toString();
+      }
+      urls.push(buildParams(titleParams));
     }
 
-    // Additional filters for better results
-    params.set("order_by", "download_count");
-    params.set("order_direction", "desc");
-
-    return `${this.config.baseUrl}/subtitles?${params.toString()}`;
+    return [...new Set(urls)];
   }
 }

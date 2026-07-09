@@ -4,9 +4,11 @@ import {
   SubtitleProvider,
   SubtitleSearchResult,
   SubtitleFetchOptions,
+  SubtitleResult,
 } from "./base";
 import { OpenSubtitlesProvider } from "./opensubtitles";
 import { SubdlProvider } from "./subdl";
+import { isTargetLanguage } from "../utils";
 
 const logger = createLogger("subtitle-provider-manager");
 
@@ -33,6 +35,8 @@ export class SubtitleProviderManager {
     options: SubtitleFetchOptions
   ): Promise<SubtitleSearchResult> {
     const errors: string[] = [];
+    const subtitles: SubtitleResult[] = [];
+    const providersWithResults = new Set<string>();
 
     for (const provider of this.providers) {
       try {
@@ -47,7 +51,9 @@ export class SubtitleProviderManager {
         const result = await provider.searchSubtitles(options);
 
         if (result.status && result.subtitles.length > 0) {
-          // Success! Log and return
+          subtitles.push(...result.subtitles);
+          providersWithResults.add(provider.name);
+
           logger.info("provider-search-success", {
             metadata: {
               provider: provider.name,
@@ -56,7 +62,6 @@ export class SubtitleProviderManager {
               targetLanguage: options.targetLanguage,
             },
           });
-          return result;
         } else {
           errors.push(
             `${provider.name}: ${result.error || "No subtitles found"}`
@@ -86,7 +91,36 @@ export class SubtitleProviderManager {
       }
     }
 
-    // All providers failed
+    const dedupedSubtitles = this.dedupeSubtitles(subtitles);
+    if (dedupedSubtitles.length > 0) {
+      const sortedSubtitles = this.sortSubtitlesByQuality(
+        dedupedSubtitles,
+        options.targetLanguage
+      );
+      const exactMatches = sortedSubtitles.filter((subtitle) =>
+        isTargetLanguage(subtitle.language, options.targetLanguage)
+      ).length;
+
+      logger.info("provider-search-merged-success", {
+        metadata: {
+          providers: Array.from(providersWithResults),
+          subtitleCount: sortedSubtitles.length,
+          exactMatches,
+          imdbID: options.imdbID,
+          targetLanguage: options.targetLanguage,
+        },
+      });
+
+      return {
+        status: true,
+        subtitles: sortedSubtitles,
+        provider:
+          providersWithResults.size === 1
+            ? Array.from(providersWithResults)[0]
+            : "multiple",
+      };
+    }
+
     logger.error("all-providers-failed", {
       error_message: "All subtitle providers failed",
       metadata: {
@@ -102,10 +136,78 @@ export class SubtitleProviderManager {
     );
   }
 
+  private dedupeSubtitles(subtitles: SubtitleResult[]): SubtitleResult[] {
+    const seen = new Set<string>();
+    const deduped: SubtitleResult[] = [];
+
+    for (const subtitle of subtitles) {
+      const key = [
+        subtitle.source,
+        subtitle.fileId ?? "",
+        subtitle.url,
+        subtitle.language,
+        subtitle.fileName ?? "",
+      ].join("|");
+
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      deduped.push(subtitle);
+    }
+
+    return deduped;
+  }
+
+  private sortSubtitlesByQuality(
+    subtitles: SubtitleResult[],
+    targetLanguage: string
+  ): SubtitleResult[] {
+    const providerPriority = new Map(
+      this.providers.map((provider) => [provider.name, provider.priority])
+    );
+
+    return [...subtitles].sort((a, b) => {
+      return (
+        this.scoreSubtitle(b, targetLanguage, providerPriority) -
+        this.scoreSubtitle(a, targetLanguage, providerPriority)
+      );
+    });
+  }
+
+  private scoreSubtitle(
+    subtitle: SubtitleResult,
+    targetLanguage: string,
+    providerPriority: Map<string, number>
+  ): number {
+    const priority = providerPriority.get(subtitle.source) ?? 99;
+    let score = Math.max(0, 100 - priority * 10);
+
+    if (isTargetLanguage(subtitle.language, targetLanguage)) score += 1000;
+    if (subtitle.trusted) score += 120;
+    if (subtitle.hd) score += 35;
+    if (subtitle.hearingImpaired) score -= 25;
+    if (subtitle.foreignPartsOnly) score -= 400;
+    if (subtitle.aiTranslated || subtitle.machineTranslated) score -= 80;
+
+    score += Math.min(subtitle.downloadCount ?? 0, 5000) / 20;
+    score += Math.max(0, subtitle.rating ?? 0) * 25;
+
+    const release = `${subtitle.release ?? ""} ${subtitle.fileName ?? ""}`;
+    if (/web[-_. ]?dl|web[-_. ]?rip/i.test(release)) score += 30;
+    if (/blu[-_. ]?ray|bdrip|br[-_. ]?rip/i.test(release)) score += 25;
+    if (/cam|ts|telesync|hdcam/i.test(release)) score -= 100;
+
+    return score;
+  }
+
   async downloadFromProvider(
     providerName: string,
     fileId?: string | number,
-    url?: string
+    url?: string,
+    seasonNumber?: number,
+    episodeNumber?: number
   ): Promise<string> {
     const provider = this.providers.find((p) => p.name === providerName);
     if (!provider) {
@@ -116,7 +218,12 @@ export class SubtitleProviderManager {
     }
 
     try {
-      const content = await provider.downloadSubtitle({ fileId, url });
+      const content = await provider.downloadSubtitle({
+        fileId,
+        url,
+        seasonNumber,
+        episodeNumber,
+      });
 
       logger.info("provider-download-success", {
         metadata: {

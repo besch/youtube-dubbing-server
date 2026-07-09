@@ -135,14 +135,19 @@ async function decodeSubtitleContent(buffer: Buffer): Promise<string> {
     let encoding = encodingInfo?.encoding || SUBTITLE_CONFIG.defaultEncoding;
 
     // A common issue is Cyrillic (Windows-1251) being misidentified as Latin-1.
-    // If ISO-8859-1 is detected, it's safer to bet on 'cp1251' for subtitles
-    // as it's a common encoding for Russian/Cyrillic subtitles.
+    // Only override when the decoded text strongly looks Cyrillic; otherwise
+    // keep Latin-1 so Western European subtitles are not corrupted.
     if (encoding === "ISO-8859-1") {
-      encoding = "CP1251";
-      logSubtitleOperation("Decode_EncodingOverride", {
-        detected: "ISO-8859-1",
-        overriddenTo: "CP1251",
-      });
+      const cp1251Text = iconv.decode(buffer, "CP1251");
+      const cyrillicMatches = cp1251Text.match(/[\u0400-\u04FF]/g)?.length ?? 0;
+      if (cyrillicMatches > 20) {
+        encoding = "CP1251";
+        logSubtitleOperation("Decode_EncodingOverride", {
+          detected: "ISO-8859-1",
+          overriddenTo: "CP1251",
+          cyrillicMatches,
+        });
+      }
     }
 
     logSubtitleOperation("Decode", {

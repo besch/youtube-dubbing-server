@@ -5,6 +5,13 @@ export interface SubtitleResult {
   fileName?: string;
   downloadCount?: number;
   rating?: number;
+  trusted?: boolean;
+  hearingImpaired?: boolean;
+  hd?: boolean;
+  aiTranslated?: boolean;
+  machineTranslated?: boolean;
+  foreignPartsOnly?: boolean;
+  release?: string;
   source: string;
 }
 
@@ -28,6 +35,8 @@ export interface SubtitleFetchOptions {
 export interface SubtitleDownloadOptions {
   fileId?: string | number;
   url?: string;
+  seasonNumber?: number;
+  episodeNumber?: number;
 }
 
 export interface SubtitleProvider {

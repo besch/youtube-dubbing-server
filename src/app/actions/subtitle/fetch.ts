@@ -32,10 +32,15 @@ function getStatusCodeFromAppError(code: AppErrorCode): number {
 const subtitleAction = createSafeActionClient({
   async middleware(): Promise<ActionContext> {
     const cookieStore = cookies();
+    const requestHeaders = nextHeaders();
+    const authorization = requestHeaders.get("authorization") ?? undefined;
     const supabase = createServerClient<Database>(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
+        global: authorization
+          ? { headers: { Authorization: authorization } }
+          : undefined,
         cookies: {
           get(name: string) {
             return cookieStore.get(name)?.value;
@@ -47,7 +52,8 @@ const subtitleAction = createSafeActionClient({
       data: { user },
     } = await supabase.auth.getUser();
     const ip =
-      nextHeaders().get("x-forwarded-for") ?? nextHeaders().get("remote_addr");
+      requestHeaders.get("x-forwarded-for") ??
+      requestHeaders.get("remote_addr");
     return { userId: user?.id, ipAddress: ip ?? undefined };
   },
   handleReturnedServerError(e: Error) {
@@ -81,7 +87,9 @@ const fetchSubtitlesSchema = z.object({
   year: z.number().int().optional(),
   languageCode: z
     .string()
-    .length(2, { message: "Language code must be 2 characters" }),
+    .regex(/^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$/, {
+      message: "Language code must be a valid language tag",
+    }),
   seasonNumber: z.number().int().min(1).optional(),
   episodeNumber: z.number().int().min(1).optional(),
 });

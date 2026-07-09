@@ -56,6 +56,8 @@ export class SubdlProvider implements SubtitleProvider {
           fileName: subtitle.file_name,
           downloadCount: subtitle.download_count,
           rating: subtitle.rating,
+          hearingImpaired: subtitle.hi,
+          release: subtitle.release_name,
           source: this.name,
         })
       );
@@ -89,7 +91,11 @@ export class SubdlProvider implements SubtitleProvider {
       }
 
       // Use the existing downloader which handles extraction and formatting
-      const content = await downloadAndExtractSubtitle(options.url);
+      const content = await downloadAndExtractSubtitle(
+        options.url,
+        options.seasonNumber,
+        options.episodeNumber
+      );
       return content;
     } catch (error) {
       if (error instanceof AppError) {

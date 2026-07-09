@@ -43,10 +43,15 @@ function getStatusCodeFromAppError(code: AppErrorCode): number {
 const audioAction = createSafeActionClient({
   async middleware(): Promise<ActionContext> {
     const cookieStore = cookies();
+    const requestHeaders = nextHeaders();
+    const authorization = requestHeaders.get("authorization") ?? undefined;
     const supabase = createServerClient<Database>(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
+        global: authorization
+          ? { headers: { Authorization: authorization } }
+          : undefined,
         cookies: {
           get(name: string) {
             return cookieStore.get(name)?.value;
@@ -58,7 +63,8 @@ const audioAction = createSafeActionClient({
       data: { user },
     } = await supabase.auth.getUser();
     const ip =
-      nextHeaders().get("x-forwarded-for") ?? nextHeaders().get("remote_addr");
+      requestHeaders.get("x-forwarded-for") ??
+      requestHeaders.get("remote_addr");
     return {
       userId: user?.id,
       ipAddress: ip ?? undefined,

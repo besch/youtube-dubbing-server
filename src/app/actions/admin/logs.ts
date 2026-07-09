@@ -4,11 +4,10 @@ import { z } from "zod";
 import { createSafeActionClient } from "next-safe-action";
 import type { User } from "@supabase/supabase-js"; // Import User type
 import { createServerClient } from "@supabase/ssr"; // Updated Supabase client
-import { cookies } from "next/headers"; // For server-side cookie handling
+import { cookies, headers as nextHeaders } from "next/headers"; // For server-side cookie handling
 import type { Database } from "@/types/supabase";
-import type { ActionResponse } from "@/types/actions";
 import { AppError, appErrors } from "@/lib/errors";
-import type { LogEntry, LogLevel } from "@/lib/logger";
+import type { LogEntry } from "@/lib/logger";
 import { createLogger } from "@/lib/logger"; // Import logger
 import { createClient as createSupabaseClient } from "@supabase/supabase-js"; // Specific import for admin client
 import { ADMIN_EMAIL } from "@/config/constants"; // Import ADMIN_EMAIL
@@ -55,7 +54,7 @@ function getSupabaseAdminClient() {
     throw new AppError(
       appErrors.CONFIGURATION_ERROR.message,
       appErrors.CONFIGURATION_ERROR.code,
-      appErrors.CONFIGURATION_ERROR.statusCode
+      appErrors.CONFIGURATION_ERROR.statusCode,
     );
   }
   // This createClient is fine for service role key usage.
@@ -104,7 +103,7 @@ const action = createSafeActionClient({
             cookieStore.set({ name, value: "", ...options });
           },
         },
-      }
+      },
     );
 
     const {
@@ -116,7 +115,7 @@ const action = createSafeActionClient({
       throw new AppError(
         "User is not authenticated.",
         appErrors.UNAUTHORIZED.code,
-        appErrors.UNAUTHORIZED.statusCode
+        appErrors.UNAUTHORIZED.statusCode,
       );
     }
 
@@ -125,7 +124,7 @@ const action = createSafeActionClient({
       throw new AppError(
         "User is not authorized to perform this action.",
         appErrors.FORBIDDEN.code,
-        appErrors.FORBIDDEN.statusCode
+        appErrors.FORBIDDEN.statusCode,
       );
     }
 
@@ -200,7 +199,7 @@ export const getLogsAction = action(getLogsSchema, async (parsedInput) => {
     throw new AppError(
       error.message,
       appErrors.DATABASE_ERROR.code,
-      appErrors.DATABASE_ERROR.statusCode
+      appErrors.DATABASE_ERROR.statusCode,
     );
   }
 
@@ -236,12 +235,12 @@ export const getLogStatsAction = action(
       throw new AppError(
         error.message,
         appErrors.DATABASE_ERROR.code,
-        appErrors.DATABASE_ERROR.statusCode
+        appErrors.DATABASE_ERROR.statusCode,
       );
     }
 
     return data as LogStat[];
-  }
+  },
 );
 
 export const getTimeBasedLogStatsAction = action(
@@ -259,18 +258,18 @@ export const getTimeBasedLogStatsAction = action(
     if (error) {
       console.error(
         `Error fetching time-based log stats (granularity: ${granularity}):`,
-        error
+        error,
       );
       throw new AppError(
         error.message,
         appErrors.DATABASE_ERROR.code,
-        appErrors.DATABASE_ERROR.statusCode
+        appErrors.DATABASE_ERROR.statusCode,
       );
     }
 
     if (!data) {
       console.warn(
-        `No data returned from get_logs_by_time_granularity for ${granularity} between ${startDate} and ${endDate}`
+        `No data returned from get_logs_by_time_granularity for ${granularity} between ${startDate} and ${endDate}`,
       );
       return [];
     }
@@ -281,7 +280,7 @@ export const getTimeBasedLogStatsAction = action(
     }));
 
     return transformedData;
-  }
+  },
 );
 
 // You might also want an action to get a single log entry by ID
@@ -306,11 +305,11 @@ export const getLogByIdAction = action(
       throw new AppError(
         error.message,
         appErrors.DATABASE_ERROR.code,
-        appErrors.DATABASE_ERROR.statusCode
+        appErrors.DATABASE_ERROR.statusCode,
       );
     }
     return data as LogEntry | null;
-  }
+  },
 );
 
 export const getUniqueIpActivityAction = action(
@@ -328,18 +327,18 @@ export const getUniqueIpActivityAction = action(
     if (error) {
       console.error(
         `Error fetching unique IP activity (granularity: ${granularity}):`,
-        error
+        error,
       );
       throw new AppError(
         error.message,
         appErrors.DATABASE_ERROR.code,
-        appErrors.DATABASE_ERROR.statusCode
+        appErrors.DATABASE_ERROR.statusCode,
       );
     }
 
     if (!data) {
       console.warn(
-        `No data returned from get_unique_ip_activity for ${granularity} between ${startDate} and ${endDate}`
+        `No data returned from get_unique_ip_activity for ${granularity} between ${startDate} and ${endDate}`,
       );
       return [];
     }
@@ -352,7 +351,7 @@ export const getUniqueIpActivityAction = action(
     }));
 
     return transformedData;
-  }
+  },
 );
 
 // Enhanced Analytics Actions
@@ -369,7 +368,7 @@ export const getRequestVolumeAction = action(
         p_granularity: granularity,
         p_start_date: startDate === undefined ? null : startDate,
         p_end_date: endDate === undefined ? null : endDate,
-      }
+      },
     );
 
     if (error) {
@@ -377,7 +376,7 @@ export const getRequestVolumeAction = action(
       throw new AppError(
         error.message,
         appErrors.DATABASE_ERROR.code,
-        appErrors.DATABASE_ERROR.statusCode
+        appErrors.DATABASE_ERROR.statusCode,
       );
     }
 
@@ -389,7 +388,7 @@ export const getRequestVolumeAction = action(
       error_requests: Number(item.error_requests),
       avg_duration_ms: Number(item.avg_duration_ms || 0),
     })) as RequestVolumeData[];
-  }
+  },
 );
 
 export const getTopActiveIpsAction = action(
@@ -409,7 +408,7 @@ export const getTopActiveIpsAction = action(
       throw new AppError(
         error.message,
         appErrors.DATABASE_ERROR.code,
-        appErrors.DATABASE_ERROR.statusCode
+        appErrors.DATABASE_ERROR.statusCode,
       );
     }
 
@@ -424,7 +423,7 @@ export const getTopActiveIpsAction = action(
       first_seen: item.first_seen,
       last_seen: item.last_seen,
     })) as TopActiveIpData[];
-  }
+  },
 );
 
 export const getServicePerformanceAction = action(
@@ -438,7 +437,7 @@ export const getServicePerformanceAction = action(
       {
         p_start_date: startDate === undefined ? null : startDate,
         p_end_date: endDate === undefined ? null : endDate,
-      }
+      },
     );
 
     if (error) {
@@ -446,7 +445,7 @@ export const getServicePerformanceAction = action(
       throw new AppError(
         error.message,
         appErrors.DATABASE_ERROR.code,
-        appErrors.DATABASE_ERROR.statusCode
+        appErrors.DATABASE_ERROR.statusCode,
       );
     }
 
@@ -460,7 +459,7 @@ export const getServicePerformanceAction = action(
       unique_users: Number(item.unique_users),
       unique_ips: Number(item.unique_ips),
     })) as ServicePerformanceData[];
-  }
+  },
 );
 
 export const getErrorTrendsAction = action(
@@ -480,7 +479,7 @@ export const getErrorTrendsAction = action(
       throw new AppError(
         error.message,
         appErrors.DATABASE_ERROR.code,
-        appErrors.DATABASE_ERROR.statusCode
+        appErrors.DATABASE_ERROR.statusCode,
       );
     }
 
@@ -492,7 +491,7 @@ export const getErrorTrendsAction = action(
       fatal_count: Number(item.fatal_count),
       error_rate: Number(item.error_rate),
     })) as ErrorTrendsData[];
-  }
+  },
 );
 
 export const getUserActivityPatternsAction = action(
@@ -507,7 +506,7 @@ export const getUserActivityPatternsAction = action(
         p_start_date: startDate === undefined ? null : startDate,
         p_end_date: endDate === undefined ? null : endDate,
         p_user_id: userId === undefined ? null : userId,
-      }
+      },
     );
 
     if (error) {
@@ -515,7 +514,7 @@ export const getUserActivityPatternsAction = action(
       throw new AppError(
         error.message,
         appErrors.DATABASE_ERROR.code,
-        appErrors.DATABASE_ERROR.statusCode
+        appErrors.DATABASE_ERROR.statusCode,
       );
     }
 
@@ -530,7 +529,7 @@ export const getUserActivityPatternsAction = action(
       last_activity: item.last_activity,
       peak_hour: Number(item.peak_hour || 0),
     })) as UserActivityData[];
-  }
+  },
 );
 
 export const getIpActivityDetailAction = action(
@@ -546,18 +545,18 @@ export const getIpActivityDetailAction = action(
         p_start_date: startDate === undefined ? null : startDate,
         p_end_date: endDate === undefined ? null : endDate,
         p_granularity: granularity,
-      }
+      },
     );
 
     if (error) {
       console.error(
         `Error fetching IP activity detail for ${ipAddress}:`,
-        error
+        error,
       );
       throw new AppError(
         error.message,
         appErrors.DATABASE_ERROR.code,
-        appErrors.DATABASE_ERROR.statusCode
+        appErrors.DATABASE_ERROR.statusCode,
       );
     }
 
@@ -568,7 +567,7 @@ export const getIpActivityDetailAction = action(
       error_count: Number(item.error_count),
       avg_duration_ms: Number(item.avg_duration_ms || 0),
     })) as IpActivityDetailData[];
-  }
+  },
 );
 
 // Enhanced logs action with better filtering
@@ -614,7 +613,7 @@ export const getFilteredLogsAction = action(
       throw new AppError(
         error.message,
         appErrors.DATABASE_ERROR.code,
-        appErrors.DATABASE_ERROR.statusCode
+        appErrors.DATABASE_ERROR.statusCode,
       );
     }
 
@@ -631,7 +630,7 @@ export const getFilteredLogsAction = action(
       totalPages: Math.ceil((count || 0) / limit),
       currentPage: page,
     };
-  }
+  },
 );
 
 // Add new schema for TTS statistics logging
@@ -654,10 +653,14 @@ const logTtsStatisticsSchema = z.object({
 const publicAction = createSafeActionClient({
   async middleware() {
     const cookieStore = cookies();
+    const authorization = nextHeaders().get("authorization") ?? undefined;
     const supabase = createServerClient<Database>(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
       {
+        global: authorization
+          ? { headers: { Authorization: authorization } }
+          : undefined,
         cookies: {
           get(name: string) {
             return cookieStore.get(name)?.value;
@@ -669,7 +672,7 @@ const publicAction = createSafeActionClient({
             cookieStore.set({ name, value: "", ...options });
           },
         },
-      }
+      },
     );
 
     const {
@@ -681,7 +684,7 @@ const publicAction = createSafeActionClient({
       throw new AppError(
         "User is not authenticated.",
         appErrors.UNAUTHORIZED.code,
-        appErrors.UNAUTHORIZED.statusCode
+        appErrors.UNAUTHORIZED.statusCode,
       );
     }
 
@@ -757,7 +760,7 @@ export const logTtsStatisticsAction = publicAction(
         utterancesPerMinute:
           actualSessionDuration > 0
             ? Math.round(
-                (totalUtterances / (actualSessionDuration / 60000)) * 100
+                (totalUtterances / (actualSessionDuration / 60000)) * 100,
               ) / 100
             : 0,
         avgDurationPerUtterance: averageUtteranceDuration,
@@ -768,14 +771,14 @@ export const logTtsStatisticsAction = publicAction(
           Object.keys(languageUsage).length > 0
             ? Object.keys(languageUsage).reduce(
                 (a, b) => (languageUsage[a] > languageUsage[b] ? a : b),
-                Object.keys(languageUsage)[0]
+                Object.keys(languageUsage)[0],
               )
             : undefined,
         primaryVoice:
           Object.keys(voiceUsage).length > 0
             ? Object.keys(voiceUsage).reduce(
                 (a, b) => (voiceUsage[a] > voiceUsage[b] ? a : b),
-                Object.keys(voiceUsage)[0]
+                Object.keys(voiceUsage)[0],
               )
             : undefined,
         totalLanguages: Object.keys(languageUsage).length,
@@ -799,5 +802,5 @@ export const logTtsStatisticsAction = publicAction(
         primaryVoice: (logEntry.metadata as any)?.primaryVoice,
       },
     };
-  }
+  },
 );

@@ -2,14 +2,16 @@
 
 import { createSafeActionClient } from "next-safe-action";
 import { z } from "zod";
-import { cookies } from "next/headers";
+import { cookies, headers as nextHeaders } from "next/headers";
 import { createClient as createServerContextClient } from "@/lib/supabase/server";
+import { createServerClient } from "@supabase/ssr";
 import { stripe } from "@/lib/stripe";
 import { AppError, appErrors } from "@/lib/errors";
 import type { ActionResponse, ActionError } from "@/types/actions";
 import type Stripe from "stripe";
 import { createClient as createAdminSupabaseClient } from "@supabase/supabase-js";
 import { FREE_TIER_VIDEO_LIMIT } from "@/config/constants";
+import type { Database } from "@/types/supabase";
 
 const createSubscriptionSchema = z.object({
   priceId: z.string(),
@@ -280,7 +282,21 @@ export const checkVideoLimit = action(
   > => {
     try {
       const cookieStore = cookies();
-      const supabase = createServerContextClient(cookieStore);
+      const authorization = nextHeaders().get("authorization") ?? undefined;
+      const supabase = authorization
+        ? createServerClient<Database>(
+            process.env.NEXT_PUBLIC_SUPABASE_URL!,
+            process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+            {
+              global: { headers: { Authorization: authorization } },
+              cookies: {
+                get(name: string) {
+                  return cookieStore.get(name)?.value;
+                },
+              },
+            }
+          )
+        : createServerContextClient(cookieStore);
 
       const {
         data: { user },

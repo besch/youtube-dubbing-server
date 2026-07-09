@@ -2,7 +2,7 @@ import { SUPPORTED_LANGUAGES, type SupportedLanguage } from "@/types/subtitles";
 
 export function buildLanguageQueryString(targetLanguage: string): string {
   // For single target language requests
-  return targetLanguage;
+  return normalizeSubtitleLanguageCode(targetLanguage);
 }
 
 export function buildFallbackLanguageQueryString(
@@ -13,7 +13,9 @@ export function buildFallbackLanguageQueryString(
 
   // Filter out target language and get common languages as fallback
   const fallbackLanguages = commonLanguages.filter(
-    (lang) => lang.toLowerCase() !== targetLanguage.toLowerCase()
+    (lang) =>
+      lang.toLowerCase() !==
+      normalizeSubtitleLanguageCode(targetLanguage).toLowerCase()
   );
 
   return fallbackLanguages.join(",");
@@ -24,12 +26,14 @@ export function buildAllLanguagesQueryString(): string {
 }
 
 export function getLanguageSearchStrategy(targetLanguage: string) {
+  const normalizedTargetLanguage =
+    normalizeSubtitleLanguageCode(targetLanguage);
   return {
     // Step 1: Try target language only
-    primary: targetLanguage,
+    primary: normalizedTargetLanguage,
 
     // Step 2: Try common languages (good translation sources)
-    fallback: buildFallbackLanguageQueryString(targetLanguage),
+    fallback: buildFallbackLanguageQueryString(normalizedTargetLanguage),
 
     // Step 3: Try all languages as last resort
     lastResort: buildAllLanguagesQueryString(),
@@ -65,7 +69,18 @@ export function isTargetLanguage(
   subtitleLanguage: string,
   targetLanguage: string
 ): boolean {
-  return subtitleLanguage.toLowerCase() === targetLanguage.toLowerCase();
+  return (
+    normalizeSubtitleLanguageCode(subtitleLanguage).toLowerCase() ===
+    normalizeSubtitleLanguageCode(targetLanguage).toLowerCase()
+  );
+}
+
+export function normalizeSubtitleLanguageCode(languageCode: string): string {
+  const normalized = languageCode.trim().replace("_", "-").toLowerCase();
+  if (normalized === "zh-cn" || normalized === "zh-tw") return "zh";
+  if (normalized === "pt-pt" || normalized === "pt-br") return "pt";
+  if (normalized === "fil") return "tl";
+  return normalized.split("-")[0] || normalized;
 }
 
 export function createRetryDelay(attemptNumber: number): number {

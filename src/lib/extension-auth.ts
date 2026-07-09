@@ -104,6 +104,7 @@ export function setCorsHeaders(
 
   if (matchedAllowedOrigin) {
     headers.set("Access-Control-Allow-Origin", matchedAllowedOrigin);
+    headers.set("Access-Control-Allow-Credentials", "true");
     headers.set("Access-Control-Allow-Methods", "POST, OPTIONS, GET");
     headers.set(
       "Access-Control-Allow-Headers",
